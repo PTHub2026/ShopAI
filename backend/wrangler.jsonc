@@ -1,6 +1,7 @@
 {
   "name": "shopai-backend",
-  "main": "src/app.js",
+  "main": "dist/app.js",
+  "build": { "command": "node build.mjs" },
   "compatibility_date": "2026-11-07",
   "workers_dev": true,
   "preview_urls": false,

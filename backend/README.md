@@ -2,7 +2,7 @@
 
 ## Trạng thái
 
-Mã backend đã được chuẩn bị; chưa chạy build, chưa kiểm thử, chưa triển khai và chưa nối giao diện. Không có endpoint hoạt động được xác nhận. Giao diện hiện tại vẫn giữ nguyên chế độ demo.
+Backend và tích hợp giao diện được phục vụ bởi Worker đã được chuẩn bị; build, kiểm thử và triển khai phải được xác nhận theo môi trường. Tệp gốc `/index.html` trong kho và trên GitHub Pages vẫn là demo với AI nội bộ. Khi build Worker, `backend/build.mjs` đóng gói tệp đó, còn `backend/src/app.js` thay lời gọi AI bằng `POST /ai` cùng origin và không dùng nội dung AI mô phỏng khi lỗi. Vì vậy giao diện do Worker phục vụ sẽ gọi Workers AI thật khi cấu hình hoạt động và người dùng được Cloudflare Access cho phép; các thao tác đăng bài và gửi tin vẫn chỉ mô phỏng. Chưa có endpoint hoạt động hoặc phiên gọi AI thật nào được xác nhận.
 
 ## Phương án
 
@@ -26,6 +26,6 @@ Cloudflare Access cần cho phép yêu cầu OPTIONS đi qua để xử lý CORS
 
 ## Công việc còn lại trước khi dùng thật
 
-Đọc chính xác hàm gọi AI trong `index.html`, đối chiếu toàn bộ payload để tạo ánh xạ prompt phù hợp. Thêm luồng đăng nhập Access và gửi cookie bằng `credentials: 'include'` trong frontend. Do GitHub Pages và hostname Worker khác site, cookie bên thứ ba có thể bị chặn; phương án ưu tiên cho sản xuất là đưa frontend và backend về cùng site trên tên miền người dùng sở hữu. Không chỉ điền endpoint vào giao diện cũ rồi coi là hoàn tất.
+Trước khi dùng giao diện Worker, cần xác nhận người dùng được chuyển qua đăng nhập Cloudflare Access trên chính hostname và cookie Access được gửi cùng origin. Không dùng luồng giao diện gốc trên GitHub Pages để gọi backend khác site: cookie bên thứ ba có thể bị chặn. Nếu cần GitHub Pages, cần thiết kế và xác nhận riêng luồng đăng nhập Access phù hợp; phương án ưu tiên là đưa frontend và backend về cùng site trên tên miền người dùng sở hữu.
 
 Sau khi có quyền hosting, cần build và kiểm thử riêng: JWT thiếu/hết hạn/sai audience, CORS, giới hạn dung lượng/tần suất, lỗi AI, và đủ bốn tác vụ từ giao diện đã xác thực. Chỉ công bố chạy thật sau khi yêu cầu AI thực tế trả về nội dung thành công. Không bật đăng bài, hộp thư hoặc tự trả lời đa kênh trong thay đổi này.

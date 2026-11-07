@@ -42,3 +42,18 @@ Production hiện được build từ nhánh PR #1; một lần deploy nhánh đ
 Nếu Access vẫn không nhận hostname preview sau khi cấu hình đã lưu, kiểm tra ứng dụng Access gắn Worker, phạm vi preview và khả năng hỗ trợ hostname preview trong tài khoản; liên hệ Cloudflare nếu cần. Chỉ dùng hostname cùng origin đã được Access bảo vệ thực sự. Không lấy JWT thủ công, không dùng service token trong frontend, không bỏ xác minh JWT để né lỗi đăng nhập. Chưa cấp hostname tên miền riêng vì chưa có lựa chọn tên miền được duyệt.
 
 Điều kiện bàn giao tiếp theo: cổng Access phải mở trang đăng nhập hợp lệ; chủ tài khoản tự xác thực khi được yêu cầu; một lượt kiểm thử riêng ngoài công cụ trình duyệt này xác nhận phiên, /ai và hạn mức. Sau đó duyệt PR cụ thể rồi mới promote. D1/DB và OAuth/webhook/kênh đăng bài, lên lịch, tin nhắn thật vẫn chưa được triển khai; không coi bản này là full stack vận hành.
+
+
+## Quyết định điều phối triển khai cập nhật
+
+Chọn PR #2 (`feat/same-origin-access`) làm phương án tích hợp cần duyệt: đóng gói HTML bằng quy tắc Text của Wrangler, điểm vào `src/app.js`; không tải HTML từ GitHub lúc chạy. Không merge nối tiếp PR #1 rồi PR #2 khi chưa xử lý khác biệt. Nhánh PR #1 hiện dùng `dist/app.js`, `node build.mjs` và `preview_urls: false`; nhánh này gắn production nên công việc này không sửa để tránh tự triển khai production. Khi duyệt PR #2, giữ nguyên cách đóng gói của PR #2 và bỏ phương án build/HTML trùng của PR #1.
+
+Cấu hình đích thống nhất sau khi người duyệt chọn PR #2: `workers_dev: true`, `preview_urls: true`, giữ `previews` với AI binding, rate limiter namespace 1002 (production 1001), `ALLOWED_ORIGINS` preview rỗng vì chỉ dùng cùng origin; giữ ACCESS_TEAM_DOMAIN và ACCESS_AUD của ứng dụng Access hiện hữu. Không sao chép `preview_urls: false` từ PR #1 sang nhánh tích hợp. Không thay production branch/lệnh deploy của dashboard trong lượt này.
+
+Đã đọc lại Cloudflare Worker > Access: cả hostname production và hostname `feat-same-origin-access-shopai-backend.ct-3f8.workers.dev` đều có policy Allow chỉ `ct@pthub.vn`; Worker Access hiển thị All traffic / Require login on every URL: production and previews. Mục Domains xác nhận Access áp dụng cho production và preview. Access settings xác nhận đúng team domain. Tuy vậy cổng team `/cdn-cgi/access/login/feat-same-origin-access-shopai-backend.ct-3f8.workers.dev` vẫn báo không tìm thấy ứng dụng. Đây là chặn ở luồng đăng nhập, không phải bằng chứng ứng dụng đã chạy hoặc bằng chứng thiếu đăng nhập dashboard. Không xóa ứng dụng/policy, không tắt JWT để né lỗi.
+
+Bước quản trị còn cần: xử lý ánh xạ hostname/Worker tại Cloudflare Access hoặc nhờ Cloudflare hỗ trợ với ứng dụng hiện hữu; giữ policy email hiện tại. Nếu cần tên miền tùy chỉnh, chỉ dùng tên miền đã được chủ tài khoản chọn và đã có trong tài khoản; không tự mua tên miền. Chỉ yêu cầu người dùng xác thực khi màn hình đăng nhập hợp lệ xuất hiện. Sau đó thực hiện kiểm thử runtime bằng quy trình riêng (không thực hiện QA ứng dụng bằng công cụ trình duyệt trong công việc này).
+
+Commit frontend 7800d28 giữ cảnh báo khi một phương án đã dùng mẫu nội bộ dù yêu cầu sau trả AI thành công; liên kết đăng nhập lại điều hướng về gốc cùng origin thay vì đường `/cdn-cgi/access/login` đã trả 404. Đây không phải sửa hạ tầng Access và không chứng minh đăng nhập đã được khắc phục.
+
+Chưa có DB server/D1 binding và chưa kết nối OAuth/API kênh thật. Không chạy migration, không đăng bài/gửi tin thật. PR giữ Draft, không merge, không đổi main. Coverage phục vụ HTML có JWT còn cần bổ sung và kiểm thử riêng trước duyệt production.

@@ -2,7 +2,7 @@
 
 ## Trạng thái xác nhận
 
-Đã bổ sung mã xử lý backend vào PR. Chưa chạy build hoặc bộ kiểm thử tự động; chưa xác nhận chạy trong Workers và chưa gọi Workers AI thực tế. Không coi tài liệu này là chứng nhận sẵn sàng sản xuất. Frontend không thay đổi. Không tự hợp nhất hoặc triển khai.
+Mã backend và tích hợp giao diện trong bản Worker đã được bổ sung; chưa xác nhận chạy trong Workers hoặc gọi Workers AI thực tế. Không coi tài liệu này là chứng nhận sẵn sàng sản xuất. Tệp gốc `index.html` không đổi: build Worker đóng gói tệp đó để giao diện được Worker phục vụ gọi `POST /ai` cùng origin, không có fallback AI mô phỏng khi lỗi. Đăng bài và gửi tin vẫn mô phỏng. Không tự hợp nhất hoặc triển khai.
 
 ## Cấu hình bắt buộc
 
@@ -10,7 +10,7 @@
 
 `ACCESS_TEAM_DOMAIN` và `ACCESS_AUD` hiện đã được khai báo trong `wrangler.jsonc`. Trước mỗi lần triển khai, xác minh chúng khớp team domain và audience của ứng dụng Access thực tế; không xóa hoặc coi các giá trị đã cấu hình là placeholder. Nếu dùng cấu hình ngoài kho mã, đối chiếu để lần deploy không ghi đè bằng giá trị không hợp lệ.
 
-`ALLOWED_ORIGINS` là danh sách origin chính xác phân tách bằng dấu phẩy; không dùng `*`. Với preview chỉ dùng cùng origin, giá trị rỗng là có chủ ý; Worker vẫn cho phép request cùng origin và yêu cầu JWT hợp lệ. Nếu dùng CORS, Access phải cho OPTIONS đi qua để Worker xử lý preflight, còn POST phải có JWT Access hợp lệ. Xác minh Access trên mọi hostname production/preview.
+`ALLOWED_ORIGINS` là danh sách origin chính xác phân tách bằng dấu phẩy; không dùng `*`. Với preview chỉ dùng cùng origin, giá trị rỗng là có chủ ý; Worker vẫn cho phép request cùng origin và yêu cầu JWT hợp lệ. Giao diện do Worker phục vụ gọi API cùng origin và dùng cookie Access; cần xác nhận luồng đăng nhập và chính sách Access trên hostname đã cấu hình. Bản gốc trên GitHub Pages chưa được tích hợp luồng đăng nhập và không nên dùng để gọi backend khác site. Nếu dùng CORS, Access phải cho OPTIONS đi qua để Worker xử lý preflight, còn POST phải có JWT Access hợp lệ. Xác minh Access trên mọi hostname production/preview.
 
 Binding `AI` và `AI_RATE_LIMITER` phải có mặt. Giới hạn cấu hình là 10 yêu cầu/phút theo phiên JWT; đây là giới hạn cục bộ của cơ chế Cloudflare, không phải trần chi phí toàn cục hoặc theo người dùng. Token được băm trước khi dùng làm khóa giới hạn; không ghi JWT vào log. Cần thiết lập giám sát ngân sách riêng trước khi dùng thật.
 

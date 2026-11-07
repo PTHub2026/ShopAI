@@ -1,0 +1,11 @@
+import { readFile, mkdir, writeFile, copyFile } from 'node:fs/promises';
+const root = new URL('./', import.meta.url);
+const html = await readFile(new URL('../index.html', root), 'utf8');
+const frontendImport = "import frontend from '../../index.html';";
+let app = await readFile(new URL('src/app.js', root), 'utf8');
+if (!app.includes(frontendImport)) throw new Error('Không khớp điểm đóng gói giao diện; dừng build.');
+app = app.replace(frontendImport, 'const frontend = ' + JSON.stringify(html) + ';');
+await mkdir(new URL('dist/', root), { recursive: true });
+await writeFile(new URL('dist/app.js', root), app);
+await copyFile(new URL('src/worker.js', root), new URL('dist/worker.js', root));
+console.log('Đã đóng gói giao diện từ repository cùng backend; không cần tải HTML bên ngoài lúc chạy.');

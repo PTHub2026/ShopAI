@@ -1,6 +1,7 @@
 {
   "name": "shopai-backend",
-  "main": "src/app.js",
+  "main": "dist/app.js",
+  "build": { "command": "node build.mjs" },
   "compatibility_date": "2026-11-07",
   "workers_dev": true,
   "preview_urls": true,
@@ -20,18 +21,9 @@
   "vars": {
     "ACCESS_TEAM_DOMAIN": "restless-butterfly-687f.cloudflareaccess.com",
     "ACCESS_AUD": "ff20e92c80e07676c17aa8c812769813ff3aaf0407e58bdf76fa02a844c630a0",
-    "ALLOWED_ORIGINS": "https://pthub2026.github.io",
+    "ALLOWED_ORIGINS": "https://pthub2026.github.io,https://shopai-backend.ct-3f8.workers.dev",
     "AI_MODEL": "@cf/meta/llama-3.1-8b-instruct"
   },
-  "rules": [
-    {
-      "type": "Text",
-      "globs": [
-        "**/*.html"
-      ],
-      "fallthrough": true
-    }
-  ],
   "previews": {
     "vars": {
       "ACCESS_TEAM_DOMAIN": "restless-butterfly-687f.cloudflareaccess.com",

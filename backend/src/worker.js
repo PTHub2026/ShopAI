@@ -1,3 +1,4 @@
+import frontend from '../../index.html';
 const TASKS = new Set(['generate', 'improve', 'adapt', 'reply']);
 const decode = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0));
 const configured = env => Boolean(env.AI && env.AI_RATE_LIMITER && /^[a-z0-9-]+\.cloudflareaccess\.com$/i.test(env.ACCESS_TEAM_DOMAIN || '') && typeof env.ACCESS_AUD === 'string' && env.ACCESS_AUD.trim());
@@ -29,8 +30,19 @@ export default {
     const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff' };
     if (origin && allowed.includes(origin)) Object.assign(headers, { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Credentials': 'true' });
     const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), { status, headers: { ...headers, ...extra } });
-    if (origin && !allowed.includes(origin)) return json({ error: 'Nguồn truy cập không được phép.' }, 403);
+    if (origin && origin !== new URL(request.url).origin && !allowed.includes(origin)) return json({ error: 'Nguồn truy cập không được phép.' }, 403);
     const path = new URL(request.url).pathname;
+    // Giao diện và API cùng origin; vẫn bắt buộc JWT hợp lệ.
+    if (path === '/' || path === '/index.html') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') return json({ error: 'Chỉ hỗ trợ GET hoặc HEAD.' }, 405, { Allow: 'GET, HEAD' });
+      if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
+      if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access tại hostname ứng dụng.' }, 401);
+      return new Response(request.method === 'HEAD' ? null : frontend, { headers: {
+        'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
+        'Content-Security-Policy': "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+      } });
+    }
     if (path !== '/ai' && path !== '/health') return json({ error: 'Không tìm thấy endpoint.' }, 404);
     if (request.method === 'OPTIONS') {
       const method = request.headers.get('Access-Control-Request-Method');

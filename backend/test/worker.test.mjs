@@ -1,8 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { webcrypto } from 'node:crypto';
-const worker = (await import('data:text/javascript;base64,' + Buffer.from(await readFile(new URL('../src/worker.js', import.meta.url))).toString('base64'))).default;
+const worker = (await import(new URL('../src/worker.js', import.meta.url))).default;
 const { subtle } = webcrypto;
 const pair = await subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
 const jwk = { ...await subtle.exportKey('jwk', pair.publicKey), kid: 'test-key', use: 'sig', alg: 'RS256' };

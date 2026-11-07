@@ -38,7 +38,8 @@ export default {
     if (request.method !== 'POST') return json({ error: 'Chỉ hỗ trợ POST.' }, 405);
     if (!env.AI || !env.AI_RATE_LIMITER) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
     if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access.' }, 401);
-    const limit = await env.AI_RATE_LIMITER.limit({ key: request.headers.get('Cf-Access-Jwt-Assertion') });
+    const token = request.headers.get('Cf-Access-Jwt-Assertion');
+    const limit = await env.AI_RATE_LIMITER.limit({ key: token.split('.').slice(0, 2).join('.') });
     if (!limit.success) return json({ error: 'Quá nhiều yêu cầu. Vui lòng thử lại sau.' }, 429);
     if (!(request.headers.get('Content-Type') || '').toLowerCase().startsWith('application/json')) return json({ error: 'Cần gửi application/json.' }, 415);
     let body;

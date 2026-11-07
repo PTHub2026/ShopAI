@@ -3,7 +3,7 @@
   "main": "src/app.js",
   "compatibility_date": "2026-11-07",
   "workers_dev": true,
-  "preview_urls": false,
+  "preview_urls": true,
   "ai": {
     "binding": "AI"
   },
@@ -31,31 +31,5 @@
       ],
       "fallthrough": true
     }
-  ],
-  "env": {
-    "preview": {
-      "name": "shopai-integration-preview",
-      "workers_dev": false,
-      "preview_urls": false,
-      "ai": {
-        "binding": "AI"
-      },
-      "ratelimits": [
-        {
-          "name": "AI_RATE_LIMITER",
-          "namespace_id": "1002",
-          "simple": {
-            "limit": 10,
-            "period": 60
-          }
-        }
-      ],
-      "vars": {
-        "AI_MODEL": "@cf/meta/llama-3.1-8b-instruct",
-        "ACCESS_TEAM_DOMAIN": "restless-butterfly-687f.cloudflareaccess.com",
-        "ACCESS_AUD": "",
-        "ALLOWED_ORIGINS": ""
-      }
-    }
-  }
+  ]
 }

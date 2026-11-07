@@ -2,10 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 await import('../build.mjs');
-const workerSource = await readFile(new URL('../dist/worker.js', import.meta.url), 'utf8');
-const workerURL = 'data:text/javascript;base64,' + Buffer.from(workerSource).toString('base64');
-const appSource = (await readFile(new URL('../dist/app.js', import.meta.url), 'utf8')).replace("'./worker.js'", JSON.stringify(workerURL));
-const app = (await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'))).default;
+const app = (await import(new URL('../dist/app.js', import.meta.url))).default;
 
 test('Build includes the repository frontend and serves it behind Access', async () => {
   const builtApp = await readFile(new URL('../dist/app.js', import.meta.url), 'utf8');

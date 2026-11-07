@@ -4,12 +4,58 @@
   "compatibility_date": "2026-11-07",
   "workers_dev": true,
   "preview_urls": false,
-  "ai": { "binding": "AI" },
-  "ratelimits": [{ "name": "AI_RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],
+  "ai": {
+    "binding": "AI"
+  },
+  "ratelimits": [
+    {
+      "name": "AI_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    }
+  ],
   "vars": {
     "ACCESS_TEAM_DOMAIN": "restless-butterfly-687f.cloudflareaccess.com",
     "ACCESS_AUD": "ff20e92c80e07676c17aa8c812769813ff3aaf0407e58bdf76fa02a844c630a0",
     "ALLOWED_ORIGINS": "https://pthub2026.github.io",
     "AI_MODEL": "@cf/meta/llama-3.1-8b-instruct"
+  },
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.html"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "env": {
+    "preview": {
+      "name": "shopai-integration-preview",
+      "workers_dev": false,
+      "preview_urls": false,
+      "ai": {
+        "binding": "AI"
+      },
+      "ratelimits": [
+        {
+          "name": "AI_RATE_LIMITER",
+          "namespace_id": "1002",
+          "simple": {
+            "limit": 10,
+            "period": 60
+          }
+        }
+      ],
+      "vars": {
+        "AI_MODEL": "@cf/meta/llama-3.1-8b-instruct",
+        "ACCESS_TEAM_DOMAIN": "restless-butterfly-687f.cloudflareaccess.com",
+        "ACCESS_AUD": "",
+        "ALLOWED_ORIGINS": ""
+      }
+    }
   }
 }

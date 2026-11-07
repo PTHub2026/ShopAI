@@ -1,7 +1,13 @@
 // Chỉ lưu bản nháp do người dùng gửi rõ ràng; không nhập seed hoặc tự đăng bài.
 export async function drafts(request, env, owner, json) {
     if (!env.DB) return json({ error: 'Chưa gắn cơ sở dữ liệu bản nháp.' }, 503);
-    const url = new URL(request.url);
+    try {
+    if (!env.AI_RATE_LIMITER) return json({ error: 'Chưa cấu hình giới hạn yêu cầu.' }, 503);
+    const limit = await env.AI_RATE_LIMITER.limit({ key: 'drafts:' + owner });
+    if (!limit || typeof limit.success !== 'boolean') throw new Error('RATE_LIMIT_UNAVAILABLE');
+    if (!limit.success) return json({ error: 'Quá nhiều yêu cầu lưu trữ. Vui lòng thử lại sau.' }, 429, { 'Retry-After': '60' });
+  } catch { return json({ error: 'Giới hạn yêu cầu lưu trữ chưa khả dụng.' }, 503); }
+  const url = new URL(request.url);
     const match = /^\/storage\/drafts(?:\/([a-zA-Z0-9_-]{1,64}))?$/.exec(url.pathname);
     if (!match) return json({ error: 'Đường dẫn bản nháp không hợp lệ.' }, 404);
     const id = match[1];

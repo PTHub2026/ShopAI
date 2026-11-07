@@ -1,3 +1,4 @@
+import { drafts } from './drafts.js';
 const TASKS = new Set(['generate', 'improve', 'adapt', 'reply']);
 const decode = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0));
 const configured = env => Boolean(env.AI && env.AI_RATE_LIMITER && /^[a-z0-9-]+\.cloudflareaccess\.com$/i.test(env.ACCESS_TEAM_DOMAIN || '') && typeof env.ACCESS_AUD === 'string' && env.ACCESS_AUD.trim());
@@ -31,6 +32,14 @@ export default {
     const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), { status, headers: { ...headers, ...extra } });
     if (origin && origin !== new URL(request.url).origin && !allowed.includes(origin)) return json({ error: 'Nguồn truy cập không được phép.' }, 403);
     const path = new URL(request.url).pathname;
+    if (path.startsWith('/storage/')) {
+      if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
+      if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access.' }, 401);
+      // Chỉ đọc danh tính sau khi chữ ký và các claim JWT đã được xác minh.
+      const claim = JSON.parse(new TextDecoder().decode(decode(request.headers.get('Cf-Access-Jwt-Assertion').split('.')[1])));
+      if (typeof claim.sub !== 'string' || !claim.sub || claim.sub.length > 256) return json({ error: 'Thiếu định danh người dùng.' }, 403);
+      return drafts(request, env, claim.sub, json);
+    }
     // Giao diện và API cùng origin; vẫn bắt buộc JWT hợp lệ.
     if (path === '/' || path === '/index.html') {
       if (request.method !== 'GET' && request.method !== 'HEAD') return json({ error: 'Chỉ hỗ trợ GET hoặc HEAD.' }, 405, { Allow: 'GET, HEAD' });

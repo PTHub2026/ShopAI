@@ -100,11 +100,20 @@ test('Không gọi AI khi chỉ có tên thương hiệu nhưng thiếu nội du
   assert.equal(calls,0);
 }));
 test('Giao diện yêu cầu JWT, hỗ trợ HEAD, và chèn endpoint cùng origin',async()=>run(async()=>{
-  const e=env({FRONTEND_HTML:'<html><head></head><body>ShopAI</body></html>'});
-  const make=(method='GET',jwt=valid)=>new Request('https://backend.example/',{method,headers:jwt?{'Cf-Access-Jwt-Assertion':jwt}:{}});
-  assert.equal((await worker.fetch(make('GET',null),e)).status,401);
-  const response=await worker.fetch(make(),e);
-  assert.equal(response.status,200);assert.match(await response.text(),/name="shopai-ai-endpoint" content="\/ai"/);
-  assert.equal(await (await worker.fetch(make('HEAD'),e)).text(),'');
-  assert.equal((await worker.fetch(request({headers:{Origin:'https://backend.example'}}),e)).status,200);
+  let aiCalls=0,limitCalls=0;
+  const e=env({FRONTEND_HTML:'<html><head></head><body>ShopAI</body></html>',AI:{run:async()=>{aiCalls++;return {response:'AI'}}},AI_RATE_LIMITER:{limit:async()=>{limitCalls++;return {success:true}}}});
+  const make=(path,method='GET',jwt=valid)=>new Request('https://backend.example'+path,{method,headers:jwt?{'Cf-Access-Jwt-Assertion':jwt}:{}});
+  const expired=await token({exp:0});
+  for(const path of ['/','/index.html']){
+    for(const jwt of [null,'invalid',expired])assert.equal((await worker.fetch(make(path,'GET',jwt),e)).status,401);
+    const response=await worker.fetch(make(path),e);
+    assert.equal(response.status,200);assert.match(await response.text(),/name="shopai-ai-endpoint" content="\/ai"/);
+    const head=await worker.fetch(make(path,'HEAD'),e);
+    assert.equal(head.status,200);assert.equal(await head.text(),'');
+    assert.equal((await worker.fetch(make(path),env({...e,AI:null}))).status,503);
+    assert.equal((await worker.fetch(make(path),env({...e,FRONTEND_HTML:undefined}))).status,503);
+  }
+  assert.equal(aiCalls,0);assert.equal(limitCalls,0);
+  const sameOrigin=await worker.fetch(request({headers:{Origin:'https://backend.example'}}),env({...e,ALLOWED_ORIGINS:''}));
+  assert.equal(sameOrigin.status,200);assert.equal(aiCalls,1);assert.equal(limitCalls,1);
 }));

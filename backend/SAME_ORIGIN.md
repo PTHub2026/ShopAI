@@ -27,3 +27,18 @@ Trước promotion, người có quyền duyệt xác nhận Worker Access vẫn
 Chưa có DB server; trạng thái và file vẫn lưu trong trình duyệt. Kết nối kênh, OAuth mạng xã hội, webhook, đăng bài, lên lịch và tin nhắn thật chưa được triển khai trong thay đổi này. Cần thiết kế DB/migration, quản lý token bằng secrets, quyền ứng dụng kênh và kiểm thử riêng trước khi có thể gọi đây là full stack vận hành thực tế.
 
 Nếu cần cấp quyền cho AbacusAI GitHub App, dùng https://github.com/apps/abacusai/installations/select_target và giới hạn repository ShopAI, không cấp toàn bộ repository khi không cần.
+
+
+## Bàn giao cấu hình và điều phối hai PR
+
+Cập nhật ngày 07/11/2026: đã bật lại Preview URLs trong Worker > Domains; dashboard báo Access áp dụng cho cả production và preview. Worker Access vẫn yêu cầu đăng nhập trên mọi URL, chính sách Allow chỉ ct@pthub.vn. Đã lưu bổ sung chính xác hostname feat-same-origin-access-shopai-backend.ct-3f8.workers.dev vào cùng ứng dụng Access hiện hữu; dashboard xác nhận Application successfully configured. Không thay AUD, không mở rộng danh sách người được phép và không tắt JWT.
+
+Bản mã tích hợp đã có deployment Ready phiên bản 788c3749, commit 9ad040cb3faee397b9c741cc9621169ff9088e23. Tuy nhiên, việc truy cập để đến cổng đăng nhập vẫn bị chặn: hostname preview trả thông báo cần đăng nhập; /cdn-cgi/access/login trả 404; cổng nhóm Access báo không tìm thấy ứng dụng. Đây chưa phải preview dùng được. Việc lưu hostname chưa đủ chứng minh Access đã thực thi đúng trên preview. Không gọi AI hoặc chạy QA ứng dụng để suy diễn trạng thái.
+
+PR #1 đã thay đổi sau khi tách nhánh: có app.js tải HTML từ GitHub và thay chuỗi lúc chạy; PR #2 dùng HTML đóng gói trong bundle. Hai cách triển khai không được ghép tự động. Khuyến nghị duyệt PR #2 làm phương án tích hợp cùng origin; PR #1 chỉ dùng làm nguồn đối chiếu các sửa lỗi backend/CI độc lập. Trước merge, người duyệt phải đối chiếu worker.js, hợp đồng frontend và bộ kiểm thử; không chép đè app.js hoặc Wrangler từ PR #1 sang PR #2. Chưa đồng bộ toàn bộ các commit phát sinh của PR #1.
+
+Production hiện được build từ nhánh PR #1; một lần deploy nhánh đó với preview_urls:false có thể ghi đè việc bật Preview URLs trong dashboard. Để tránh triển khai production ngoài phạm vi được duyệt, lượt này không sửa nhánh PR #1, không đổi production branch và không tắt build production. Người vận hành cần thống nhất preview_urls và khối previews giữa cấu hình sẽ được duyệt với dashboard trước khi promote. Không bật/tắt lặp lại khi có build khác đang chạy.
+
+Nếu Access vẫn không nhận hostname preview sau khi cấu hình đã lưu, kiểm tra ứng dụng Access gắn Worker, phạm vi preview và khả năng hỗ trợ hostname preview trong tài khoản; liên hệ Cloudflare nếu cần. Chỉ dùng hostname cùng origin đã được Access bảo vệ thực sự. Không lấy JWT thủ công, không dùng service token trong frontend, không bỏ xác minh JWT để né lỗi đăng nhập. Chưa cấp hostname tên miền riêng vì chưa có lựa chọn tên miền được duyệt.
+
+Điều kiện bàn giao tiếp theo: cổng Access phải mở trang đăng nhập hợp lệ; chủ tài khoản tự xác thực khi được yêu cầu; một lượt kiểm thử riêng ngoài công cụ trình duyệt này xác nhận phiên, /ai và hạn mức. Sau đó duyệt PR cụ thể rồi mới promote. D1/DB và OAuth/webhook/kênh đăng bài, lên lịch, tin nhắn thật vẫn chưa được triển khai; không coi bản này là full stack vận hành.

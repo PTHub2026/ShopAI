@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: '22'
       - name: Chạy kiểm thử backend
-        run: node --test backend/test/worker.test.mjs
+        run: node --test backend/test/*.test.mjs
       - name: Kiểm tra build Wrangler không triển khai
         working-directory: backend
         env:

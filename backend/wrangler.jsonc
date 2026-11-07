@@ -51,6 +51,14 @@
           "period": 60
         }
       }
+    ],
+    "d1_databases": [
+      {
+        "binding": "DB",
+        "database_name": "shopai-drafts-preview",
+        "database_id": "543ddfdd-8b74-4a2b-8b41-f9a2c4ba5306",
+        "migrations_dir": "migrations"
+      }
     ]
   }
 }

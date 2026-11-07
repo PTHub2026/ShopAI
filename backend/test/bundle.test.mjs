@@ -6,15 +6,22 @@ const workerSource = await readFile(new URL('../dist/worker.js', import.meta.url
 const workerURL = 'data:text/javascript;base64,' + Buffer.from(workerSource).toString('base64');
 const appSource = (await readFile(new URL('../dist/app.js', import.meta.url), 'utf8')).replace("'./worker.js'", JSON.stringify(workerURL));
 const app = (await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'))).default;
-test('Bản đóng gói trả giao diện không dùng mạng bên ngoài', async () => {
+
+test('Build includes the repository frontend and serves it behind Access', async () => {
+  const builtApp = await readFile(new URL('../dist/app.js', import.meta.url), 'utf8');
+  assert.ok(builtApp.includes('ShopAI'));
   const original = globalThis.fetch;
   globalThis.fetch = async () => { throw new Error('Không cho phép tải ngoài trong kiểm thử này'); };
   try {
-    const response = await app.fetch(new Request('https://shopai-backend.ct-3f8.workers.dev/'), {});
-    assert.equal(response.status, 200);
-    const html = await response.text();
-    assert.ok(html.includes("fetch('/ai',{method:'POST',credentials:'same-origin'"));
-    assert.ok(!html.includes('return AI.local[task](p)'));
-    assert.ok(html.includes('các kênh vẫn mô phỏng'));
+    const env = {
+      AI: {},
+      AI_RATE_LIMITER: {},
+      ACCESS_TEAM_DOMAIN: 'example.cloudflareaccess.com',
+      ACCESS_AUD: 'test-audience'
+    };
+    const health = await app.fetch(new Request('https://shopai-backend.example/health'), env);
+    assert.equal(health.status, 200);
+    const page = await app.fetch(new Request('https://shopai-backend.example/'), env);
+    assert.equal(page.status, 401);
   } finally { globalThis.fetch = original; }
 });

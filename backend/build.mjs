@@ -1,11 +1,10 @@
 import { readFile, mkdir, writeFile, copyFile } from 'node:fs/promises';
 const root = new URL('./', import.meta.url);
 const html = await readFile(new URL('../index.html', root), 'utf8');
+const frontendImport = "import frontend from '../../index.html';";
 let app = await readFile(new URL('src/app.js', root), 'utf8');
-const fetchExpression = "await fetch(SOURCE, { cf: { cacheTtl: 3600 }, signal: AbortSignal.timeout(15000), redirect: 'error' })";
-if (!app.includes(fetchExpression)) throw new Error('Không khớp điểm đóng gói giao diện; dừng build.');
-if (!html.includes('async call(task,p)') || !html.includes('async function testAI()')) throw new Error('Nguồn giao diện thiếu hàm tích hợp; dừng build.');
-app = app.replace(fetchExpression, 'new Response(' + JSON.stringify(html) + ')');
+if (!app.includes(frontendImport)) throw new Error('Không khớp điểm đóng gói giao diện; dừng build.');
+app = app.replace(frontendImport, 'const frontend = ' + JSON.stringify(html) + ';');
 await mkdir(new URL('dist/', root), { recursive: true });
 await writeFile(new URL('dist/app.js', root), app);
 await copyFile(new URL('src/worker.js', root), new URL('dist/worker.js', root));

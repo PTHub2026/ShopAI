@@ -1,3 +1,4 @@
+import { drafts } from './drafts.js';
 const TASKS = new Set(['generate', 'improve', 'adapt', 'reply']);
 const decode = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0));
 const configured = env => Boolean(env.AI && env.AI_RATE_LIMITER && /^[a-z0-9-]+\.cloudflareaccess\.com$/i.test(env.ACCESS_TEAM_DOMAIN || '') && typeof env.ACCESS_AUD === 'string' && env.ACCESS_AUD.trim());
@@ -29,8 +30,27 @@ export default {
     const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff' };
     if (origin && allowed.includes(origin)) Object.assign(headers, { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Credentials': 'true' });
     const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), { status, headers: { ...headers, ...extra } });
-    if (origin && !allowed.includes(origin)) return json({ error: 'Nguồn truy cập không được phép.' }, 403);
+    if (origin && origin !== new URL(request.url).origin && !allowed.includes(origin)) return json({ error: 'Nguồn truy cập không được phép.' }, 403);
     const path = new URL(request.url).pathname;
+    if (path.startsWith('/storage/')) {
+      if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
+      if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access.' }, 401);
+      // Chỉ đọc danh tính sau khi chữ ký và các claim JWT đã được xác minh.
+      const claim = JSON.parse(new TextDecoder().decode(decode(request.headers.get('Cf-Access-Jwt-Assertion').split('.')[1])));
+      if (typeof claim.sub !== 'string' || !claim.sub || claim.sub.length > 256) return json({ error: 'Thiếu định danh người dùng.' }, 403);
+      return drafts(request, env, claim.sub, json);
+    }
+    // Giao diện và API cùng origin; vẫn bắt buộc JWT hợp lệ.
+    if (path === '/' || path === '/index.html') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') return json({ error: 'Chỉ hỗ trợ GET hoặc HEAD.' }, 405, { Allow: 'GET, HEAD' });
+      if (!configured(env) || typeof env.FRONTEND_HTML !== 'string') return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
+      if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access tại hostname ứng dụng.' }, 401);
+      return new Response(request.method === 'HEAD' ? null : env.FRONTEND_HTML.replace('<head>', '<head><meta name="shopai-ai-endpoint" content="/ai">'), { headers: {
+        'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
+        'Content-Security-Policy': "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+      } });
+    }
     if (path !== '/ai' && path !== '/health') return json({ error: 'Không tìm thấy endpoint.' }, 404);
     if (request.method === 'OPTIONS') {
       const method = request.headers.get('Access-Control-Request-Method');
@@ -71,7 +91,8 @@ export default {
       body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
     } catch { return json({ error: 'JSON không hợp lệ.' }, 400); }
     if (!body || Array.isArray(body) || typeof body !== 'object' || !TASKS.has(body.task)) return json({ error: 'task phải là generate, improve, adapt hoặc reply.' }, 400);
-    if (!Object.entries(body).some(([key, value]) => key !== 'task' && typeof value === 'string' && value.trim())) return json({ error: 'Cần ít nhất một trường nội dung dạng chuỗi không rỗng ngoài task.' }, 400);
+    const contentFields = { generate: ['topic', 'brief', 'product', 'text'], improve: ['text'], adapt: ['text'], reply: ['text', 'message'] };
+    if (!contentFields[body.task].some(key => typeof body[key] === 'string' && body[key].trim())) return json({ error: 'Thiếu nội dung cần xử lý cho tác vụ AI.' }, 400);
     try {
       const instructions = {
         generate: 'Tạo nội dung mới theo thông tin và yêu cầu được cung cấp.',

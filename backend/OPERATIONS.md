@@ -2,15 +2,15 @@
 
 ## Trạng thái xác nhận
 
-Mã backend và tích hợp giao diện trong bản Worker đã được bổ sung; chưa xác nhận chạy trong Workers hoặc gọi Workers AI thực tế. Không coi tài liệu này là chứng nhận sẵn sàng sản xuất. Tệp gốc `index.html` không đổi: build Worker đóng gói và thay hàm gọi AI để giao diện được Worker phục vụ gọi `POST /ai` cùng origin, không có fallback AI mô phỏng khi lỗi. Đăng bài và gửi tin vẫn mô phỏng. Không tự hợp nhất hoặc triển khai.
+Mã backend và tích hợp giao diện trong bản Worker đã được bổ sung; chưa xác nhận chạy trong Workers hoặc gọi Workers AI thực tế. Không coi tài liệu này là chứng nhận sẵn sàng sản xuất. Tệp gốc `index.html` không đổi: build Worker đóng gói tệp đó để giao diện được Worker phục vụ gọi `POST /ai` cùng origin, không có fallback AI mô phỏng khi lỗi. Đăng bài và gửi tin vẫn mô phỏng. Không tự hợp nhất hoặc triển khai.
 
 ## Cấu hình bắt buộc
 
-`wrangler.jsonc` hiện tắt cả `workers_dev` và `preview_urls`. Trước khi triển khai, người vận hành phải khai báo route hoặc custom domain thực tế thuộc tài khoản của mình và bảo vệ hostname bằng Cloudflare Access. Không tự bật lại hostname công khai để bỏ qua bước này.
+`wrangler.jsonc` hiện bật `workers_dev` và `preview_urls`; các hostname này là điểm vào dự kiến và không được xem là đường bỏ qua Access. Trước khi triển khai, xác minh Cloudflare Access bảo vệ mọi hostname đang hoạt động ở cả production và preview, bao gồm Worker Access / All traffic. Không yêu cầu route hoặc custom domain nếu phương án Worker Access hiện tại không cần chúng.
 
-Điền `ACCESS_TEAM_DOMAIN` bằng hostname dạng `ten-nhom.cloudflareaccess.com` (không chứa giao thức hoặc đường dẫn) và `ACCESS_AUD` bằng audience thực tế. Giá trị trống là chủ ý: backend trả 503 thay vì bỏ qua xác thực. Không dùng các ví dụ làm cấu hình thật. Nếu dùng cấu hình ngoài kho mã, đối chiếu để lần deploy không ghi đè bằng giá trị trống.
+`ACCESS_TEAM_DOMAIN` và `ACCESS_AUD` hiện đã được khai báo trong `wrangler.jsonc`. Trước mỗi lần triển khai, xác minh chúng khớp team domain và audience của ứng dụng Access thực tế; không xóa hoặc coi các giá trị đã cấu hình là placeholder. Nếu dùng cấu hình ngoài kho mã, đối chiếu để lần deploy không ghi đè bằng giá trị không hợp lệ.
 
-`ALLOWED_ORIGINS` là danh sách origin chính xác phân tách bằng dấu phẩy; không dùng `*`. Access phải cho OPTIONS đi qua để Worker xử lý preflight, còn POST phải có JWT Access hợp lệ. Giao diện do Worker phục vụ gọi API cùng origin và dùng cookie Access; cần xác nhận luồng đăng nhập và chính sách Access trên hostname đã cấu hình. Bản gốc trên GitHub Pages chưa được tích hợp luồng đăng nhập và không nên dùng để gọi backend khác site.
+`ALLOWED_ORIGINS` là danh sách origin chính xác phân tách bằng dấu phẩy; không dùng `*`. Với preview chỉ dùng cùng origin, giá trị rỗng là có chủ ý; Worker vẫn cho phép request cùng origin và yêu cầu JWT hợp lệ. Giao diện do Worker phục vụ gọi API cùng origin và dùng cookie Access; cần xác nhận luồng đăng nhập và chính sách Access trên hostname đã cấu hình. Bản gốc trên GitHub Pages chưa được tích hợp luồng đăng nhập và không nên dùng để gọi backend khác site. Nếu dùng CORS, Access phải cho OPTIONS đi qua để Worker xử lý preflight, còn POST phải có JWT Access hợp lệ. Xác minh Access trên mọi hostname production/preview.
 
 Binding `AI` và `AI_RATE_LIMITER` phải có mặt. Giới hạn cấu hình là 10 yêu cầu/phút theo phiên JWT; đây là giới hạn cục bộ của cơ chế Cloudflare, không phải trần chi phí toàn cục hoặc theo người dùng. Token được băm trước khi dùng làm khóa giới hạn; không ghi JWT vào log. Cần thiết lập giám sát ngân sách riêng trước khi dùng thật.
 

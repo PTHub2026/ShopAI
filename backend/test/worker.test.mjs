@@ -1,8 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { webcrypto } from 'node:crypto';
-const worker = (await import('data:text/javascript;base64,' + Buffer.from(await readFile(new URL('../src/worker.js', import.meta.url))).toString('base64'))).default;
+const worker = (await import(new URL('../src/worker.js', import.meta.url))).default;
 const { subtle } = webcrypto;
 const pair = await subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
 const jwk = { ...await subtle.exportKey('jwk', pair.publicKey), kid: 'test-key', use: 'sig', alg: 'RS256' };
@@ -90,4 +89,30 @@ test('AI lỗi hoặc trả rỗng không rò thông tin nội bộ', async () =
     const response = await worker.fetch(request(), env({ AI: { run } }));
     assert.equal(response.status, 502); assert.equal((await response.text()).includes('private detail'), false);
   }
+}));
+test('Không gọi AI khi chỉ có tên thương hiệu nhưng thiếu nội dung', async () => run(async () => {
+  let calls=0;
+  for(const task of ['generate','improve','adapt','reply']) {
+    const response=await worker.fetch(request({body:{task,brand:'ShopTrack',text:' ',name:'Khách'}}),env({AI:{run:async()=>{calls++;return {response:'Không được gọi'}}}}));
+    assert.equal(response.status,400);
+  }
+  assert.equal(calls,0);
+}));
+test('Giao diện yêu cầu JWT, hỗ trợ HEAD, và chèn endpoint cùng origin',async()=>run(async()=>{
+  let aiCalls=0,limitCalls=0;
+  const e=env({FRONTEND_HTML:'<html><head></head><body>ShopAI</body></html>',AI:{run:async()=>{aiCalls++;return {response:'AI'}}},AI_RATE_LIMITER:{limit:async()=>{limitCalls++;return {success:true}}}});
+  const make=(path,method='GET',jwt=valid)=>new Request('https://backend.example'+path,{method,headers:jwt?{'Cf-Access-Jwt-Assertion':jwt}:{}});
+  const expired=await token({exp:0});
+  for(const path of ['/','/index.html']){
+    for(const jwt of [null,'invalid',expired])assert.equal((await worker.fetch(make(path,'GET',jwt),e)).status,401);
+    const response=await worker.fetch(make(path),e);
+    assert.equal(response.status,200);assert.match(await response.text(),/name="shopai-ai-endpoint" content="\/ai"/);
+    const head=await worker.fetch(make(path,'HEAD'),e);
+    assert.equal(head.status,200);assert.equal(await head.text(),'');
+    assert.equal((await worker.fetch(make(path),env({...e,AI:null}))).status,503);
+    assert.equal((await worker.fetch(make(path),env({...e,FRONTEND_HTML:undefined}))).status,503);
+  }
+  assert.equal(aiCalls,0);assert.equal(limitCalls,0);
+  const sameOrigin=await worker.fetch(request({headers:{Origin:'https://backend.example'}}),env({...e,ALLOWED_ORIGINS:''}));
+  assert.equal(sameOrigin.status,200);assert.equal(aiCalls,1);assert.equal(limitCalls,1);
 }));

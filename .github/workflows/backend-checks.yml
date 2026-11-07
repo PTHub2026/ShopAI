@@ -1,0 +1,32 @@
+name: Kiểm tra backend
+
+on:
+  push:
+    branches:
+      - feat/cloudflare-ai-backend
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-checks:
+    name: Kiểm thử và build backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Lấy mã nguồn
+        uses: actions/checkout@v4
+      - name: Thiết lập Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Chạy kiểm thử backend
+        run: node --test backend/test/worker.test.mjs
+      - name: Kiểm tra build Wrangler không triển khai
+        working-directory: backend
+        env:
+          CI: 'true'
+          WRANGLER_SEND_METRICS: 'false'
+        run: npx --yes wrangler@4 deploy --dry-run --outdir /tmp/shopai-backend-build

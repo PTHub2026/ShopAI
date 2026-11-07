@@ -10,7 +10,9 @@ Cloudflare Workers chạy API, Workers AI cung cấp mô hình, Cloudflare Acces
 
 ## Triển khai
 
-Dùng Node.js bản LTS được Wrangler hỗ trợ, cài Wrangler theo tài liệu Cloudflare rồi đăng nhập bằng `npx wrangler login`. Trong thư mục `backend`, chạy `npx wrangler deploy` sau khi duyệt mã. Không đặt token trong mã hoặc URL.
+Dùng Node.js bản LTS được Wrangler hỗ trợ, cài Wrangler theo tài liệu Cloudflare rồi đăng nhập bằng `npx wrangler login`. Trong thư mục `backend`, chạy `npx wrangler deploy` sau khi duyệt mã. Cấu hình `workers_dev: false` nên lệnh deploy không tạo hostname `workers.dev` có thể gọi.
+
+Sau khi deploy, trong Cloudflare Workers & Pages, thêm Custom Domain cho Worker hoặc route từ hostname trên zone của bạn tới Worker. Tạo ứng dụng Cloudflare Access bảo vệ chính hostname đó trước khi kiểm thử `/health` hoặc `/ai`; Access chỉ bảo vệ hostname, không tự ánh xạ hostname tới Worker. Không kiểm thử qua hostname khác không được bảo vệ. Không đặt token trong mã hoặc URL.
 
 Tạo ứng dụng tự lưu trữ trong Cloudflare Zero Trust Access bảo vệ hostname backend, với chính sách chỉ cho phép người dùng được chỉ định. Thiết lập biến `ACCESS_TEAM_DOMAIN` là hostname nhóm Access (không có https:// và dấu /), cùng `ACCESS_AUD` là mã audience của ứng dụng Access. Hai giá trị này là cấu hình, không phải khóa AI. Backend từ chối yêu cầu khi chưa cấu hình hoặc JWT không hợp lệ.
 

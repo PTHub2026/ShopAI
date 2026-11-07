@@ -1,0 +1,12 @@
+{
+  "name": "shopai-backend",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-11-07",
+  "workers_dev": true,
+  "ai": { "binding": "AI" },
+  "ratelimits": [{ "name": "AI_RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],
+  "vars": {
+    "ALLOWED_ORIGINS": "https://pthub2026.github.io",
+    "AI_MODEL": "@cf/meta/llama-3.1-8b-instruct"
+  }
+}

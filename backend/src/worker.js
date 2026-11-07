@@ -82,7 +82,8 @@ export default {
       body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
     } catch { return json({ error: 'JSON không hợp lệ.' }, 400); }
     if (!body || Array.isArray(body) || typeof body !== 'object' || !TASKS.has(body.task)) return json({ error: 'task phải là generate, improve, adapt hoặc reply.' }, 400);
-    if (!Object.entries(body).some(([key, value]) => key !== 'task' && typeof value === 'string' && value.trim())) return json({ error: 'Cần ít nhất một trường nội dung dạng chuỗi không rỗng ngoài task.' }, 400);
+    const contentFields = { generate: ['topic', 'brief', 'product', 'text'], improve: ['text'], adapt: ['text'], reply: ['text', 'message'] };
+    if (!contentFields[body.task].some(key => typeof body[key] === 'string' && body[key].trim())) return json({ error: 'Thiếu nội dung cần xử lý cho tác vụ AI.' }, 400);
     try {
       const instructions = {
         generate: 'Tạo nội dung mới theo thông tin và yêu cầu được cung cấp.',

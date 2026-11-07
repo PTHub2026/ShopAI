@@ -1,0 +1,3 @@
+backend/dist/
+backend/.wrangler/
+node_modules/

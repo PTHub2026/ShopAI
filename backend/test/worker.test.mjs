@@ -91,3 +91,20 @@ test('AI lỗi hoặc trả rỗng không rò thông tin nội bộ', async () =
     assert.equal(response.status, 502); assert.equal((await response.text()).includes('private detail'), false);
   }
 }));
+test('Không gọi AI khi chỉ có tên thương hiệu nhưng thiếu nội dung', async () => run(async () => {
+  let calls=0;
+  for(const task of ['generate','improve','adapt','reply']) {
+    const response=await worker.fetch(request({body:{task,brand:'ShopTrack',text:' ',name:'Khách'}}),env({AI:{run:async()=>{calls++;return {response:'Không được gọi'}}}}));
+    assert.equal(response.status,400);
+  }
+  assert.equal(calls,0);
+}));
+test('Giao diện yêu cầu JWT, hỗ trợ HEAD, và chèn endpoint cùng origin',async()=>run(async()=>{
+  const e=env({FRONTEND_HTML:'<html><head></head><body>ShopAI</body></html>'});
+  const make=(method='GET',jwt=valid)=>new Request('https://backend.example/',{method,headers:jwt?{'Cf-Access-Jwt-Assertion':jwt}:{}});
+  assert.equal((await worker.fetch(make('GET',null),e)).status,401);
+  const response=await worker.fetch(make(),e);
+  assert.equal(response.status,200);assert.match(await response.text(),/name="shopai-ai-endpoint" content="\/ai"/);
+  assert.equal(await (await worker.fetch(make('HEAD'),e)).text(),'');
+  assert.equal((await worker.fetch(request({headers:{Origin:'https://backend.example'}}),e)).status,200);
+}));

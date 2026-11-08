@@ -35,3 +35,13 @@ Reviewer phát hiện một lỗi Important: cache tên/email gửi góp ý chư
 - `CI=true WRANGLER_SEND_METRICS=false npm run check`: **43/43 kiểm thử đạt, 0 lỗi/bỏ qua**, build exit 0; **278.24 KiB**, gzip **83.10 KiB**.
 - `git diff --check`: đạt.
 - Chưa kiểm chứng Cloudflare runtime; giữ nguyên điều kiện phát hành trong READINESS.md.
+
+
+## Kiểm tra GitHub và Cloudflare Preview
+
+- PR #6: https://github.com/PTHub2026/ShopAI/pull/6.
+- Commit đầu của PR: `fe7ff8076243bffbafe843867d520e013fcaecdb`; GitHub Actions push và pull_request đều thành công.
+- Cloudflare Workers Builds xác nhận build và deployment preview thành công (deployment `1b3fb71b-5122-45e9-9577-70e2fe7c6e3c`, lúc 04:59 UTC / 11:59 giờ Việt Nam ngày 08/11/2026). Nguồn: bình luận cloudflare-workers-and-pages[bot] trong PR.
+- Preview: https://fix-verified-cloud-drafts-20261108-shopai-backend.ct-3f8.workers.dev. Khi mở bằng trình duyệt điều khiển, Access hiển thị ứng dụng “ShopAI — chỉ chủ tài khoản” và phương thức đăng nhập Cloudflare; chưa có phiên ứng dụng hợp lệ để thử AI/D1.
+- Review Copilot chỉ ra phản hồi đọc một bản nháp vẫn có thể thay nội dung sau khi đóng picker hoặc rời/quay lại trang. Đã tái hiện RED, bổ sung kiểm tra thế hệ modal/view, kiểm tra lại ở callback xác nhận.
+- Sau sửa bổ sung: `npm run check` đạt 45/45 kiểm thử và Wrangler dry-run. Không promote production; cần kiểm chứng preview sau xác thực.

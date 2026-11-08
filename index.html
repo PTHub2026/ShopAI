@@ -292,18 +292,18 @@ async function cloudListDrafts(cursor=''){
 }
 async function cloudOpenDraft(id){
   if(CLOUD.busy)return;
-  const editor=D,original=JSON.stringify(editor),page=route;
+  const editor=D,original=JSON.stringify(editor),page=route,modalAt=modalGeneration,viewAt=viewGeneration;
   CLOUD.busy=true;cloudStatus('Đang mở bản nháp…');
   try{
     await cloudSession();
     const row=await cloudRequest('/storage/drafts/'+encodeURIComponent(id));
     if(!cloudRow(row)||row.draft.id!==id)throw Error('Bản nháp máy chủ không hợp lệ.');
     const apply=()=>{
-      if(D!==editor||JSON.stringify(D)!==original||route!==page)return cloudStatus('Bản đang soạn hoặc màn hình đã thay đổi; chưa thay nội dung.',true);
+      if(D!==editor||JSON.stringify(D)!==original||route!==page||viewGeneration!==viewAt)return cloudStatus('Bản đang soạn hoặc màn hình đã thay đổi; chưa thay nội dung.',true);
       D={...newDraft(),content:row.draft.content,channels:[...row.draft.channels],cloud:{id,revision:row.revision,scope:APP_SCOPE,type:row.draft.type}};
       saveDraft();closeModal();cloudStatus('Đã mở bản nháp máy chủ, phiên bản '+row.revision+'.');go('create');
     };
-    if(D!==editor||JSON.stringify(D)!==original||route!==page)return cloudStatus('Bản đang soạn hoặc màn hình đã thay đổi; chưa thay nội dung.',true);
+    if(D!==editor||JSON.stringify(D)!==original||route!==page||modalGeneration!==modalAt||viewGeneration!==viewAt)return cloudStatus('Bản đang soạn hoặc màn hình đã thay đổi; chưa thay nội dung.',true);
     if(draftDirty())ask('Thay bản đang soạn bằng bản nháp máy chủ? Các thay đổi cục bộ chưa lưu sẽ bị thay thế.',apply,{ok:'Mở bản máy chủ'});else apply();
   }catch(e){cloudStatus(e.message||'Không mở được bản nháp. Bản cục bộ được giữ nguyên.',true)}finally{CLOUD.busy=false;cloudStatus(CLOUD.message,CLOUD.error)}
 }

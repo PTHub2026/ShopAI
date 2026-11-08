@@ -2,7 +2,7 @@
 
 ## Kết luận
 
-Mã hiện có hỗ trợ AI qua Workers AI và thao tác lưu/mở bản nháp văn bản qua D1. Chưa xác nhận bản này đã chạy trên Cloudflare thật. Không coi unit test, Workers cục bộ hoặc dry-run là bằng chứng đã triển khai.
+Mã hiện có hỗ trợ AI qua Workers AI và thao tác lưu/mở bản nháp văn bản qua D1. Cloudflare đã xác nhận build và triển khai preview của PR #6 thành công qua kiểm tra GitHub và bình luận deployment. Chưa xác minh được hoạt động AI/D1 bên trong ứng dụng sau đăng nhập. Không coi deployment thành công là bằng chứng tích hợp đã hoạt động.
 
 ## Đã kiểm chứng trong môi trường phát triển
 
@@ -27,7 +27,7 @@ Mã hiện có hỗ trợ AI qua Workers AI và thao tác lưu/mở bản nháp 
 
 ## Chưa xác minh hoặc chưa triển khai
 
-1. Phiên Cloudflare trong lượt này đang ở trang đăng nhập. Chưa tạo deployment, chưa xác nhận mapping Access hiện tại đã hoạt động, chưa thử Workers AI thật hoặc D1 từ UI trên Cloudflare.
+1. Preview của PR #6 đã được Cloudflare build/deploy tự động. Trình duyệt điều khiển khi mở preview vẫn được chuyển tới Cloudflare Access và yêu cầu đăng nhập bằng Cloudflare. Chưa xác nhận phiên đăng nhập hoàn tất, chưa thử Workers AI thật hoặc D1 từ UI trên cloud.
 2. Binding D1 chỉ có trong cấu hình `previews`, không có DB production. Không trỏ production vào database preview.
 3. Hồ sơ, cài đặt, kho ảnh/video, hội thoại và tệp gốc vẫn lưu tại thiết bị. Chỉ bản nháp văn bản được người dùng lưu rõ ràng có luồng máy chủ; không phải đồng bộ toàn bộ ứng dụng.
 4. OAuth, webhook, đăng bài, lịch đăng server, nhập hộp thư và gửi tin thật của các kênh chưa có. Trên bản server các thao tác mô phỏng bị chặn; chưa thể gọi đây là sản phẩm đa kênh hoàn chỉnh.

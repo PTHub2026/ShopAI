@@ -178,3 +178,32 @@ test('A delayed draft list cannot reopen after navigation or dismissing the list
     }finally{r.close()}
   }
 });
+
+test('Closing a pending draft read preserves empty and dirty editors',async()=>{
+  for(const dirty of [false,true]){
+    const pending=deferred();
+    const r=runtime({fetchImpl:async path=>path==='/session'?Response.json(session):path==='/storage/drafts'?Response.json({drafts:[envelope()],nextCursor:null}):pending.promise.then(()=>Response.json(envelope()))});
+    try{
+      if(dirty)edit(r,'Nội dung chưa lưu');
+      await r.w.cloudListDrafts();const opening=r.w.cloudOpenDraft('cloud-a');await settle();
+      r.w.closeModal();pending.resolve();await opening;
+      assert.equal(r.read('D.content'),dirty?'Nội dung chưa lưu':'');assert.equal(r.read('!!D.cloud'),false);
+      assert.equal(r.w.document.querySelector('#modal').classList.contains('on'),false);
+    }finally{r.close()}
+  }
+});
+
+test('Leaving and returning invalidates draft reads and old confirmation callbacks',async()=>{
+  for(const confirm of [false,true]){
+    const pending=deferred();
+    const r=runtime({fetchImpl:async path=>path==='/session'?Response.json(session):pending.promise.then(()=>Response.json(envelope()))});
+    try{
+      if(confirm)edit(r,'Giữ nguyên bản nháp');
+      const opening=r.w.cloudOpenDraft('cloud-a');await settle();
+      if(confirm){pending.resolve();await opening;assert.ok(r.w.document.querySelector('#ask_yes'))}
+      r.w.go('settings');r.w.go('create');
+      if(confirm)r.w.document.querySelector('#ask_yes').click();else{pending.resolve();await opening}
+      assert.equal(r.read('D.content'),confirm?'Giữ nguyên bản nháp':'');assert.equal(r.read('!!D.cloud'),false);
+    }finally{r.close()}
+  }
+});

@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Đăng nhập ShopAI</title>
+<title>Đăng nhập ShopPost</title>
 <style>
-:root{--p:#030213;--fg:#0a0a0a;--mut:#ececf0;--mutf:#717182;--in:#f3f3f5;--bd:#0000001a;--sb:#fafafa;--red:#d4183d;--green:#16a34a;--r:10px;--fb:#1877F2;--zalo:#0068FF}
+:root{--p:#030213;--fg:#0a0a0a;--mut:#ececf0;--mutf:#717182;--in:#f3f3f5;--bd:#0000001a;--sb:#fafafa;--red:#d4183d;--green:#16a34a;--r:10px;--fb:#1877F2;--zalo:#0068FF;--tiktok:#000}
 *{box-sizing:border-box}
 html,body{height:100%}
 body{margin:0;font-family:Inter,Geist,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--fg);background:var(--sb);font-size:14px;line-height:1.5;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 16px}
@@ -26,6 +26,7 @@ h1{font-size:22px;line-height:1.3;margin:0 0 6px}
 .btn svg{flex:none}
 .btn.fb{background:var(--fb);border-color:var(--fb);color:#fff}
 .btn.zalo{background:var(--zalo);border-color:var(--zalo);color:#fff}
+.btn.tiktok{background:var(--tiktok);border-color:var(--tiktok);color:#fff}
 .btn.pri{background:var(--p);border-color:var(--p);color:#fff}
 .btn.link{background:none;border:none;min-height:auto;padding:4px;width:auto;font-weight:500;color:var(--mutf);text-decoration:underline}
 .zalo-mark{font-weight:800;font-size:13px;background:#fff;color:var(--zalo);border-radius:6px;padding:1px 5px}
@@ -33,6 +34,7 @@ h1{font-size:22px;line-height:1.3;margin:0 0 6px}
 .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--bd)}
 label{display:block;font-weight:600;font-size:13px;margin:0 0 6px}
 input{width:100%;min-height:44px;padding:10px 12px;border-radius:var(--r);border:1px solid var(--bd);background:var(--in);font:inherit;color:inherit}
+.hint{font-size:12px;margin:6px 0 0}
 input.code{font-size:22px;letter-spacing:8px;text-align:center;font-variant-numeric:tabular-nums}
 .row{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
 .spinner{width:16px;height:16px;border:2px solid var(--mut);border-top-color:var(--p);border-radius:50%;animation:spin .8s linear infinite;display:inline-block;vertical-align:-3px;margin-right:8px}
@@ -48,21 +50,42 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
 </head>
 <body>
 <main>
-  <div class="logo"><i>S</i>ShopAI</div>
-  <h1>Đăng nhập ShopAI</h1>
+  <div class="logo"><i>S</i>ShopPost</div>
+  <h1>Đăng nhập ShopPost</h1>
   <p class="lead muted">Trợ lý soạn nội dung bán hàng của bạn. Chọn một cách đăng nhập để tiếp tục.</p>
   <div id="status" class="status" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span>Đang tải phương thức đăng nhập…</div>
   <div id="methods" class="stack" hidden>
+    <a id="zalo" class="btn zalo" href="/auth/zalo/start" hidden><span class="zalo-mark" aria-hidden="true">Zalo</span><span>Tiếp tục với Zalo</span></a>
     <button type="button" id="fb" class="btn fb" hidden>
       <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.69 4.53-4.69 1.31 0 2.68.24 2.68.24v2.97h-1.51c-1.49 0-1.96.93-1.96 1.89v2.25h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07z"/></svg>
       <span>Tiếp tục với Facebook</span>
     </button>
-    <a id="zalo" class="btn zalo" href="/auth/zalo/start" hidden><span class="zalo-mark" aria-hidden="true">Zalo</span><span>Tiếp tục với Zalo</span></a>
-    <div id="divider" class="divider" hidden>hoặc dùng email</div>
+    <a id="tiktok" class="btn tiktok" href="/auth/tiktok/start" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M12.53.02C13.84 0 15.14.01 16.44 0c.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/></svg>
+      <span>Tiếp tục với TikTok</span>
+    </a>
+    <button type="button" id="phoneBtn" class="btn" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></svg>
+      <span>Tiếp tục với số điện thoại</span>
+    </button>
+    <form id="phoneForm" class="stack" hidden novalidate>
+      <div>
+        <label for="phone">Số điện thoại</label>
+        <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" placeholder="+84 912 345 678" aria-describedby="phoneHint" required>
+        <p id="phoneHint" class="hint muted">Số di động Việt Nam, ví dụ 0912 345 678 hoặc +84 912 345 678. Mã gồm 6 chữ số sẽ được gửi qua tin nhắn SMS.</p>
+      </div>
+      <button type="submit" class="btn pri" id="sendSms">
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>Gửi mã qua SMS</span>
+      </button>
+      <div class="row"><button type="button" class="btn link" id="phoneCancel">Chọn cách đăng nhập khác</button></div>
+    </form>
+    <div id="divider" class="divider" hidden>hoặc đăng nhập / đăng ký bằng email</div>
     <form id="emailForm" class="stack" hidden novalidate>
       <div>
         <label for="email">Email</label>
-        <input id="email" name="email" type="email" inputmode="email" autocomplete="email" maxlength="254" placeholder="ban@vidu.vn" required>
+        <input id="email" name="email" type="email" inputmode="email" autocomplete="email" maxlength="254" placeholder="ban@vidu.vn" aria-describedby="emailHint" required>
+        <p id="emailHint" class="hint muted">Chưa có tài khoản? Nhập email và xác nhận mã, tài khoản ShopPost sẽ được tạo tự động, không cần mật khẩu.</p>
       </div>
       <button type="submit" class="btn pri" id="sendCode">
         <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
@@ -70,14 +93,14 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
       </button>
     </form>
     <form id="codeForm" class="stack" hidden novalidate>
-      <p class="muted" style="margin:0">Mã gồm 6 chữ số đã được gửi tới <b id="sentTo"></b>. Mã có hiệu lực trong 10 phút.</p>
+      <p class="muted" style="margin:0"><span id="sentLead">Mã gồm 6 chữ số đã được gửi tới</span> <b id="sentTo"></b>. Mã có hiệu lực trong 10 phút.</p>
       <div>
         <label for="code">Mã đăng nhập</label>
         <input id="code" name="code" class="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="••••••" required>
       </div>
       <button type="submit" class="btn pri" id="verify"><span>Xác nhận và đăng nhập</span></button>
       <div class="row">
-        <button type="button" class="btn link" id="changeEmail">Đổi email</button>
+        <button type="button" class="btn link" id="changeTarget">Đổi email</button>
         <button type="button" class="btn link" id="resend" disabled>Gửi lại mã</button>
       </div>
     </form>
@@ -85,11 +108,11 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
   <div id="setup" class="status" hidden>Đăng nhập đang được thiết lập. Vui lòng quay lại sau ít phút.</div>
   <p class="owner" id="owner" hidden><a id="ownerLink" href="#" rel="noopener">Chủ cửa hàng: đăng nhập qua Cloudflare Access</a></p>
   <div class="note">
-    <p>Khi đăng nhập, ShopAI chỉ dùng tên, mã định danh tài khoản (Facebook/Zalo) hoặc địa chỉ email của bạn để nhận diện phiên làm việc và lưu bản nháp. ShopAI không tự đăng bài hay gửi tin nhắn thay bạn.</p>
+    <p>Khi đăng nhập, ShopPost chỉ dùng tên, mã định danh tài khoản (Zalo/Facebook/TikTok), số điện thoại hoặc địa chỉ email của bạn để nhận diện phiên làm việc và lưu bản nháp. ShopPost không tự đăng bài hay gửi tin nhắn thay bạn.</p>
     <p>Phiên đăng nhập được lưu 30 ngày trên thiết bị này; bạn có thể đăng xuất bất cứ lúc nào.</p>
   </div>
 </main>
-<footer>© ShopAI × ShopTrack</footer>
+<footer>© ShopPost × ShopTrack</footer>
 <script nonce="__CSP_NONCE__">
 (() => {
   const $ = s => document.querySelector(s);
@@ -101,7 +124,14 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
     zalo_token: 'Zalo từ chối mã xác thực. Vui lòng thử lại sau ít phút.',
     zalo_ho_so: 'Không đọc được hồ sơ Zalo. Vui lòng thử lại.',
     zalo_chua_cau_hinh: 'Đăng nhập Zalo chưa được kích hoạt.',
-    zalo_tam_loi: 'Đăng nhập Zalo tạm thời gặp lỗi. Vui lòng thử lại sau.'
+    zalo_tam_loi: 'Đăng nhập Zalo tạm thời gặp lỗi. Vui lòng thử lại sau.',
+    tiktok_state: 'Phiên đăng nhập TikTok không hợp lệ hoặc đã được dùng. Vui lòng thử lại.',
+    tiktok_het_han: 'Phiên đăng nhập TikTok đã hết hạn (quá 10 phút). Vui lòng thử lại.',
+    tiktok_tu_choi: 'Bạn đã hủy đăng nhập hoặc TikTok chưa cấp quyền.',
+    tiktok_token: 'TikTok từ chối mã xác thực. Vui lòng thử lại sau ít phút.',
+    tiktok_ho_so: 'Không đọc được hồ sơ TikTok. Vui lòng thử lại.',
+    tiktok_chua_cau_hinh: 'Đăng nhập TikTok chưa được kích hoạt.',
+    tiktok_tam_loi: 'Đăng nhập TikTok tạm thời gặp lỗi. Vui lòng thử lại sau.'
   };
   function show(message, kind = '') {
     statusBox.replaceChildren();
@@ -111,7 +141,7 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
     statusBox.setAttribute('role', kind === 'error' ? 'alert' : 'status');
     statusBox.hidden = !message;
   }
-  function busy(on) { document.querySelectorAll('#methods button, #methods input').forEach(el => { if (el.id !== 'resend') el.disabled = on; }); const z = $('#zalo'); z.setAttribute('aria-disabled', on ? 'true' : 'false'); }
+  function busy(on) { document.querySelectorAll('#methods button, #methods input').forEach(el => { if (el.id !== 'resend') el.disabled = on; }); ['#zalo', '#tiktok'].forEach(s => $(s).setAttribute('aria-disabled', on ? 'true' : 'false')); }
   async function post(path, data) {
     try {
       const r = await fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
@@ -119,7 +149,7 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
       return { ok: r.ok, status: r.status, data: body || {} };
     } catch { return { ok: false, status: 0, data: { error: 'Không kết nối được máy chủ. Kiểm tra mạng và thử lại.' } }; }
   }
-  function done() { show('Đăng nhập thành công. Đang mở ShopAI…', 'ok'); location.replace('/'); }
+  function done() { show('Đăng nhập thành công. Đang mở ShopPost…', 'ok'); location.replace('/'); }
 
   const params = new URLSearchParams(location.search);
   const initialError = ERRORS[params.get('loi')] || '';
@@ -164,17 +194,64 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
     const tick = () => { if (left <= 0) { clearInterval(resendTimer); btn.disabled = false; btn.textContent = 'Gửi lại mã'; return; } btn.disabled = true; btn.textContent = 'Gửi lại mã (' + left + ' giây)'; left--; };
     tick(); resendTimer = setInterval(tick, 1000);
   }
-  async function sendCode(email) {
-    busy(true); show('Đang gửi mã tới email của bạn…', 'loading');
-    const r = await post('/auth/email/start', { email });
+  // Mã OTP dùng chung cho email và số điện thoại; đích nhận mã chỉ được gán qua textContent (không chèn HTML).
+  const OTP = {
+    email: { sending: 'Đang gửi mã tới email của bạn…', sent: 'Đã gửi mã. Kiểm tra hộp thư đến (và thư rác) của bạn.', lead: 'Mã gồm 6 chữ số đã được gửi tới', change: 'Đổi email', input: '#email' },
+    phone: { sending: 'Đang gửi mã qua SMS tới số điện thoại của bạn…', sent: 'Đã gửi mã qua SMS. Kiểm tra tin nhắn trên điện thoại của bạn.', lead: 'Mã gồm 6 chữ số đã được gửi qua SMS tới', change: 'Đổi số điện thoại', input: '#phone' }
+  };
+  const enabled = { email: false, phone: false, divider: false };
+  let otpMode = 'email', otpTarget = '';
+  // Chuẩn hóa giống máy chủ: 0912345678 / 84912345678 / +84912345678 → +84912345678.
+  function normalizePhone(value) {
+    if (typeof value !== 'string' || value.length > 32) return '';
+    let d = value.trim().replace(/[\s.()-]/g, '');
+    if (d.startsWith('+84')) d = d.slice(3).replace(/^0(?=\d{9}$)/, '');
+    else if (d.startsWith('0')) d = d.slice(1);
+    else if (d.startsWith('84') && d.length === 11) d = d.slice(2);
+    else return '';
+    return /^[35789]\d{8}$/.test(d) ? '+84' + d : '';
+  }
+  const formatPhone = p => p.slice(0, 3) + ' ' + p.slice(3, 6) + ' ' + p.slice(6, 9) + ' ' + p.slice(9);
+  // Trở về bước chọn cách đăng nhập; mode = 'phone' giữ ô nhập số điện thoại đang mở.
+  function resetOtp(mode) {
+    clearInterval(resendTimer);
+    $('#codeForm').hidden = true; $('#code').value = '';
+    $('#phoneForm').hidden = !(enabled.phone && mode === 'phone');
+    $('#phoneBtn').hidden = !enabled.phone || mode === 'phone';
+    $('#emailForm').hidden = !enabled.email;
+    $('#divider').hidden = !enabled.divider;
+  }
+  async function sendCode(mode, target) {
+    const text = OTP[mode];
+    busy(true); show(text.sending, 'loading');
+    const r = await post('/auth/' + mode + '/start', mode === 'phone' ? { phone: target } : { email: target });
     busy(false);
     if (r.ok || (r.status === 429 && r.data.retryAfter && r.data.retryAfter <= 60)) {
-      $('#sentTo').textContent = email;
-      $('#emailForm').hidden = true; $('#codeForm').hidden = false;
+      otpMode = mode; otpTarget = target;
+      $('#sentLead').textContent = text.lead;
+      $('#sentTo').textContent = mode === 'phone' ? formatPhone(target) : target;
+      $('#changeTarget').textContent = text.change;
+      ['#emailForm', '#phoneForm', '#phoneBtn', '#divider'].forEach(s => { $(s).hidden = true; });
+      $('#codeForm').hidden = false;
       countdown(r.data.retryAfter || 60);
-      show(r.ok ? 'Đã gửi mã. Kiểm tra hộp thư đến (và thư rác) của bạn.' : r.data.error, r.ok ? 'ok' : 'error');
+      show(r.ok ? text.sent : r.data.error, r.ok ? 'ok' : 'error');
       $('#code').focus();
     } else show(r.data.error || 'Không gửi được mã. Vui lòng thử lại.', 'error');
+  }
+  function setupOtp() {
+    $('#code').addEventListener('input', event => { event.target.value = event.target.value.replace(/\D/g, '').slice(0, 6); });
+    $('#codeForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const code = $('#code').value.trim();
+      if (!/^\d{6}$/.test(code)) { show('Mã gồm đúng 6 chữ số.', 'error'); $('#code').focus(); return; }
+      busy(true); show('Đang xác minh mã…', 'loading');
+      const r = await post('/auth/' + otpMode + '/verify', otpMode === 'phone' ? { phone: otpTarget, code } : { email: otpTarget, code });
+      if (r.ok) return done();
+      busy(false); show(r.data.error || 'Không xác minh được mã. Vui lòng thử lại.', 'error');
+      $('#code').select();
+    });
+    $('#resend').addEventListener('click', () => sendCode(otpMode, otpTarget));
+    $('#changeTarget').addEventListener('click', () => { resetOtp(otpMode); show(''); $(OTP[otpMode].input).focus(); });
   }
   function setupEmail() {
     $('#emailForm').hidden = false;
@@ -182,27 +259,25 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
       event.preventDefault();
       const email = $('#email').value.trim();
       if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { show('Vui lòng nhập địa chỉ email hợp lệ.', 'error'); $('#email').focus(); return; }
-      sendCode(email);
+      sendCode('email', email);
     });
-    $('#code').addEventListener('input', event => { event.target.value = event.target.value.replace(/\D/g, '').slice(0, 6); });
-    $('#codeForm').addEventListener('submit', async event => {
+  }
+  function setupPhone() {
+    $('#phoneBtn').hidden = false;
+    $('#phoneBtn').addEventListener('click', () => { resetOtp('phone'); show(''); $('#phone').focus(); });
+    $('#phoneCancel').addEventListener('click', () => { resetOtp('email'); show(''); $('#phoneBtn').focus(); });
+    $('#phoneForm').addEventListener('submit', event => {
       event.preventDefault();
-      const code = $('#code').value.trim();
-      if (!/^\d{6}$/.test(code)) { show('Mã gồm đúng 6 chữ số.', 'error'); $('#code').focus(); return; }
-      busy(true); show('Đang xác minh mã…', 'loading');
-      const r = await post('/auth/email/verify', { email: $('#sentTo').textContent, code });
-      if (r.ok) return done();
-      busy(false); show(r.data.error || 'Không xác minh được mã. Vui lòng thử lại.', 'error');
-      $('#code').select();
+      const phone = normalizePhone($('#phone').value);
+      if (!phone) { show('Số điện thoại không hợp lệ. Vui lòng nhập số di động Việt Nam, ví dụ 0912 345 678 hoặc +84 912 345 678.', 'error'); $('#phone').focus(); return; }
+      sendCode('phone', phone);
     });
-    $('#resend').addEventListener('click', () => sendCode($('#sentTo').textContent));
-    $('#changeEmail').addEventListener('click', () => { clearInterval(resendTimer); $('#codeForm').hidden = true; $('#emailForm').hidden = false; $('#code').value = ''; show(''); $('#email').focus(); });
   }
 
-  $('#zalo').addEventListener('click', event => {
-    if ($('#zalo').getAttribute('aria-disabled') === 'true') { event.preventDefault(); return; }
-    show('Đang chuyển tới Zalo…', 'loading');
-  });
+  [['#zalo', 'Zalo'], ['#tiktok', 'TikTok']].forEach(([selector, name]) => $(selector).addEventListener('click', event => {
+    if ($(selector).getAttribute('aria-disabled') === 'true') { event.preventDefault(); return; }
+    show('Đang chuyển tới ' + name + '…', 'loading');
+  }));
 
   fetch('/auth/providers', { credentials: 'same-origin', headers: { Accept: 'application/json' } })
     .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
@@ -210,13 +285,20 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
       show(initialError, initialError ? 'error' : '');
       const fb = Boolean(p.facebook && p.facebook.enabled && /^\d{5,20}$/.test(String(p.facebook.appId || '')));
       const zalo = Boolean(p.zalo && p.zalo.enabled);
+      const tiktok = Boolean(p.tiktok && p.tiktok.enabled);
+      const phone = Boolean(p.phone && p.phone.enabled);
       const email = Boolean(p.email && p.email.enabled);
-      $('#methods').hidden = !(fb || zalo || email);
-      if (fb) setupFacebook(String(p.facebook.appId));
+      const any = fb || zalo || tiktok || phone || email;
+      $('#methods').hidden = !any;
       $('#zalo').hidden = !zalo;
+      if (fb) setupFacebook(String(p.facebook.appId));
+      $('#tiktok').hidden = !tiktok;
+      enabled.phone = phone; enabled.email = email; enabled.divider = email && (fb || zalo || tiktok || phone);
+      if (phone || email) setupOtp();
+      if (phone) setupPhone();
       if (email) setupEmail();
-      $('#divider').hidden = !(email && (fb || zalo));
-      $('#setup').hidden = fb || zalo || email;
+      $('#divider').hidden = !enabled.divider;
+      $('#setup').hidden = any;
       if (p.access && typeof p.access.url === 'string' && /^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/i.test(p.access.url)) { $('#ownerLink').href = p.access.url; $('#owner').hidden = false; }
     })
     .catch(() => show('Không tải được phương thức đăng nhập. Vui lòng tải lại trang.', 'error'));

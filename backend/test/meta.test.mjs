@@ -25,9 +25,10 @@ test('Meta schema migration matches runtime and never stores plaintext auth code
 test('Facebook Pages text and photo publish; Instagram requires an image and publishes media container',async()=>{
  const e=env(),enc=await encryptToken(e,token),a={provider:'facebook',target_id:'123456',token_ciphertext:enc.cipher,token_iv:enc.iv};
  const fetch0=globalThis.fetch,requests=[];
- globalThis.fetch=async(url,options)=>{const u=new URL(url);requests.push({u,options});assert.equal(u.hostname,'graph.facebook.com');assert.equal(options.method,'POST');const p=new URLSearchParams(options.body);assert.equal(p.get('access_token'),token);
+ globalThis.fetch=async(url,options)=>{const u=new URL(url);requests.push({u,options});assert.equal(u.hostname,'graph.facebook.com');assert.equal(options.headers.Authorization,'Bearer '+token);assert.equal(u.searchParams.has('access_token'),false);const p=new URLSearchParams(options.body||'');assert.equal(p.has('access_token'),false);
  if(u.pathname.endsWith('/feed')){assert.equal(p.get('message'),'A test text');return Response.json({id:'post_1'});}
  if(u.pathname.endsWith('/photos')){assert.equal(p.get('url'),'https://example.com/photo.jpg');return Response.json({post_id:'post_2'});}
+ if(u.pathname.endsWith('/container_1')){assert.equal(options.method,'GET');assert.equal(u.searchParams.get('fields'),'status_code');return Response.json({status_code:'FINISHED'});}
  if(u.pathname.endsWith('/media_publish')){assert.equal(p.get('creation_id'),'container_1');return Response.json({id:'ig_1'});}
  if(u.pathname.endsWith('/media')){assert.equal(p.get('image_url'),'https://example.com/photo.jpg');return Response.json({id:'container_1'});}
  throw Error('Unexpected graph endpoint');};
@@ -37,10 +38,25 @@ test('Facebook Pages text and photo publish; Instagram requires an image and pub
   const ig={...a,provider:'instagram',target_id:'987654'};
   await assert.rejects(publishMeta(e,ig,{kind:'text',payload:JSON.stringify({text:'No picture'})}),/IG_REQUIRES_PHOTO/);
   assert.equal(await publishMeta(e,ig,{kind:'photo',payload:JSON.stringify({text:'Caption',photoUrl:'https://example.com/photo.jpg'})}),'ig_1');
-  assert.deepEqual(requests.map(x=>x.u.pathname.split('/').at(-1)),['feed','photos','media','media_publish']);
+  assert.deepEqual(requests.map(x=>x.u.pathname.split('/').at(-1)),['feed','photos','media','container_1','media_publish']);
  }finally{globalThis.fetch=fetch0;}
 });
 test('OAuth callback refuses missing configuration before touching database',async()=>{
  const r=await handleMeta(new Request('https://shoppost.example/api/social/meta/callback'),{...env(),META_APP_SECRET:''},{owner:'user'},(v,s=200)=>Response.json(v,{status:s}));
  assert.equal(r.status,503);
+});
+
+test('Instagram never calls media_publish until container reaches FINISHED',async()=>{
+ const e=env(),enc=await encryptToken(e,token),account={provider:'instagram',target_id:'987654',token_ciphertext:enc.cipher,token_iv:enc.iv};
+ const original=globalThis.fetch,called=[];
+ globalThis.fetch=async(url)=>{
+  const path=new URL(url).pathname.split('/').at(-1);called.push(path);
+  if(path==='media')return Response.json({id:'container_1'});
+  if(path==='container_1')return Response.json({status_code:'IN_PROGRESS'});
+  throw Error('Unexpected publish');
+ };
+ try{
+  await assert.rejects(publishMeta(e,account,{kind:'photo',payload:JSON.stringify({text:'Caption',photoUrl:'https://example.com/img.jpg'})}),e=>e.message==='IG_MEDIA_PROCESSING'&&e.status===429&&e.retryAfter===30);
+  assert.deepEqual(called,['media','container_1']);
+ }finally{globalThis.fetch=original;}
 });

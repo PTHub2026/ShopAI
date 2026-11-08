@@ -1,13 +1,20 @@
 import { drafts } from './drafts.js';
-import { handleAuth, loginResponse, sessionFromRequest } from './auth.js';
+import { handleAuth, loginResponse, normalizeEmail, sessionFromRequest } from './auth.js';
+import { INVITE_PATH, handleApi, resolveShop } from './shops.js';
+import { isPlatformAdmin } from './permissions.js';
+const INVITE_COOKIE = '__Host-shopai_invite';
 const LOGIN_REQUIRED = 'Phiên đăng nhập đã hết hạn hoặc chưa đăng nhập.';
 const TASKS = new Set(['generate', 'improve', 'adapt', 'reply']);
 const decode = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0));
 const configured = env => Boolean(env.AI && env.AI_RATE_LIMITER && /^[a-z0-9-]+\.cloudflareaccess\.com$/i.test(env.ACCESS_TEAM_DOMAIN || '') && typeof env.ACCESS_AUD === 'string' && env.ACCESS_AUD.trim());
-const subject = request => {
+// Chỉ gọi sau khi chữ ký JWT đã được xác minh: lấy sub (owner như cũ), email (để nhận diện quản trị nền tảng / liên kết danh tính) và iat.
+const accessClaims = request => {
   const claim = JSON.parse(new TextDecoder().decode(decode(request.headers.get('Cf-Access-Jwt-Assertion').split('.')[1])));
-  return typeof claim.sub === 'string' && claim.sub.trim() && claim.sub.length <= 256 ? claim.sub : null;
+  const owner = typeof claim.sub === 'string' && claim.sub.trim() && claim.sub.length <= 256 ? claim.sub : null;
+  const email = normalizeEmail(claim.email);
+  return { owner, email, emailVerified: Boolean(email), authAt: Number.isFinite(claim.iat) ? claim.iat : 0 };
 };
+const readCookie = (request, name) => { const m = ('; ' + (request.headers.get('Cookie') || '')).match(new RegExp('; ' + name.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&') + '=([^;]*)')); return m ? m[1] : null; };
 const scopeFor = async owner => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(owner))), b => b.toString(16).padStart(2, '0')).join('');
 async function authenticate(request, env) {
   const token = request.headers.get('Cf-Access-Jwt-Assertion');
@@ -32,9 +39,22 @@ async function authenticate(request, env) {
 }
 // Danh tính: ưu tiên Cloudflare Access JWT (owner = sub như cũ), nếu không có thì dùng phiên đăng nhập của ShopPost.
 async function identify(request, env) {
-  if (request.headers.get('Cf-Access-Jwt-Assertion') && await authenticate(request, env)) return { owner: subject(request), via: 'access' };
+  if (request.headers.get('Cf-Access-Jwt-Assertion') && await authenticate(request, env)) return { via: 'access', ...accessClaims(request) };
   const session = await sessionFromRequest(request, env);
-  return session ? { owner: session.owner, via: 'session', provider: session.provider, name: session.name } : null;
+  if (!session) return null;
+  const email = session.provider === 'email' && session.owner.startsWith('email:') ? normalizeEmail(session.owner.slice(6)) : null;
+  return { owner: session.owner, via: 'session', provider: session.provider, name: session.name, email, emailVerified: Boolean(email), authAt: session.createdAt || 0 };
+}
+// Giao diện ứng dụng: nhúng scope người dùng và (nếu có) mã lời mời đang chờ chấp nhận.
+function appResponse(env, request, scope, invite = '', extra = {}) {
+  const meta = '<head><meta name="shopai-ai-endpoint" content="/ai"><meta name="shopai-user-scope" content="' + scope + '">' + (invite ? '<meta name="shoppost-invite" content="' + invite + '">' : '');
+  return new Response(request.method === 'HEAD' ? null : env.FRONTEND_HTML.replace('<head>', meta), { headers: {
+    'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
+    'Strict-Transport-Security': 'max-age=15552000; includeSubDomains', 'X-Frame-Options': 'DENY',
+    'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
+    'Content-Security-Policy': "frame-ancestors 'none'; base-uri 'self'; object-src 'none'", ...extra
+  } });
 }
 export default {
   async fetch(request, env) {
@@ -56,7 +76,22 @@ export default {
       if (!owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
       const expectedScope = request.headers.get('X-ShopAI-User-Scope');
       if (expectedScope && expectedScope !== await scopeFor(owner)) return json({ code: 'ACCOUNT_CHANGED', error: 'Tài khoản đã thay đổi. Tải lại trang trước khi truy cập bản nháp.' }, 403);
-      return drafts(request, env, owner, json);
+      if (!env.DB) return json({ error: 'Chưa gắn cơ sở dữ liệu bản nháp.' }, 503);
+      // Mọi yêu cầu bản nháp đều phải qua ngữ cảnh shop (header X-ShopPost-Shop hoặc shop mặc định) và kiểm tra tư cách thành viên.
+      let ctx;
+      try { ctx = await resolveShop(env, who, request); } catch { return json({ error: 'Không thể truy cập kho bản nháp; không xác nhận đã lưu.' }, 503); }
+      if (ctx.error) return json({ error: ctx.error, code: ctx.code }, ctx.status);
+      return drafts(request, env, owner, json, ctx);
+    }
+    if (path.startsWith('/api/')) {
+      if (origin && origin !== new URL(request.url).origin) return json({ error: 'Chỉ cho phép truy cập API từ cùng origin.' }, 403);
+      if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
+      const who = await identify(request, env);
+      if (!who) return json({ error: LOGIN_REQUIRED }, 401);
+      if (!who.owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
+      const expectedScope = request.headers.get('X-ShopAI-User-Scope');
+      if (expectedScope && expectedScope !== await scopeFor(who.owner)) return json({ code: 'ACCOUNT_CHANGED', error: 'Tài khoản đã thay đổi. Tải lại trang trước khi tiếp tục.' }, 403);
+      return handleApi(request, env, who, json);
     }
     if (path === '/session') {
       if (request.method !== 'GET') return json({ error: 'Chỉ hỗ trợ GET.' }, 405, { Allow: 'GET' });
@@ -65,25 +100,32 @@ export default {
       if (!who) return json({ error: LOGIN_REQUIRED }, 401);
       const owner = who.owner;
       if (!owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
-      return json({ userScope: await scopeFor(owner), auth: who.via, account: who.via === 'session' ? { provider: who.provider, name: who.name } : null, capabilities: { ai: true, drafts: Boolean(env.DB), publishing: false, scheduling: false, inbox: false }, version: env.CF_VERSION_METADATA?.id || null, release: env.RELEASE_SHA || null });
+      let shop = null, shopError = null;
+      if (env.DB) {
+        try { const ctx = await resolveShop(env, who, request); if (ctx.error) shopError = { code: ctx.code, error: ctx.error }; else shop = { id: ctx.shop.id, name: ctx.shop.name, role: ctx.membership.role, canPublish: ctx.membership.can_publish, permissions: ctx.permissions }; }
+        catch { shopError = { code: 'shop_unavailable', error: 'Không thể tải thông tin shop lúc này.' }; }
+      }
+      return json({ userScope: await scopeFor(owner), auth: who.via, account: who.via === 'session' ? { provider: who.provider, name: who.name } : null, admin: isPlatformAdmin(env, who), shop, shopError, capabilities: { ai: true, drafts: Boolean(env.DB), publishing: false, scheduling: false, inbox: false }, version: env.CF_VERSION_METADATA?.id || null, release: env.RELEASE_SHA || null });
     }
     if (path.startsWith('/auth/')) return handleAuth(request, env, { json, headers, accessUser: async () => Boolean(request.headers.get('Cf-Access-Jwt-Assertion')) && await authenticate(request, env) });
     // Giao diện và API cùng origin; cần Access JWT hợp lệ hoặc phiên đăng nhập, nếu không thì hiện trang đăng nhập.
-    if (path === '/' || path === '/index.html') {
+    const inviteMatch = INVITE_PATH.exec(path);
+    if (path === '/' || path === '/index.html' || inviteMatch) {
       if (request.method !== 'GET' && request.method !== 'HEAD') return json({ error: 'Chỉ hỗ trợ GET hoặc HEAD.' }, 405, { Allow: 'GET, HEAD' });
       if (!configured(env) || typeof env.FRONTEND_HTML !== 'string') return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
       const who = await identify(request, env);
-      if (!who) return loginResponse(env, request.method);
+      if (!who) {
+        const login = loginResponse(env, request.method);
+        // Chưa đăng nhập mà mở link mời: ghi nhớ mã mời trong cookie 1 giờ, sau khi đăng nhập ứng dụng sẽ hỏi chấp nhận.
+        if (inviteMatch) login.headers.append('Set-Cookie', `${INVITE_COOKIE}=${inviteMatch[1]}; Max-Age=3600; Path=/; HttpOnly; Secure; SameSite=Lax`);
+        return login;
+      }
       const owner = who.owner;
       if (!owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
       const scope = await scopeFor(owner);
-      return new Response(request.method === 'HEAD' ? null : env.FRONTEND_HTML.replace('<head>', '<head><meta name="shopai-ai-endpoint" content="/ai"><meta name="shopai-user-scope" content="' + scope + '">'), { headers: {
-        'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
-        'Strict-Transport-Security': 'max-age=15552000; includeSubDomains', 'X-Frame-Options': 'DENY',
-        'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
-        'Content-Security-Policy': "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
-      } });
+      const remembered = readCookie(request, INVITE_COOKIE);
+      const invite = inviteMatch ? inviteMatch[1] : (remembered && /^[A-Za-z0-9_-]{43}$/.test(remembered) ? remembered : '');
+      return appResponse(env, request, scope, invite, remembered ? { 'Set-Cookie': `${INVITE_COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax` } : {});
     }
     if (path !== '/ai' && path !== '/health') return json({ error: 'Không tìm thấy endpoint.' }, 404);
     if (request.method === 'OPTIONS') {
@@ -103,6 +145,13 @@ export default {
     if (!who) return json({ error: LOGIN_REQUIRED }, 401);
     const owner = who.owner;
     if (!owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
+    if (env.DB) {
+      // AI chỉ dùng được khi có quyền ai.use trong shop hiện hành.
+      let ctx;
+      try { ctx = await resolveShop(env, who, request); } catch { return json({ error: 'Không thể kiểm tra quyền trong shop lúc này.' }, 503); }
+      if (ctx.error) return json({ error: ctx.error, code: ctx.code }, ctx.status);
+      if (!ctx.can('ai.use')) return json({ error: 'Vai trò của bạn trong shop này không được dùng AI.', code: 'forbidden' }, 403);
+    }
     try {
       const key = await scopeFor(owner);
       const limit = await env.AI_RATE_LIMITER.limit({ key });

@@ -672,4 +672,6 @@ test('Thương hiệu ShopPost: giao diện hiển thị ShopPost, giữ định
   // CSP trang đăng nhập không thêm nguồn ngoài cho TikTok/SMS (TikTok điều hướng toàn trang, SMS gửi từ máy chủ).
   const csp = (await get(env({ TIKTOK_CLIENT_KEY: TIKTOK_KEY, TIKTOK_CLIENT_SECRET: TIKTOK_SECRET, ...ESMS }), '/')).headers.get('Content-Security-Policy');
   assert.doesNotMatch(csp, /tiktok|esms|twilio/i);
+  // Mobile: body chỉ đặt min-height (không cố định height) để nội dung cao hơn màn hình không bị đẩy mất phần đầu.
+  assert.match(LOGIN_FILE, /body\{min-height:100%;/); assert.doesNotMatch(LOGIN_FILE, /html,body\{height:100%\}/);
 });

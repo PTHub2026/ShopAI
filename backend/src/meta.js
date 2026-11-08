@@ -121,6 +121,10 @@ export async function handleMeta(req,env,who,json){
   const longResp=await fetch(longUrl,{redirect:'manual',signal:AbortSignal.timeout(12000)});
   const long=await longResp.json().catch(()=>({}));
   if(!longResp.ok||typeof long.access_token!=='string')throw Error('META_LONG_TOKEN_FAILED');
+  const permissions=await graphRequest(env,'me/permissions',long.access_token,{limit:'100'});
+  const granted=new Set((Array.isArray(permissions.data)?permissions.data:[]).filter(p=>p.status==='granted').map(p=>p.permission));
+  if(!granted.has('pages_show_list')||!granted.has('pages_manage_posts'))throw Error('META_PAGE_SCOPE_DENIED');
+  const canUseInstagram=granted.has('instagram_basic')&&granted.has('instagram_content_publish');
   pages=await graphRequest(env,'me/accounts',long.access_token,{fields:'id,name,access_token,instagram_business_account{id,username}',limit:'100'});
   const items=Array.isArray(pages.data)?[...pages.data]:[];
   const seenCursors=new Set();
@@ -133,7 +137,7 @@ export async function handleMeta(req,env,who,json){
    if(!Array.isArray(pages.data))throw Error('META_PAGE_LIST_INVALID');
    items.push(...pages.data);
   }
-  pages={data:items};
+  pages={data:items,canUseInstagram};
  }catch{return error(json,'meta_authorization_failed',502);}
  const items=pages.data;
  let count=0;
@@ -141,7 +145,7 @@ export async function handleMeta(req,env,who,json){
   if(!/^\d+$/.test(String(page.id||''))||typeof page.access_token!=='string')continue;
   await saveAccount(db,env,who,ctx.shop.id,'facebook',page,page.access_token);count++;
   const ig=page.instagram_business_account;
-  if(ig&&/^\d+$/.test(String(ig.id||''))){await saveAccount(db,env,who,ctx.shop.id,'instagram',{id:ig.id,name:ig.username||'Instagram'},page.access_token);count++;}
+  if(pages.canUseInstagram&&ig&&/^\d+$/.test(String(ig.id||''))){await saveAccount(db,env,who,ctx.shop.id,'instagram',{id:ig.id,name:ig.username||'Instagram'},page.access_token);count++;}
  }
  await audit(db,{shopId:ctx.shop.id,actor:who.owner,action:'social.meta_oauth_complete',detail:{accountCount:count}});
  const redirect=new URL('/',url.origin);redirect.searchParams.set('meta_connected',String(count));redirect.hash='accounts';

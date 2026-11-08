@@ -147,6 +147,15 @@ export function otpEmail(code) {
   };
 }
 
+// Email mời tham gia shop (link dùng một lần, hết hạn sau 7 ngày).
+export function inviteEmail({ shopName, roleLabel, link, days = 7 }) {
+  return {
+    subject: `Lời mời tham gia shop ${shopName} trên ShopPost`,
+    text: `Bạn được mời tham gia shop "${shopName}" trên ShopPost với vai trò ${roleLabel}.\n\nMở liên kết sau để chấp nhận (cần đăng nhập ShopPost bằng email này hoặc tài khoản của bạn):\n${link}\n\nLiên kết chỉ dùng được một lần và hết hạn sau ${days} ngày. Nếu bạn không mong đợi lời mời này, hãy bỏ qua email.\n\nShopPost – https://shoppost.net`,
+    html: emailLayout([`Bạn được mời tham gia shop "${shopName}" trên ShopPost với vai trò ${roleLabel}.`, `Mở liên kết sau để chấp nhận lời mời: ${link}`, `Liên kết chỉ dùng được một lần và hết hạn sau ${days} ngày. Nếu bạn không mong đợi lời mời này, hãy bỏ qua email.`])
+  };
+}
+
 export function providers(env) {
   const db = Boolean(env.DB);
   const facebookId = clean(env.FACEBOOK_APP_ID), zaloId = clean(env.ZALO_APP_ID);
@@ -180,13 +189,13 @@ export async function sessionFromRequest(request, env) {
   try {
     await ensureSchema(env.DB);
     const tokenHash = await hashHex(token);
-    const row = await env.DB.prepare('SELECT owner, provider, display_name, expires_at FROM auth_sessions WHERE token_hash = ?').bind(tokenHash).first();
+    const row = await env.DB.prepare('SELECT owner, provider, display_name, created_at, expires_at FROM auth_sessions WHERE token_hash = ?').bind(tokenHash).first();
     if (!row) return null;
     if (!(Number(row.expires_at) > now())) {
       await env.DB.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').bind(tokenHash).run();
       return null;
     }
-    return { owner: row.owner, provider: row.provider, name: row.display_name || '' };
+    return { owner: row.owner, provider: row.provider, name: row.display_name || '', createdAt: Number(row.created_at) || 0 };
   } catch { return null; }
 }
 
@@ -214,7 +223,7 @@ export function loginResponse(env, method) {
   } });
 }
 
-async function readJson(request, max = 8192) {
+export async function readJson(request, max = 8192) {
   if ((request.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() !== 'application/json') throw new Error('TYPE');
   if (!request.body) throw new Error('EMPTY');
   const reader = request.body.getReader();

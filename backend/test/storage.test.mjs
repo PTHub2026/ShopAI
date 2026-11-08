@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { drafts } from '../src/drafts.js';
+import { can } from '../src/permissions.js';
 
 // Real SQL/schema; adapt only the D1 asynchronous result envelope.
 function database() {
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec(readFileSync(new URL('../migrations/0001_drafts.sql', import.meta.url), 'utf8'));
+  sqlite.exec(readFileSync(new URL('../migrations/0003_shops_roles.sql', import.meta.url), 'utf8'));
   return { sqlite, prepare(sql) {
     const statement = sqlite.prepare(sql);
     return { bind(...params) { return {
@@ -19,10 +21,12 @@ function database() {
 }
 const draft = (id='draft-a', content='Nội dung người dùng') => ({ id, type:'post', content, channels:[], status:'draft', media:[], assets:[], custom:{} });
 const json = (data, status=200, headers={}) => Response.json(data, { status, headers });
-function call(DB, {owner='alice', id='draft-a', method='PUT', body={draft:draft(id),revision:0}, query='', headers={}, raw, limiter}={}) {
+// Mỗi owner là chủ shop riêng (s_<owner>) — cách ly dữ liệu giờ theo shop hiện hành do worker giải quyết.
+const ctxFor = (owner, role='owner') => ({ shop:{ id:'s_'+owner.padEnd(8,'x') }, membership:{ role, can_publish: role==='owner' }, can: action => can({ role, can_publish: role==='owner' }, action) });
+function call(DB, {owner='alice', id='draft-a', method='PUT', body={draft:draft(id),revision:0}, query='', headers={}, raw, limiter, role}={}) {
   const url='https://app.example/storage/drafts'+(id ? '/'+id : '')+query;
   const sendBody = method!=='GET' && method!=='DELETE';
-  return drafts(new Request(url, { method, headers:{Origin:'https://app.example','Content-Type':'application/json',...headers}, ...(sendBody?{body:raw ?? JSON.stringify(body)}:{}) }), { DB, AI_RATE_LIMITER: limiter || {limit:async()=>({success:true})} }, owner, json);
+  return drafts(new Request(url, { method, headers:{Origin:'https://app.example','Content-Type':'application/json',...headers}, ...(sendBody?{body:raw ?? JSON.stringify(body)}:{}) }), { DB, AI_RATE_LIMITER: limiter || {limit:async()=>({success:true})} }, owner, json, ctxFor(owner, role));
 }
 test('Draft revisions prevent overwrites and isolate owners', async()=>{
   const db=database();
@@ -42,9 +46,9 @@ test('Draft revisions prevent overwrites and isolate owners', async()=>{
 test('Pagination reaches every draft, including identical timestamps',async()=>{
   const db=database();
   try {
-    const insert=db.sqlite.prepare('INSERT INTO drafts VALUES (?,?,?,?,?)');
-    for(const id of ['draft-a','draft-b','draft-c']) insert.run('alice',id,JSON.stringify(draft(id)),1,1000);
-    insert.run('bob','private',JSON.stringify(draft('private')),1,2000);
+    const insert=db.sqlite.prepare('INSERT INTO drafts (owner,id,payload,revision,updated_at,shop_id) VALUES (?,?,?,?,?,?)');
+    for(const id of ['draft-a','draft-b','draft-c']) insert.run('alice',id,JSON.stringify(draft(id)),1,1000,ctxFor('alice').shop.id);
+    insert.run('bob','private',JSON.stringify(draft('private')),1,2000,ctxFor('bob').shop.id);
     let cursor='',ids=[];
     do {
       const response=await call(db,{id:null,method:'GET',query:'?limit=2'+(cursor?'&cursor='+encodeURIComponent(cursor):'')});

@@ -48,19 +48,27 @@ test('Meta OAuth: one-use state, same actor, scoped accounts, encrypted Page tok
    if(u.searchParams.has('code'))return Response.json({access_token:'short-lived'});
    if(u.searchParams.get('grant_type')==='fb_exchange_token')return Response.json({access_token:'long-lived'});
   }
-  if(u.pathname.endsWith('/me/accounts'))return Response.json({data:[{id:'111111',name:'Test Facebook Page',access_token:'PAGE_SECRET_DO_NOT_EXPOSE',instagram_business_account:{id:'222222',username:'shop_ig'}}]});
+  if(u.pathname.endsWith('/me/accounts')){
+   assert.equal(options.headers.Authorization,'Bearer long-lived');
+   assert.equal(u.searchParams.has('access_token'),false);
+   if(u.searchParams.has('after')){
+    assert.equal(u.searchParams.get('after'),'page_two');
+    return Response.json({data:[{id:'333333',name:'Other Page',access_token:'PAGE_SECRET_2'}]});
+   }
+   return Response.json({data:[{id:'111111',name:'Test Facebook Page',access_token:'PAGE_SECRET_DO_NOT_EXPOSE',instagram_business_account:{id:'222222',username:'shop_ig'}}],paging:{next:'https://graph.facebook.com/v26.0/me/accounts?after=page_two',cursors:{after:'page_two'}}});
+  }
   throw Error('Unexpected Graph call');
  };
  try{
   const result=await f.req(owner,cb);
-  assert.equal(result.status,303);assert.ok(result.headers.get('location').includes('meta_connected=2'));
+  assert.equal(result.status,303);assert.ok(result.headers.get('location').includes('meta_connected=3'));
   const listed=await f.req(owner,'/api/social/accounts');assert.equal(listed.status,200);
   const accounts=(await listed.json()).accounts;
-  assert.deepEqual(accounts.map(x=>x.provider).sort(),['facebook','instagram']);
+  assert.deepEqual(accounts.map(x=>x.provider).sort(),['facebook','facebook','instagram']);
   assert.equal(JSON.stringify(accounts).includes('PAGE_SECRET'),false);
   const row=f.sqlite.prepare("SELECT token_ciphertext, token_iv FROM social_accounts WHERE provider='facebook'").get();
   assert.notEqual(row.token_ciphertext,'PAGE_SECRET_DO_NOT_EXPOSE');assert.ok(row.token_iv.length>10);
   assert.equal((await f.req(owner,cb)).status,403,'callback replay rejected');
-  assert.deepEqual(calls.map(p=>p.split('/').at(-1)),['access_token','access_token','accounts']);
+  assert.deepEqual(calls.map(p=>p.split('/').at(-1)),['access_token','access_token','accounts','accounts']);
  }finally{globalThis.fetch=previous;f.sqlite.close();}
 });

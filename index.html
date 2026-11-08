@@ -268,16 +268,28 @@ async function readCloudDrafts(){
  }catch(e){cloudDraftStatus(e.message||'Không đọc được đám mây; dữ liệu cục bộ giữ nguyên.')}finally{CLOUD_DRAFTS.busy=false}
 }
 function cloudBackupMedia(){try{const d=JSON.parse(LS.getItem(CLOUD_DRAFTS.backupKey));return Array.isArray(d?.media)?d.media:[]}catch{return []}}
-function backupBeforeCloud(){
+async function backupBeforeCloud(){
  if(LS._mem)throw new Error('Chưa có lưu trữ bền vững để sao lưu nháp hiện tại; không thay thế.');
- const j=JSON.stringify({...D,media:D.media.map(({name,type,size,thumb,assetId,fid})=>({name,type,size,thumb,assetId,fid}))});LS.setItem(CLOUD_DRAFTS.backupKey,j);if(LS.getItem(CLOUD_DRAFTS.backupKey)!==j)throw new Error('Không sao lưu được nháp hiện tại; không thay thế.');
+ const media=[];
+ for(const m of D.media){
+  if(!IDB.db)throw new Error('Chưa có kho bền vững để sao lưu tệp gốc; không thay thế.');
+  const fid=m.fid||uid(),key='d_'+fid;let file=m.file;
+  if(!file)file=await IDB.get('files',key);
+  if(!file&&m.assetId)file=await IDB.get('files',m.assetId);
+  if(!file&&m.url)try{const r=await fetch(m.url);if(r.ok)file=await r.blob()}catch{}
+  if(!(file instanceof Blob)||await IDB.put('files',key,file)!==key)throw new Error('Không sao lưu được tệp gốc; không thay thế.');
+  const saved=await IDB.get('files',key);
+  if(!(saved instanceof Blob)||saved.size!==file.size||saved.type!==file.type)throw new Error('Không xác minh được tệp gốc đã sao lưu; không thay thế.');
+  media.push({name:m.name,type:m.type,size:m.size,thumb:m.thumb,assetId:m.assetId,fid});
+ }
+ const j=JSON.stringify({...D,media});LS.setItem(CLOUD_DRAFTS.backupKey,j);if(LS.getItem(CLOUD_DRAFTS.backupKey)!==j)throw new Error('Không sao lưu được nháp hiện tại; không thay thế.');
 }
 function openCloudDraft(i){const r=CLOUD_DRAFTS.rows[i];if(!validCloudDraftRow(r))return;
- ask('Mở bản đám mây trong trình soạn? Nháp hiện tại sẽ được sao lưu cục bộ; có thể khôi phục bằng nút Khôi phục nháp trước đó.',()=>{
- try{backupBeforeCloud();D={...newDraft(),content:r.draft.content,channels:[...r.draft.channels]};CLOUD_DRAFTS.refs.set(D,{id:r.draft.id,revision:r.revision});saveDraft();go('create');cloudDraftStatus('Đã đọc phiên bản '+r.revision+'. Chỉ lưu đám mây khi bạn bấm Lưu nháp đám mây.')}catch(e){cloudDraftStatus(e.message)}
+ ask('Mở bản đám mây trong trình soạn? Nháp hiện tại sẽ được sao lưu cục bộ; có thể khôi phục bằng nút Khôi phục nháp trước đó.',async()=>{
+ try{await backupBeforeCloud();D={...newDraft(),content:r.draft.content,channels:[...r.draft.channels]};CLOUD_DRAFTS.refs.set(D,{id:r.draft.id,revision:r.revision});saveDraft();go('create');cloudDraftStatus('Đã đọc phiên bản '+r.revision+'. Chỉ lưu đám mây khi bạn bấm Lưu nháp đám mây.')}catch(e){cloudDraftStatus(e.message)}
  },{ok:'Mở bản đám mây'})
 }
-function restoreBeforeCloud(){if(!LS.getItem(CLOUD_DRAFTS.backupKey))return cloudDraftStatus('Chưa có bản sao lưu.');ask('Khôi phục nháp trước đó? Nháp hiện tại sẽ đổi chỗ vào bản sao lưu, không ghi đè đám mây.',()=>{try{const previous=loadDraft(CLOUD_DRAFTS.backupKey);backupBeforeCloud();D=previous;saveDraft();go('create');loadFiles().then(()=>{if(route==='create')V.create()});cloudDraftStatus('Đã khôi phục nháp cục bộ; chưa lưu đám mây.')}catch(e){cloudDraftStatus(e.message)}},{ok:'Khôi phục'})}
+function restoreBeforeCloud(){if(!LS.getItem(CLOUD_DRAFTS.backupKey))return cloudDraftStatus('Chưa có bản sao lưu.');ask('Khôi phục nháp trước đó? Nháp hiện tại sẽ đổi chỗ vào bản sao lưu, không ghi đè đám mây.',async()=>{try{const previous=loadDraft(CLOUD_DRAFTS.backupKey);await backupBeforeCloud();D=previous;saveDraft();go('create');loadFiles().then(()=>{if(route==='create')V.create()});cloudDraftStatus('Đã khôi phục nháp cục bộ; chưa lưu đám mây.')}catch(e){cloudDraftStatus(e.message)}},{ok:'Khôi phục'})}
 
 /* ================= CREATE POST ================= */
 const DKEY='pdk_draft_v1';

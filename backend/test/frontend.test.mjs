@@ -12,22 +12,6 @@ function runtime(fetchImpl, qa=false) {
   context.api.local.reply=()=> 'Mẫu offline';
   return {context,notices};
 }
-function cloudDraftRuntime(fetchImpl, draft={content:'Bản nháp',media:[],channels:['facebook'],custom:{},assets:[],textAssets:[]}) {
-  const values=new Map(),notices=[];
-  const LS={_mem:false,getItem:key=>values.get(key)??null,setItem:(key,value)=>values.set(key,String(value))};
-  const context=vm.createContext({
-    URL,AbortSignal,Response,TextEncoder,crypto:{randomUUID:()=> 'draft-id'},
-    location:{protocol:'https:',href:'https://app.example/',origin:'https://app.example'},
-    window:{QA_RUNNING:false},document:{querySelector:()=>({content:'/storage/drafts'})},
-    LS,D:draft,newDraft:()=>({content:'',media:[],channels:[],custom:{},assets:[],textAssets:[]}),
-    loadDraft:key=>{try{return {...context.newDraft(),...JSON.parse(LS.getItem(key)),media:[]}}catch{return context.newDraft()}},
-    saveDraft:()=>{},ask:(message,yes)=>yes(),go:()=>{},loadFiles:async()=>{},route:'create',V:{create:()=>{}},
-    $:()=>null,toast:message=>notices.push(message),fetch:fetchImpl
-  });
-  const start=html.indexOf('const CLOUD_DRAFTS='),end=html.indexOf('/* ================= CREATE POST ================= */',start);
-  vm.runInContext(html.slice(start,end)+';globalThis.cloudDraftTests={saveCloudDraft,openCloudDraft,restoreBeforeCloud,CLOUD_DRAFTS};',context);
-  return {context,LS,values,notices,draft};
-}
 test('Lỗi AI không được biến thành mẫu nội bộ thành công',async()=>{
   for(const response of [new Response('{}',{status:502}),new Response('<html>Login</html>',{headers:{'content-type':'text/html'}}),new Response('{"text":" "}',{headers:{'content-type':'application/json'}})]){
     const {context}=runtime(async()=>response);
@@ -56,48 +40,60 @@ test('Kết quả không còn tồn tại không được phá bản nháp',()=>
   vm.runInContext(html.slice(html.indexOf('function useGen('),html.indexOf('function openGen(')),context);
   context.useGen(0);assert.equal(context.D.content,'Bản nháp cần giữ');
 });
-test('Lưu nháp đám mây thành công tăng revision',async()=>{
-  const revisions=[];
-  const {context,draft}=cloudDraftRuntime(async(url,options)=>{
-    const request=JSON.parse(options.body);revisions.push(request.revision);
-    return new Response(JSON.stringify({draft:request.draft,revision:request.revision+1}),{headers:{'content-type':'application/json'}});
-  });
-  await context.cloudDraftTests.saveCloudDraft();
-  await context.cloudDraftTests.saveCloudDraft();
-  assert.deepEqual(revisions,[0,1]);
-  assert.equal(context.cloudDraftTests.CLOUD_DRAFTS.refs.get(draft).revision,2);
+function cloudRuntime({fetchImpl=async()=>{throw Error('Unexpected request')},media=[],idb=true,failPut=false,failBackupWrite=false,failBackupReadback=false,backup=null}={}){
+  const files=new Map(),stored=new Map(),draft={content:'Bản nháp hiện tại',channels:[],media,custom:{},textAssets:[]};
+  let pending;
+  const LS={_mem:false,getItem:k=>stored.get(k)??null,setItem:(k,v)=>{if(k==='pdk_draft_before_cloud_v1'&&failBackupWrite)throw Error('Storage unavailable');stored.set(k,k==='pdk_draft_before_cloud_v1'&&failBackupReadback?'{}':v)}};
+  const IDB={db:idb?{}:null,get:async(s,k)=>files.get(k)||null,put:async(s,k,v)=>{if(failPut)return null;files.set(k,v);return k}};
+  if(backup)stored.set('pdk_draft_before_cloud_v1',JSON.stringify(backup));
+  const context=vm.createContext({URL,AbortSignal,Blob,Response,TextEncoder,JSON,WeakMap,LS,IDB,D:draft,window:{QA_RUNNING:false},location:{protocol:'https:',origin:'https://app.example'},document:{querySelector:()=>({content:'/storage/drafts'})},crypto:{randomUUID:()=>'new-cloud-id'},fetch:fetchImpl,toast:()=>{},$:()=>null,ask:(message,yes)=>{pending=Promise.resolve().then(yes)},newDraft:()=>({content:'',channels:[],media:[],custom:{},textAssets:[]}),saveDraft:()=>{},go:()=>{},loadFiles:async()=>{},loadDraft:()=>({content:'Bản sao lưu',channels:[],media:[],custom:{},textAssets:[]}),uid:()=>'new-media-id'});
+  const start=html.indexOf('const CLOUD_DRAFTS='),end=html.indexOf('/* ================= CREATE POST ================= */');
+  vm.runInContext(html.slice(start,end)+';globalThis.hooks={CLOUD_DRAFTS,saveCloudDraft,openCloudDraft,restoreBeforeCloud,getDraft:()=>D,getRef:d=>CLOUD_DRAFTS.refs.get(d)};',context);
+  return {context,files,stored,get pending(){return pending}};
+}
+const cloudRow=(id='cloud-id',revision=1)=>({draft:{id,type:'post',content:'Nội dung đám mây',channels:[],status:'draft',media:[],assets:[],custom:{}},revision});
+function cloudResponse(row){return new Response(JSON.stringify(row),{headers:{'content-type':'application/json'}})}
+function cloudSuccess(url,options){const body=JSON.parse(options.body);return cloudResponse({draft:body.draft,revision:body.revision+1})}
+test('Lưu đám mây chỉ tăng revision sau phản hồi khớp',async()=>{
+  const {context}=cloudRuntime({fetchImpl:async(...args)=>cloudSuccess(...args)});
+  await context.hooks.saveCloudDraft();
+  assert.deepEqual({...context.hooks.getRef(context.hooks.getDraft())},{id:'new-cloud-id',revision:1});
 });
-test('Lỗi PUT giữ nguyên ID và revision của nháp đám mây',async()=>{
-  for(const failure of ['conflict','timeout','mismatch']){
-    const fetchImpl=async(url,options)=>{
-      if(failure==='conflict')return new Response('{}',{status:409,headers:{'content-type':'application/json'}});
-      if(failure==='timeout')throw Object.assign(new Error('timeout'),{name:'TimeoutError'});
-      const request=JSON.parse(options.body);
-      return new Response(JSON.stringify({draft:request.draft,revision:request.revision+2}),{headers:{'content-type':'application/json'}});
-    };
-    const {context,draft}=cloudDraftRuntime(fetchImpl);
-    const ref={id:'existing-draft',revision:4};
-    context.cloudDraftTests.CLOUD_DRAFTS.refs.set(draft,ref);
-    await context.cloudDraftTests.saveCloudDraft();
-    assert.strictEqual(context.cloudDraftTests.CLOUD_DRAFTS.refs.get(draft),ref);
-    assert.equal(ref.id,'existing-draft');
-    assert.equal(ref.revision,4);
+test('409, timeout và phản hồi sai không đổi ID hoặc revision đã xác nhận',async()=>{
+  for(const failed of [
+    async()=>new Response('{}',{status:409}),
+    async()=>{throw Error('timeout')},
+    async()=>cloudResponse(cloudRow('cloud-id',9))
+  ]){
+    let calls=0;
+    const {context}=cloudRuntime({fetchImpl:async(...args)=>++calls===1?cloudSuccess(...args):failed()});
+    await context.hooks.saveCloudDraft();
+    const draft=context.hooks.getDraft(),before={...context.hooks.getRef(draft)};
+    await context.hooks.saveCloudDraft();
+    assert.deepEqual({...context.hooks.getRef(draft)},{...before});
   }
 });
-test('Backup lỗi ngăn mở hoặc khôi phục thay nháp hiện tại',()=>{
-  for(const flow of ['open','restore']){
-    for(const failure of ['write','readback']){
-      const {context,LS,values,draft}=cloudDraftRuntime(async()=>{throw new Error('Unexpected network')});
-      const backupKey=context.cloudDraftTests.CLOUD_DRAFTS.backupKey;
-      values.set(backupKey,JSON.stringify({content:'Bản trước đó',media:[],channels:[]}));
-      if(failure==='write')LS.setItem=()=>{throw new Error('storage unavailable')};
-      else LS.setItem=(key,value)=>values.set(key,key===backupKey?'{}':String(value));
-      if(flow==='open'){
-        context.cloudDraftTests.CLOUD_DRAFTS.rows=[{draft:{id:'cloud-draft',type:'post',content:'Bản đám mây',channels:[],status:'draft',media:[],assets:[],custom:{}},revision:1}];
-        context.cloudDraftTests.openCloudDraft(0);
-      }else context.cloudDraftTests.restoreBeforeCloud();
-      assert.strictEqual(context.D,draft);
-      assert.equal(context.D.content,'Bản nháp');
-    }
+test('Mở và khôi phục đều chặn thay thế nếu sao lưu media thất bại',async()=>{
+  const media=[{name:'original.mp4',type:'video/mp4',size:3,fid:'original',file:new Blob(['vid'],{type:'video/mp4'})}];
+  for(const options of [{idb:false},{idb:true,failPut:true},{idb:true,failBackupWrite:true},{idb:true,failBackupReadback:true}]){
+    const runtime=cloudRuntime({...options,media,backup:{content:'Bản trước',channels:[],media:[],custom:{},textAssets:[]}}),{context}=runtime;
+    const current=context.hooks.getDraft();
+    context.hooks.CLOUD_DRAFTS.rows=[cloudRow()];
+    context.hooks.openCloudDraft(0);
+    await runtime.pending;
+    assert.equal(context.hooks.getDraft(),current);
+    context.hooks.restoreBeforeCloud();
+    await runtime.pending;
+    assert.equal(context.hooks.getDraft(),current);
   }
+});
+test('Mở bản đám mây sao lưu và xác minh media gốc trước khi thay thế',async()=>{
+  const file=new Blob(['vid'],{type:'video/mp4'});
+  const runtime=cloudRuntime({media:[{name:'original.mp4',type:'video/mp4',size:3,fid:'original',file}]}),{context,files,stored}=runtime;
+  context.hooks.CLOUD_DRAFTS.rows=[cloudRow()];
+  context.hooks.openCloudDraft(0);
+  await runtime.pending;
+  assert.equal(context.hooks.getDraft().content,'Nội dung đám mây');
+  assert.equal(files.get('d_original').size,3);
+  assert.equal(JSON.parse(stored.get('pdk_draft_before_cloud_v1')).media[0].fid,'original');
 });

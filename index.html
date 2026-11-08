@@ -584,7 +584,57 @@ function delScript(id){ask('Xóa kịch bản này?',()=>{S.scripts=S.scripts.fi
 async function aiScript(){try{const kw=$('#s_kw').value||$('#s_name').value;$('#s_rep').value=await AI.call('reply',{text:kw,name:'{ten}'})}catch(e){toast('Tác vụ AI chưa hoàn tất. Vui lòng thử lại.')}}
 
 /* ================= ACCOUNTS / HASHTAGS / SETTINGS ================= */
-V.accounts=()=>{const con=S.channels.filter(c=>c.connected),av=S.channels.filter(c=>!c.connected);$('#view').innerHTML=`<div class="card small" style="background:#fffbeb;border-color:#fde68a">${managedApp()?'Chưa có kết nối kênh thật. Các thao tác kết nối và gửi lên nền tảng đang bị khóa.':'ℹ️ Bản demo: việc kết nối kênh, đăng bài và tin nhắn đến đang được <b>mô phỏng</b> trong trình duyệt.'} Bản production cần backend OAuth với Meta Graph API (Facebook/Instagram/Threads), TikTok Content Posting API, YouTube Data API, Zalo OA API, Telegram Bot API, X API, LinkedIn API.</div>
+// Telegram live channel management is separate from ShopPost login OAuth.
+async function socialRequest(path,options={}){
+ const headers={...shopHeaders(),...(options.body?{'Content-Type':'application/json'}:{}),...(options.headers||{})};
+ const r=await fetch('/api/social/'+path,{credentials:'same-origin',...options,headers});
+ const data=await r.json().catch(()=>({}));
+ if(!r.ok)throw Error(data.error||data.code||'Không thể thực hiện thao tác');
+ return data;
+}
+async function socialAccountsLive(){
+ const root=$('#view');
+ root.innerHTML='<div class="card"><h3>Kênh Telegram</h3><p>Đang tải kết nối từ máy chủ...</p></div>';
+ try {
+  const [accounts,jobs]=await Promise.all([socialRequest('accounts'),socialRequest('jobs')]);
+  if(location.hash!=='#accounts')return;
+  root.innerHTML=`<div class="card"><h3>Kết nối Telegram Bot thật</h3><p class="small muted">Bot phải được cấp quyền đăng trong nhóm hoặc kênh. Token chỉ gửi tới máy chủ và không hiển thị lại.</p>
+  <label>Telegram Bot Token</label><input id="tg_token" type="password" autocomplete="off" placeholder="Bot Token từ BotFather">
+  <label>Chat ID hoặc @channelusername</label><input id="tg_chat" placeholder="@kenh_cua_ban">
+  <div class="row" style="margin-top:10px"><button class="btn pri" onclick="socialConnectTelegram()">Kết nối Telegram</button><button class="btn" onclick="socialAccountsLive()">Làm mới</button></div></div>
+  <div class="card"><h3>Kênh đã kết nối (${accounts.accounts.length})</h3>
+  ${accounts.accounts.map(a=>`<div class="ch"><div style="flex:1"><b>${esc(a.name)}</b><div class="small muted">${esc(a.targetId)} · ${esc(a.status)}</div></div>${a.status==='active'?`<button class="btn sm danger" onclick="socialDisconnectTelegram('${escAttr(a.id)}')">Ngắt kết nối</button>`:''}</div>`).join('')||'<p>Chưa có kênh Telegram.</p>'}</div>
+  <div class="card"><h3>Đăng bài Telegram</h3><label>Kênh</label><select id="tg_account">${accounts.accounts.filter(a=>a.status==='active').map(a=>`<option value="${escAttr(a.id)}">${esc(a.name)}</option>`).join('')}</select>
+  <label>Nội dung</label><textarea id="tg_text" placeholder="Nội dung đăng thử nghiệm"></textarea>
+  <label>Ảnh HTTPS công khai (không bắt buộc)</label><input id="tg_photo" placeholder="https://example.com/image.jpg">
+  <button class="btn pri" onclick="socialPublishTelegram()">Đăng lên Telegram</button>
+  <p class="small muted">Chỉ đăng sau khi bạn nhấn nút. Không gửi nội dung mẫu tự động.</p></div>
+  <div class="card"><h3>Lịch sử 50 bài gần nhất</h3>${jobs.jobs.map(j=>`<div class="ch"><div style="flex:1"><b>${esc(j.kind)}</b><div class="small muted">${esc(j.status)} · ${esc(j.id)} · ${j.attempts} lần</div></div>${j.status==='retryable'?`<button class="btn sm" onclick="socialRetryTelegram('${escAttr(j.id)}')">Thử lại</button>`:''}</div>`).join('')||'<p>Chưa có bài đăng.</p>'}</div>
+  <div class="card small muted">Facebook, Instagram, TikTok, Zalo và các mạng khác chưa kết nối API thật; không hiển thị trạng thái mô phỏng như đã kết nối.</div>`;
+ }catch(e){if(location.hash==='#accounts')root.innerHTML='<div class="card"><h3>Không tải được kênh thật</h3><p>'+esc(e.message)+'</p><button class="btn" onclick="socialAccountsLive()">Thử lại</button></div>';}
+}
+async function socialConnectTelegram(){
+ const token=$('#tg_token').value.trim(),chatId=$('#tg_chat').value.trim();
+ try{await socialRequest('accounts',{method:'POST',body:JSON.stringify({token,chatId})});toast('Đã xác minh và kết nối Telegram');socialAccountsLive();}
+ catch(e){toast('Không kết nối được: '+e.message);}
+}
+async function socialDisconnectTelegram(id){
+ if(!confirm('Ngắt kết nối và xóa token đã lưu?'))return;
+ try{await socialRequest('accounts/'+encodeURIComponent(id),{method:'DELETE'});toast('Đã ngắt kết nối');socialAccountsLive();}catch(e){toast(e.message);}
+}
+async function socialPublishTelegram(){
+ const accountId=$('#tg_account')?.value,text=$('#tg_text')?.value||'',photoUrl=$('#tg_photo')?.value.trim()||'';
+ if(!accountId||(!text.trim()&&!photoUrl))return toast('Chọn kênh và nhập nội dung');
+ if(!confirm('Xác nhận đăng bài thật lên Telegram?'))return;
+ const button=document.querySelector('#view button[onclick="socialPublishTelegram()"]');if(button)button.disabled=true;
+ // Keep the same key for a retry within this page; accidental clicks will not duplicate.
+ const key=window.socialPendingKey||(window.socialPendingKey=crypto.randomUUID());
+ try {const result=await socialRequest('jobs',{method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify({accountId,kind:photoUrl?'photo':'text',text,photoUrl})});window.socialPendingKey=null;toast('Telegram đã xác nhận gửi bài '+result.job.remoteMessageId);socialAccountsLive();}
+ catch(e){toast('Chưa xác nhận đăng thành công: '+e.message+' — kiểm tra lịch sử trước khi thử lại');if(button)button.disabled=false;}
+}
+async function socialRetryTelegram(id){try{await socialRequest('jobs/'+encodeURIComponent(id)+'/retry',{method:'POST'});toast('Đã gửi lại');socialAccountsLive();}catch(e){toast(e.message);socialAccountsLive();}}
+
+V.accounts=()=>{if(managedApp()){socialAccountsLive();return;}const con=S.channels.filter(c=>c.connected),av=S.channels.filter(c=>!c.connected);$('#view').innerHTML=`<div class="card small" style="background:#fffbeb;border-color:#fde68a">${managedApp()?'Chưa có kết nối kênh thật. Các thao tác kết nối và gửi lên nền tảng đang bị khóa.':'ℹ️ Bản demo: việc kết nối kênh, đăng bài và tin nhắn đến đang được <b>mô phỏng</b> trong trình duyệt.'} Bản production cần backend OAuth với Meta Graph API (Facebook/Instagram/Threads), TikTok Content Posting API, YouTube Data API, Zalo OA API, Telegram Bot API, X API, LinkedIn API.</div>
 <div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Nền tảng đã kết nối (${con.length})</h3><a class="small" href="#groups">👥 Quản lý nhóm kênh (${S.groups.length})</a></div><div style="height:10px"></div>${con.map(c=>`<div class="ch">${pfIcon(c.pf)}<div style="flex:1"><b>${esc(c.name)}</b><div class="small muted">${esc(c.handle)} · ${PF[c.pf].n}</div></div><button class="btn sm" onclick="toast('Đã làm mới kết nối (mô phỏng)')">Kết nối lại</button><button class="btn sm danger" onclick="setConn('${escAttr(c.id)}',false)">Ngắt kết nối</button></div>`).join('')||'<p class="muted">Chưa có</p>'}</div>
 <div class="card"><h3>Nền tảng khả dụng</h3><div class="grid g3">${av.map(c=>`<div class="ch" style="margin:0">${pfIcon(c.pf)}<div style="flex:1"><b>${PF[c.pf].n}</b><div class="small muted">${esc(c.name)}</div></div><button class="btn sm pri" onclick="setConn('${escAttr(c.id)}',true)">Kết nối</button></div>`).join('')||'<p class="muted">Đã kết nối tất cả</p>'}</div></div>`}
 function setConn(id,v){if(!demoAction())return;chById(id).connected=v;if(!v)D.channels=D.channels.filter(x=>x!==id);save();V.accounts();toast(v?'Đã kết nối (mô phỏng)':'Đã ngắt kết nối')}

@@ -229,6 +229,55 @@ function go(r){render(r);try{if(location.hash.slice(1)!==r)history.replaceState(
 window.onhashchange=()=>{const k=location.hash.slice(1);if(k&&k!==route&&V[k])render(k)};
 document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#"]');if(!a)return;const k=a.getAttribute('href').slice(1);if(!k)return;e.preventDefault();go(k)});
 
+// Đồng bộ chỉ theo thao tác rõ ràng; không quét S.posts, seed hay kho cục bộ.
+const CLOUD_DRAFTS={refs:new WeakMap(),busy:false,rows:[],backupKey:'pdk_draft_before_cloud_v1'};
+const cloudDraftsEnabled=()=>!window.QA_RUNNING&&location.protocol==='https:'&&document.querySelector('meta[name="shopai-drafts-endpoint"]')?.content==='/storage/drafts';
+function cloudDraftStatus(message){let e=$('#cloud_draft_status');if(e)e.textContent=message;toast(message)}
+function cloudDraftPayload(d,id){
+ if(d.media.length||(d.assets||[]).length||Object.keys(d.custom||{}).length||(d.textAssets||[]).length)throw new Error('Chỉ hỗ trợ văn bản, chưa có media hoặc tùy biến kênh; dữ liệu cục bộ giữ nguyên.');
+ if(!d.content.trim())throw new Error('Nhập nội dung trước khi lưu.');
+ return {id,type:'post',content:d.content,channels:[...d.channels],status:'draft',media:[],assets:[],custom:{}};
+}
+async function cloudDraftRequest(path,options={}){
+ if(!cloudDraftsEnabled())throw new Error('Kho đám mây chỉ khả dụng trên preview được cấu hình.');
+ const r=await fetch('/storage/drafts'+path,{...options,credentials:'same-origin',redirect:'error',cache:'no-store',signal:AbortSignal.timeout(15000)});
+ if(r.status===401||r.status===403)throw new Error('Phiên truy cập hết hạn hoặc không có quyền; chưa xác nhận lưu đám mây.');
+ if(r.status===409)throw new Error('Xung đột phiên bản: chưa lưu. Đọc lại đám mây để đối chiếu; nháp cục bộ giữ nguyên.');
+ if(!r.ok)throw new Error('Yêu cầu đám mây lỗi HTTP '+r.status+'; chưa xác nhận lưu.');
+ if(!(r.headers.get('content-type')||'').toLowerCase().includes('application/json'))throw new Error('Phản hồi không phải JSON; chưa xác nhận lưu.');
+ return r.json();
+}
+function validCloudDraftRow(r){const d=r?.draft;return d&&/^[a-zA-Z0-9_-]{1,64}$/.test(d.id)&&d.status==='draft'&&d.type==='post'&&typeof d.content==='string'&&d.content.length<=20000&&Array.isArray(d.channels)&&d.channels.length<=32&&d.channels.every(c=>typeof c==='string'&&/^[a-zA-Z0-9_-]{1,64}$/.test(c))&&Array.isArray(d.media)&&!d.media.length&&Array.isArray(d.assets)&&!d.assets.length&&d.custom&&typeof d.custom==='object'&&!Object.keys(d.custom).length&&Number.isSafeInteger(r.revision)&&r.revision>0}
+async function saveCloudDraft(){
+ if(CLOUD_DRAFTS.busy)return;
+ const draft=D;let ref=CLOUD_DRAFTS.refs.get(draft),payload;
+ try{if(!ref){ref={id:crypto.randomUUID(),revision:0};CLOUD_DRAFTS.refs.set(draft,ref)}payload=cloudDraftPayload(draft,ref.id)}catch(e){return cloudDraftStatus(e.message)}
+ CLOUD_DRAFTS.busy=true;cloudDraftStatus('Đang lưu bản nháp văn bản lên đám mây…');
+ try{const body=JSON.stringify({draft:payload,revision:ref.revision});if(new TextEncoder().encode(body).length>32768)throw new Error('Bản nháp vượt giới hạn 32 KB; chưa gửi.');
+ const r=await cloudDraftRequest('/'+ref.id,{method:'PUT',headers:{'Content-Type':'application/json'},body});
+ if(!validCloudDraftRow(r)||r.draft.id!==ref.id||r.revision!==ref.revision+1||JSON.stringify(r.draft)!==JSON.stringify(payload))throw new Error('Phản hồi lưu không khớp; chưa xác nhận. Đọc lại đám mây trước khi lưu tiếp.');
+ ref.revision=r.revision;
+ let unchanged=false;try{unchanged=D===draft&&JSON.stringify(cloudDraftPayload(D,ref.id))===JSON.stringify(payload)}catch{}
+ cloudDraftStatus(unchanged?'Đã lưu bản nháp văn bản lên đám mây.':'Đã lưu phiên bản vừa gửi; thay đổi mới trong trình soạn chưa lưu đám mây.');
+ }catch(e){cloudDraftStatus(e.message||'Không kết nối được; chưa xác nhận lưu đám mây.')}finally{CLOUD_DRAFTS.busy=false}
+}
+async function readCloudDrafts(){
+ if(CLOUD_DRAFTS.busy)return;CLOUD_DRAFTS.busy=true;
+ try{const r=await cloudDraftRequest('');if(!Array.isArray(r.drafts))throw new Error('Danh sách đám mây không hợp lệ.');CLOUD_DRAFTS.rows=r.drafts.filter(validCloudDraftRow);
+ modal('<h3>Bản nháp văn bản đám mây</h3><p class="small muted">API hiện trả tối đa 100 bản gần nhất. Không nhập tự động vào kho cục bộ. Bản video hoặc định dạng không hỗ trợ không hiển thị.</p>'+CLOUD_DRAFTS.rows.map((r,i)=>'<div class="card"><div style="white-space:pre-wrap">'+esc(r.draft.content.slice(0,300))+'</div><button class="btn sm" onclick="openCloudDraft('+i+')">Mở để sửa · phiên bản '+r.revision+'</button></div>').join('')+(CLOUD_DRAFTS.rows.length?'':'<p>Chưa có bản nháp văn bản phù hợp.</p>')+'<button class="btn" onclick="closeModal()">Đóng</button>');
+ }catch(e){cloudDraftStatus(e.message||'Không đọc được đám mây; dữ liệu cục bộ giữ nguyên.')}finally{CLOUD_DRAFTS.busy=false}
+}
+function backupBeforeCloud(){
+ if(LS._mem)throw new Error('Chưa có lưu trữ bền vững để sao lưu nháp hiện tại; không thay thế.');
+ const j=JSON.stringify({...D,media:D.media.map(({name,type,size,thumb,assetId,fid})=>({name,type,size,thumb,assetId,fid}))});LS.setItem(CLOUD_DRAFTS.backupKey,j);if(LS.getItem(CLOUD_DRAFTS.backupKey)!==j)throw new Error('Không sao lưu được nháp hiện tại; không thay thế.');
+}
+function openCloudDraft(i){const r=CLOUD_DRAFTS.rows[i];if(!validCloudDraftRow(r))return;
+ ask('Mở bản đám mây trong trình soạn? Nháp hiện tại sẽ được sao lưu cục bộ; có thể khôi phục bằng nút Khôi phục nháp trước đó.',()=>{
+ try{backupBeforeCloud();D={...newDraft(),content:r.draft.content,channels:[...r.draft.channels]};CLOUD_DRAFTS.refs.set(D,{id:r.draft.id,revision:r.revision});saveDraft();go('create');cloudDraftStatus('Đã đọc phiên bản '+r.revision+'. Chỉ lưu đám mây khi bạn bấm Lưu nháp đám mây.')}catch(e){cloudDraftStatus(e.message)}
+ },{ok:'Mở bản đám mây'})
+}
+function restoreBeforeCloud(){if(!LS.getItem(CLOUD_DRAFTS.backupKey))return cloudDraftStatus('Chưa có bản sao lưu.');ask('Khôi phục nháp trước đó? Nháp hiện tại sẽ đổi chỗ vào bản sao lưu, không ghi đè đám mây.',()=>{try{const previous=loadDraft(CLOUD_DRAFTS.backupKey);backupBeforeCloud();D=previous;saveDraft();go('create');cloudDraftStatus('Đã khôi phục nháp cục bộ; chưa lưu đám mây.')}catch(e){cloudDraftStatus(e.message)}},{ok:'Khôi phục'})}
+
 /* ================= CREATE POST ================= */
 const DKEY='pdk_draft_v1';
 function saveDraft(key){if(window.QA_RUNNING&&!key)return;try{LS.setItem(key||DKEY,JSON.stringify({...D,media:D.media.map(({name,type,size,thumb,assetId,fid})=>({name,type,size,thumb,assetId,fid})),savedAt:Date.now()}))}catch(e){}}
@@ -240,7 +289,7 @@ function newDraft(){return {content:'',media:[],channels:[],custom:{},when:'now'
 function validity(c){if(!c)return 'Kênh không tồn tại';const hasVideo=D.media.some(m=>m.type.startsWith('video'));if((c.pf==='tiktok'||c.pf==='youtube')&&!hasVideo)return 'Cần có video (không hỗ trợ bài chỉ văn bản/ảnh)';if(c.pf==='instagram'&&!D.media.length)return 'Cần ít nhất 1 ảnh hoặc video';const txt=(D.custom[c.id]&&D.custom[c.id].text)||D.content;if(c.pf==='x'&&txt.length>280)return 'Vượt 280 ký tự – hãy dùng Tùy chỉnh';return ''}
 V.create=()=>{$('#view').innerHTML=`<div class="grid two" style="grid-template-columns:minmax(0,1fr) 340px;align-items:start"><div>
 <div class="card"><h3>Media</h3><div class="drop" onclick="$('#file').click()" ondragover="event.preventDefault()" ondrop="event.preventDefault();addFiles(event.dataTransfer.files)">⬆️ <b>Tải ảnh hoặc video lên</b><br><span class="small">Kéo thả hoặc bấm để chọn – Ảnh, Video</span></div><div class="row" style="margin-top:8px"><button class="btn sm" onclick="openPicker()">🗂️ Chọn từ Kho</button><span class="small muted">File tải lên ở đây sẽ tự lưu vào Kho khi đăng / lên lịch</span></div><input type="file" id="file" multiple accept="image/*,video/*" hidden onchange="addFiles(this.files)"><div class="thumbs" id="thumbs" style="margin-top:10px"></div></div>
-<div class="card"><h3>Nội dung</h3><textarea id="ct" placeholder="Chia sẻ thêm về nội dung của bạn..." maxlength="5000" oninput="D.content=this.value;upd()">${esc(D.content)}</textarea>
+<div class="card"><h3>Nội dung</h3>${cloudDraftsEnabled()?'<div class="row" style="margin-bottom:8px"><button class="btn sm" onclick="saveCloudDraft()">Lưu nháp đám mây</button><button class="btn sm" onclick="readCloudDrafts()">Đọc nháp đám mây</button><button class="btn sm" onclick="restoreBeforeCloud()">Khôi phục nháp trước đó</button><span class="small muted" id="cloud_draft_status" role="status">Nháp vẫn tự lưu cục bộ; không tự tải lên đám mây.</span></div>':''}<textarea id="ct" placeholder="Chia sẻ thêm về nội dung của bạn..." maxlength="5000" oninput="D.content=this.value;upd()">${esc(D.content)}</textarea>
 <div class="row" style="justify-content:space-between;margin-top:8px"><div class="row"><button class="btn sm pri" onclick="openGen()">✨ AI tạo nội dung</button><button class="btn sm" id="impBtn" onclick="aiImprove()">🪄 Cải thiện bằng AI</button><button class="btn sm" onclick="openTags()"># Hashtag</button><button class="btn sm" onclick="openEmoji()">😀 Emoji</button></div><span class="small muted" id="cnt"></span></div></div>
 <div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Đăng trên</h3><div class="row"><button class="btn sm" onclick="selAll(1)">Chọn tất cả</button><button class="btn sm" onclick="selAll(0)">Bỏ chọn tất cả</button></div></div><div id="grpbar" class="row" style="margin-top:10px;gap:6px"></div><div id="chlist" style="margin-top:12px"></div></div>
 <div class="card row" style="justify-content:space-between"><label class="row" style="margin:0;color:inherit;font-size:13px"><input type="checkbox" style="width:auto" ${D.more?'checked':''} onchange="D.more=this.checked"> Tạo bài viết khác</label>

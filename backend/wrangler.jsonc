@@ -65,5 +65,15 @@
       "database_id": "50da4192-8c86-4168-b3ff-5ef11f6e3a96",
       "migrations_dir": "migrations"
     }
+  ],
+  "routes": [
+    {
+      "pattern": "shoppost.net/*",
+      "zone_name": "shoppost.net"
+    },
+    {
+      "pattern": "www.shoppost.net/*",
+      "zone_name": "shoppost.net"
+    }
   ]
 }

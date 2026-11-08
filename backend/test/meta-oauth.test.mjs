@@ -48,6 +48,10 @@ test('Meta OAuth: one-use state, same actor, scoped accounts, encrypted Page tok
    if(u.searchParams.has('code'))return Response.json({access_token:'short-lived'});
    if(u.searchParams.get('grant_type')==='fb_exchange_token')return Response.json({access_token:'long-lived'});
   }
+  if(u.pathname.endsWith('/me/permissions')){
+   assert.equal(options.headers.Authorization,'Bearer long-lived');
+   return Response.json({data:['pages_show_list','pages_manage_posts','instagram_basic','instagram_content_publish'].map(permission=>({permission,status:'granted'}))});
+  }
   if(u.pathname.endsWith('/me/accounts')){
    assert.equal(options.headers.Authorization,'Bearer long-lived');
    assert.equal(u.searchParams.has('access_token'),false);
@@ -69,6 +73,6 @@ test('Meta OAuth: one-use state, same actor, scoped accounts, encrypted Page tok
   const row=f.sqlite.prepare("SELECT token_ciphertext, token_iv FROM social_accounts WHERE provider='facebook'").get();
   assert.notEqual(row.token_ciphertext,'PAGE_SECRET_DO_NOT_EXPOSE');assert.ok(row.token_iv.length>10);
   assert.equal((await f.req(owner,cb)).status,403,'callback replay rejected');
-  assert.deepEqual(calls.map(p=>p.split('/').at(-1)),['access_token','access_token','accounts','accounts']);
+  assert.deepEqual(calls.map(p=>p.split('/').at(-1)),['access_token','access_token','permissions','accounts','accounts']);
  }finally{globalThis.fetch=previous;f.sqlite.close();}
 });

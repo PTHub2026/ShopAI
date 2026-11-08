@@ -61,10 +61,19 @@ export async function handleMeta(req,env,who,json){
  if(!env.DB)return error(json,'db_missing',503);
  const url=new URL(req.url),segments=url.pathname.split('/'),act=segments.at(-1);
  if(!['start','callback'].includes(act))return error(json,'not_found',404);
- const ctx=await resolveShop(env,who,req);
- if(ctx.error)return json({error:ctx.error,code:ctx.code},ctx.status);
  const db=env.DB;
  await db.batch(META_SCHEMA.map(s=>db.prepare(s)));
+ let scopedRequest=req;
+ if(act==='callback'){
+  const state=url.searchParams.get('state');
+  if(!state||!/^[-_A-Za-z0-9]{43}$/.test(state))return error(json,'invalid_oauth_state',400);
+  const prior=await db.prepare('SELECT shop_id,actor FROM meta_oauth_states WHERE state_hash=?').bind(await sha(state)).first();
+  if(!prior||prior.actor!==who.owner)return error(json,'invalid_oauth_state',403);
+  const headers=new Headers(req.headers);headers.set('X-ShopPost-Shop',prior.shop_id);
+  scopedRequest=new Request(req,{headers});
+ }
+ const ctx=await resolveShop(env,who,scopedRequest);
+ if(ctx.error)return json({error:ctx.error,code:ctx.code},ctx.status);
  if(act==='start'){
   if(req.method!=='POST')return error(json,'method_not_allowed',405);
   if(!ctx.can('channels.configure_token')||ctx.shop.status!=='active')return error(json,'forbidden',403);

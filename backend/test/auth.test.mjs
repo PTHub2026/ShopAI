@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { createHash, webcrypto } from 'node:crypto';
 const worker = (await import(new URL('../src/worker.js', import.meta.url))).default;
-const { AUTH_SCHEMA, SESSION_COOKIE, normalizeEmail, normalizePhone, parseEmailFrom, pkceChallenge, pkceVerifier, sameText, sendEmail, tiktokChallenge } = await import(new URL('../src/auth.js', import.meta.url));
+const { AUTH_SCHEMA, PASSWORD_SCHEMA, SESSION_COOKIE, hashPassword, verifyPassword, passwordError, normalizeEmail, normalizePhone, parseEmailFrom, pkceChallenge, pkceVerifier, sameText, sendEmail, tiktokChallenge } = await import(new URL('../src/auth.js', import.meta.url));
 
 const BASE = 'https://shoppost.example';
 const FB_ID = '123456789012', ZALO_ID = '1234567890123456789', ZALO_SECRET = 'zalo-secret-khong-duoc-lo', RESEND_KEY = 're_khoa_bi_mat_thu_nghiem';
@@ -95,11 +95,11 @@ test('Migration 0002_auth.sql khớp đúng schema runtime', () => {
 
 test('/auth/providers phản ánh đúng cấu hình và không lộ secret', async () => {
   const off = await (await get(env({ FACEBOOK_APP_ID: undefined, ZALO_APP_SECRET: undefined, RESEND_API_KEY: undefined, EMAIL_FROM: undefined }), '/auth/providers')).json();
-  assert.deepEqual(off, { facebook: { enabled: false }, zalo: { enabled: false }, tiktok: { enabled: false }, phone: { enabled: false }, email: { enabled: false }, access: { url: issuer }, ready: false });
+  assert.deepEqual(off, { facebook: { enabled: false }, zalo: { enabled: false }, tiktok: { enabled: false }, phone: { enabled: false }, email: { enabled: false }, password: { enabled: false }, access: { url: issuer }, ready: false });
   const response = await get(env(), '/auth/providers');
   assert.equal(response.status, 200); assert.equal(response.headers.get('Cache-Control'), 'no-store');
   const text = await response.text();
-  assert.deepEqual(JSON.parse(text), { facebook: { enabled: true, appId: FB_ID }, zalo: { enabled: true }, tiktok: { enabled: false }, phone: { enabled: false }, email: { enabled: true }, access: { url: issuer }, ready: true });
+  assert.deepEqual(JSON.parse(text), { facebook: { enabled: true, appId: FB_ID }, zalo: { enabled: true }, tiktok: { enabled: false }, phone: { enabled: false }, email: { enabled: true }, password: { enabled: true }, access: { url: issuer }, ready: true });
   for (const secret of [ZALO_SECRET, RESEND_KEY]) assert.equal(text.includes(secret), false);
   // App ID không phải dãy số (ví dụ dán nhầm App Secret 32 ký tự hex) thì không bật Facebook.
   assert.equal((await (await get(env({ FACEBOOK_APP_ID: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' }), '/auth/providers')).json()).facebook.enabled, false);
@@ -782,4 +782,152 @@ test('Thương hiệu ShopPost: giao diện hiển thị ShopPost, giữ định
   assert.doesNotMatch(csp, /tiktok|esms|twilio/i);
   // Mobile: body chỉ đặt min-height (không cố định height) để nội dung cao hơn màn hình không bị đẩy mất phần đầu.
   assert.match(LOGIN_FILE, /body\{min-height:100%;/); assert.doesNotMatch(LOGIN_FILE, /html,body\{height:100%\}/);
+});
+
+
+test('Mật khẩu PBKDF2: định dạng chuẩn, salt ngẫu nhiên, xác minh đúng/sai, kiểm tra độ mạnh', async () => {
+  assert.equal(passwordError('1234567'), 'Mật khẩu phải có ít nhất 8 ký tự.');
+  assert.equal(passwordError('x'.repeat(201)), 'Mật khẩu quá dài (tối đa 200 ký tự).');
+  assert.equal(passwordError(12345678), 'Mật khẩu không hợp lệ.');
+  assert.equal(passwordError('mat-khau-manh'), null);
+  const hash = await hashPassword('mat-khau-manh');
+  assert.match(hash, /^pbkdf2\$100000\$[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+$/);
+  assert.notEqual(hash, await hashPassword('mat-khau-manh')); // salt ngẫu nhiên nên hai lần băm khác nhau
+  assert.equal(await verifyPassword('mat-khau-manh', hash), true);
+  assert.equal(await verifyPassword('sai-mat-khau', hash), false);
+  assert.equal(await verifyPassword('mat-khau-manh', 'khong-dung-dinh-dang'), false);
+  assert.equal(await verifyPassword('mat-khau-manh', 'md5$1$a$b'), false);
+  assert.equal(await verifyPassword(123, hash), false);
+});
+
+test('Migration 0004_passwords.sql khớp đúng PASSWORD_SCHEMA runtime và chạy lại an toàn', () => {
+  const norm = sql => sql.replace(/\s+/g, ' ').trim();
+  const file = readFileSync(new URL('../migrations/0004_passwords.sql', import.meta.url), 'utf8').split('\n').filter(line => !line.startsWith('--')).join('\n');
+  assert.deepEqual(file.split(';').map(norm).filter(Boolean), PASSWORD_SCHEMA.map(norm));
+  const db = new DatabaseSync(':memory:');
+  db.exec(readFileSync(new URL('../migrations/0004_passwords.sql', import.meta.url), 'utf8'));
+  db.exec(readFileSync(new URL('../migrations/0004_passwords.sql', import.meta.url), 'utf8')); // chạy lại an toàn (IF NOT EXISTS)
+  db.close();
+});
+
+test('Đăng ký email + mật khẩu: gửi mã (khóa pwreg:), xác minh tạo phiên; chặn email đã có mật khẩu', async () => {
+  let last;
+  const resend = async (url, init) => { last = JSON.parse(init.body).text.match(/\b(\d{6})\b/)[1]; return Response.json({ id: 'ok' }); };
+  await withFetch(resend, async () => {
+    const e = env();
+    assert.equal((await post(e, '/auth/register/start', { email: 'a@b', password: 'mat-khau-dai' })).status, 400); // email không hợp lệ
+    assert.equal((await post(e, '/auth/register/start', { email: 'nguoi@vidu.vn', password: 'ngan' })).status, 400); // mật khẩu yếu
+    const start = await post(e, '/auth/register/start', { email: '  Nguoi@ViDu.VN ', password: 'mat-khau-dai' });
+    assert.equal(start.status, 200); assert.deepEqual(await start.json(), { ok: true, retryAfter: 60, expiresIn: 600 });
+    assert.match(last, /^\d{6}$/);
+    assert.ok(row(e.DB, 'SELECT 1 FROM auth_otp_codes WHERE email = ?', 'pwreg:nguoi@vidu.vn')); // lưu khóa riêng, không đè mã đăng nhập email
+    const wrong = last === '000000' ? '111111' : '000000';
+    assert.equal((await post(e, '/auth/register/verify', { email: 'nguoi@vidu.vn', code: wrong, password: 'mat-khau-dai' })).status, 400);
+    const ok = await post(e, '/auth/register/verify', { email: 'NGUOI@vidu.vn', code: last, password: 'mat-khau-dai' });
+    assert.equal(ok.status, 200); assert.deepEqual(await ok.json(), { ok: true, provider: 'email', name: 'nguoi@vidu.vn' });
+    assert.equal(row(e.DB, 'SELECT owner FROM auth_sessions WHERE token_hash = ?', sha(sessionToken(ok))).owner, 'email:nguoi@vidu.vn');
+    const pwrow = row(e.DB, 'SELECT * FROM auth_passwords WHERE email = ?', 'nguoi@vidu.vn');
+    assert.equal(pwrow.owner, 'email:nguoi@vidu.vn'); assert.equal(pwrow.provider, 'email');
+    assert.ok(await verifyPassword('mat-khau-dai', pwrow.password_hash));
+    assert.equal((await post(e, '/auth/register/start', { email: 'nguoi@vidu.vn', password: 'mat-khau-khac' })).status, 409); // đã có mật khẩu
+  });
+  // Khi email chưa cấu hình, đăng ký/khôi phục bị khóa (503).
+  await withFetch(null, async () => {
+    const e = env({ RESEND_API_KEY: undefined, EMAIL_FROM: undefined });
+    assert.equal((await post(e, '/auth/register/start', { email: 'x@y.vn', password: 'mat-khau-dai' })).status, 503);
+    assert.equal((await post(e, '/auth/password/forgot', { email: 'x@y.vn' })).status, 503);
+  });
+});
+
+test('Đăng nhập mật khẩu: đúng/sai, không lộ email tồn tại, có rate-limit', async () => {
+  let last;
+  const resend = async (url, init) => { last = JSON.parse(init.body).text.match(/\b(\d{6})\b/)[1]; return Response.json({ id: 'ok' }); };
+  await withFetch(resend, async () => {
+    const e = env();
+    await post(e, '/auth/register/start', { email: 'khach@vidu.vn', password: 'mat-khau-dai' });
+    await post(e, '/auth/register/verify', { email: 'khach@vidu.vn', code: last, password: 'mat-khau-dai' });
+    const GENERIC = 'Email hoặc mật khẩu không đúng.';
+    const bad = await post(e, '/auth/password/login', { email: 'khach@vidu.vn', password: 'sai-roi-nhe' });
+    assert.equal(bad.status, 401); assert.equal((await bad.json()).error, GENERIC);
+    const nope = await post(e, '/auth/password/login', { email: 'khong-ton-tai@vidu.vn', password: 'mat-khau-dai' });
+    assert.equal(nope.status, 401); assert.equal((await nope.json()).error, GENERIC); // cùng thông báo → không lộ email tồn tại
+    const empty = await post(e, '/auth/password/login', { email: 'khach@vidu.vn', password: '' });
+    assert.equal(empty.status, 401); assert.equal((await empty.json()).error, GENERIC);
+    const ok = await post(e, '/auth/password/login', { email: 'KHACH@vidu.vn', password: 'mat-khau-dai' });
+    assert.equal(ok.status, 200); assert.deepEqual(await ok.json(), { ok: true, provider: 'email', name: 'khach@vidu.vn' });
+    assert.equal(row(e.DB, 'SELECT owner FROM auth_sessions WHERE token_hash = ?', sha(sessionToken(ok))).owner, 'email:khach@vidu.vn');
+  });
+  await withFetch(null, async () => {
+    const e = env({ AI_RATE_LIMITER: { limit: async () => ({ success: false }) } });
+    const limited = await post(e, '/auth/password/login', { email: 'ai@vidu.vn', password: 'mat-khau-dai' });
+    assert.equal(limited.status, 429); assert.equal(limited.headers.get('Retry-After'), '60');
+  });
+});
+
+test('Quên & đặt lại mật khẩu: thông điệp trung lập, đặt lại và thu hồi phiên cũ', async () => {
+  let last;
+  const resend = async (url, init) => { last = JSON.parse(init.body).text.match(/\b(\d{6})\b/)[1]; return Response.json({ id: 'ok' }); };
+  await withFetch(resend, async () => {
+    const e = env();
+    const NEUTRAL = 'Nếu email tồn tại, mã đặt lại đã được gửi.';
+    await post(e, '/auth/register/start', { email: 'quen@vidu.vn', password: 'mat-khau-cu-dai' });
+    const reg = await post(e, '/auth/register/verify', { email: 'quen@vidu.vn', code: last, password: 'mat-khau-cu-dai' });
+    const oldToken = sessionToken(reg);
+    assert.ok(row(e.DB, 'SELECT 1 FROM auth_sessions WHERE token_hash = ?', sha(oldToken)));
+    last = undefined;
+    const neutral = await post(e, '/auth/password/forgot', { email: 'khong-ai@vidu.vn' });
+    assert.equal(neutral.status, 200); assert.deepEqual(await neutral.json(), { ok: true, message: NEUTRAL });
+    assert.equal(last, undefined); // email không tồn tại → không gửi mã
+    const forgot = await post(e, '/auth/password/forgot', { email: 'QUEN@vidu.vn' });
+    assert.equal(forgot.status, 200); assert.equal((await forgot.json()).message, NEUTRAL);
+    assert.match(last, /^\d{6}$/);
+    assert.ok(row(e.DB, 'SELECT 1 FROM auth_otp_codes WHERE email = ?', 'pwreset:quen@vidu.vn'));
+    const wrong = last === '000000' ? '111111' : '000000';
+    assert.equal((await post(e, '/auth/password/reset', { email: 'quen@vidu.vn', code: wrong, password: 'mat-khau-moi-dai' })).status, 400);
+    const reset = await post(e, '/auth/password/reset', { email: 'quen@vidu.vn', code: last, password: 'mat-khau-moi-dai' });
+    assert.equal(reset.status, 200); assert.deepEqual(await reset.json(), { ok: true });
+    assert.equal(row(e.DB, 'SELECT 1 FROM auth_sessions WHERE token_hash = ?', sha(oldToken)), null); // phiên cũ bị thu hồi
+    assert.equal((await post(e, '/auth/password/login', { email: 'quen@vidu.vn', password: 'mat-khau-cu-dai' })).status, 401);
+    assert.equal((await post(e, '/auth/password/login', { email: 'quen@vidu.vn', password: 'mat-khau-moi-dai' })).status, 200);
+  });
+});
+
+test('Đặt/đổi mật khẩu khi đã đăng nhập: cần phiên, đổi cần mật khẩu cũ, tài khoản social cần email', async () => {
+  await withFetch(null, async () => {
+    const e = env();
+    assert.equal((await post(e, '/auth/password/set', { password: 'mat-khau-moi-dai' })).status, 401); // chưa đăng nhập
+  });
+  await withFetch(facebook(), async () => {
+    const e = env();
+    const fb = await post(e, '/auth/facebook', { accessToken: FB_TOKEN });
+    assert.equal(fb.status, 200);
+    const token = sessionToken(fb);
+    assert.equal((await post(e, '/auth/password/set', { password: 'mat-khau-dai-moi' }, withSession(token))).status, 400); // social thiếu email
+    assert.equal((await post(e, '/auth/password/set', { password: 'ngan', email: 'fb@vidu.vn' }, withSession(token))).status, 400); // mật khẩu yếu
+    const set1 = await post(e, '/auth/password/set', { password: 'mat-khau-dai-moi', email: ' FB@ViDu.vn ' }, withSession(token));
+    assert.equal(set1.status, 200); assert.deepEqual(await set1.json(), { ok: true, email: 'fb@vidu.vn' });
+    const pwrow = row(e.DB, 'SELECT * FROM auth_passwords WHERE email = ?', 'fb@vidu.vn');
+    assert.equal(pwrow.provider, 'facebook'); assert.ok(await verifyPassword('mat-khau-dai-moi', pwrow.password_hash));
+    assert.equal((await post(e, '/auth/password/set', { password: 'mat-khau-dai-hon' }, withSession(token))).status, 403); // đã có hash → cần mật khẩu cũ
+    assert.equal((await post(e, '/auth/password/set', { password: 'mat-khau-dai-hon', currentPassword: 'sai-cu' }, withSession(token))).status, 403);
+    const set2 = await post(e, '/auth/password/set', { password: 'mat-khau-dai-hon', currentPassword: 'mat-khau-dai-moi' }, withSession(token));
+    assert.equal(set2.status, 200);
+    assert.ok(await verifyPassword('mat-khau-dai-hon', row(e.DB, 'SELECT password_hash FROM auth_passwords WHERE email = ?', 'fb@vidu.vn').password_hash));
+    const login = await post(e, '/auth/password/login', { email: 'fb@vidu.vn', password: 'mat-khau-dai-hon' });
+    assert.equal(login.status, 200); assert.equal((await login.json()).provider, 'facebook'); // social đăng nhập được bằng mật khẩu
+  });
+  // Email đã thuộc tài khoản khác → 409.
+  let last;
+  const resend = async (url, init) => { last = JSON.parse(init.body).text.match(/\b(\d{6})\b/)[1]; return Response.json({ id: 'ok' }); };
+  const e = env();
+  await withFetch(resend, async () => {
+    await post(e, '/auth/register/start', { email: 'co-san@vidu.vn', password: 'mat-khau-dai-aa' });
+    await post(e, '/auth/register/verify', { email: 'co-san@vidu.vn', code: last, password: 'mat-khau-dai-aa' });
+  });
+  await withFetch(facebook(), async () => {
+    const fb = await post(e, '/auth/facebook', { accessToken: FB_TOKEN });
+    const token = sessionToken(fb);
+    const dup = await post(e, '/auth/password/set', { password: 'mat-khau-dai-bb', email: 'co-san@vidu.vn' }, withSession(token));
+    assert.equal(dup.status, 409);
+  });
 });

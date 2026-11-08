@@ -27,3 +27,10 @@ test('Build includes the repository frontend and serves it behind Access', async
     assert.equal(page.status, 401);
   } finally { globalThis.fetch = original; }
 });
+
+
+test('Built health exposes the packaged commit for deployment verification', async()=>{
+  const response=await app.fetch(new Request('https://shopai-backend.example/health'),{});
+  const body=await response.json();
+  assert.match(body.release,/^[a-f0-9]{40}$/);
+});

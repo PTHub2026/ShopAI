@@ -1,0 +1,20 @@
+{
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "jsdom": "26.1.0",
+    "miniflare": "5.20261104.0-beta",
+    "wrangler": "4.158.0"
+  },
+  "name": "shopai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test backend/test/*.test.mjs",
+    "build": "cd backend && wrangler deploy --dry-run --outdir dist/check",
+    "check": "npm test && npm run build"
+  }
+}

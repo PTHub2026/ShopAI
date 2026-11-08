@@ -594,20 +594,20 @@ async function socialRequest(path,options={}){
 }
 async function socialAccountsLive(){
  const root=$('#view');
- root.innerHTML='<div class="card"><h3>Kênh Telegram</h3><p>Đang tải kết nối từ máy chủ...</p></div>';
+ root.innerHTML='<div class="card"><h3>Kênh đa nền tảng</h3><p>Đang tải kết nối từ máy chủ...</p></div>';
  try {
-  const [accounts,jobs]=await Promise.all([socialRequest('accounts'),socialRequest('jobs')]);
+  const [accounts,jobs,providers]=await Promise.all([socialRequest('accounts'),socialRequest('jobs'),socialRequest('providers')]);
   if(location.hash!=='#accounts')return;
-  root.innerHTML=`<div class="card"><h3>Kết nối Facebook & Instagram</h3><p class="small muted">Dùng Facebook Login để cấp quyền đăng bài lên Facebook Page và Instagram Professional đã liên kết Page. Không hỗ trợ đăng trang cá nhân.</p><button class="btn pri" onclick="socialConnectMeta()">Kết nối Facebook / Instagram</button></div><div class="card"><h3>Kết nối Telegram Bot thật</h3><p class="small muted">Bot phải được cấp quyền đăng trong nhóm hoặc kênh. Token chỉ gửi tới máy chủ và không hiển thị lại.</p>
+  root.innerHTML=`<div class="card"><h3>Kết nối Facebook & Instagram</h3><p class="small muted">Dùng Facebook Login để cấp quyền đăng bài lên Facebook Page và Instagram Professional đã liên kết Page. Không hỗ trợ đăng trang cá nhân.</p><button class="btn pri" onclick="socialConnectMeta()" ${providers.facebook.enabled?"":"disabled title=\"Meta App chưa được cấu hình ở backend\""}>Kết nối Facebook / Instagram</button>${providers.facebook.enabled?"":"<p class=\"small muted\">Chưa có Meta App ID, App Secret hoặc Redirect URI hợp lệ trong backend staging.</p>"}</div><div class="card"><h3>Kết nối Telegram Bot thật</h3><p class="small muted">Bot phải được cấp quyền đăng trong nhóm hoặc kênh. Token chỉ gửi tới máy chủ và không hiển thị lại.</p>
   <label>Telegram Bot Token</label><input id="tg_token" type="password" autocomplete="off" placeholder="Bot Token từ BotFather">
   <label>Chat ID hoặc @channelusername</label><input id="tg_chat" placeholder="@kenh_cua_ban">
   <div class="row" style="margin-top:10px"><button class="btn pri" onclick="socialConnectTelegram()">Kết nối Telegram</button><button class="btn" onclick="socialAccountsLive()">Làm mới</button></div></div>
   <div class="card"><h3>Kênh đã kết nối (${accounts.accounts.length})</h3>
-  ${accounts.accounts.map(a=>`<div class="ch"><div style="flex:1"><b>${esc(a.name)}</b><div class="small muted">${esc(a.targetId)} · ${esc(a.status)}</div></div>${a.status==='active'?`<button class="btn sm danger" onclick="socialDisconnectTelegram('${escAttr(a.id)}')">Ngắt kết nối</button>`:''}</div>`).join('')||'<p>Chưa có kênh Telegram.</p>'}</div>
+  ${accounts.accounts.map(a=>`<div class="ch"><div style="flex:1"><b>${esc(a.name)}</b><div class="small muted">${esc(a.targetId)} · ${esc(a.status)}</div></div>${a.status==='active'?`<button class="btn sm danger" onclick="socialDisconnectTelegram('${escAttr(a.id)}')">Ngắt kết nối</button>`:''}</div>`).join('')||'<p>Chưa có kết nối kênh thật.</p>'}</div>
   <div class="card"><h3>Đăng bài đa kênh</h3><label>Kênh</label><select id="tg_account">${accounts.accounts.filter(a=>a.status==='active').map(a=>`<option value="${escAttr(a.id)}" data-provider="${escAttr(a.provider)}">${esc(a.provider)} · ${esc(a.name)}</option>`).join('')}</select>
   <label>Nội dung</label><textarea id="tg_text" placeholder="Nội dung đăng thử nghiệm"></textarea>
   <label>Ảnh HTTPS công khai (không bắt buộc)</label><input id="tg_photo" placeholder="https://example.com/image.jpg">
-  <button class="btn pri" onclick="socialPublishTelegram()">Đăng lên Telegram</button>
+  <button class="btn pri" onclick="socialPublishTelegram()">Đăng lên kênh đã chọn</button>
   <p class="small muted">Instagram yêu cầu ảnh HTTPS. Facebook Page có thể đăng văn bản hoặc ảnh. Chỉ đăng sau khi bạn xác nhận, không có đăng tự động.</p></div>
   <div class="card"><h3>Lịch sử 50 bài gần nhất</h3>${jobs.jobs.map(j=>`<div class="ch"><div style="flex:1"><b>${esc(j.kind)}</b><div class="small muted">${esc(j.status)} · ${esc(j.id)} · ${j.attempts} lần</div></div>${j.status==='retryable'?`<button class="btn sm" onclick="socialRetryTelegram('${escAttr(j.id)}')">Thử lại</button>`:''}</div>`).join('')||'<p>Chưa có bài đăng.</p>'}</div>
   <div class="card small muted">TikTok, Zalo và các mạng khác chưa được cấp API đăng bài thật; không hiển thị kết nối giả.</div>`;

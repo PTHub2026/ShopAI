@@ -23,6 +23,18 @@ async function authenticate(request, env) {
     return await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, decode(parts[2]), new TextEncoder().encode(parts[0] + '.' + parts[1]));
   } catch { return false; }
 }
+
+// Các trang hỗ trợ Access không tạo tài khoản hay lưu thông tin xác thực riêng.
+function accessPage(request, path, signedIn) {
+  const recover = path === '/auth/recover' || path === '/auth/reset';
+  const session = path === '/auth/session';
+  const title = recover ? 'Khôi phục quyền truy cập' : session ? 'Trạng thái phiên' : 'Đăng nhập ShopAI';
+  const login = '/cdn-cgi/access/login?redirect_url=' + encodeURIComponent(new URL('/auth/session', request.url).href);
+  const message = signedIn ? 'JWT Cloudflare Access của yêu cầu này đã được xác minh. Đây là trạng thái tại thời điểm tải trang, không phải cam kết phiên luôn còn hiệu lực.' : 'Chưa có phiên hợp lệ hoặc phiên đã hết hạn. Hãy đăng nhập lại qua Cloudflare Access. Nếu vẫn bị từ chối, liên hệ quản trị viên để kiểm tra quyền truy cập.';
+  const recovery = '<h2>Quên mật khẩu hoặc không nhận được mã?</h2><p>ShopAI không quản lý mật khẩu riêng và trang này không gửi email đặt lại mật khẩu.</p><ol><li>Nếu màn hình Cloudflare Access yêu cầu mã qua email: xin mã mới tại đó, kiểm tra thư rác và dùng mã mới nhất. Không có mật khẩu ứng dụng để đặt lại trong luồng này.</li><li>Nếu màn hình Access chuyển sang nhà cung cấp danh tính: sử dụng chức năng quên mật khẩu của nhà cung cấp được hiển thị. ShopAI không thay đổi mật khẩu đó.</li><li>Nếu tài khoản không được cấp quyền: liên hệ quản trị viên. Xin mã mới hoặc đổi mật khẩu không tự cấp quyền truy cập.</li></ol><p>Phương thức đăng nhập thực tế do cấu hình Cloudflare Access quyết định; trang này không giả định nhà cung cấp nào.</p>';
+  const html = '<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light"><title>' + title + ' — ShopAI</title><style>*{box-sizing:border-box}body{margin:0;background:#fafafa;color:#0a0a0a;font:16px/1.65 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:640px;margin:6vh auto;padding:32px;background:white;border:1px solid #0000001a;border-radius:10px}.logo{font-weight:750;letter-spacing:-.04em;font-size:24px}.logo span{background:#030213;color:white;border-radius:8px;padding:5px 10px;margin-right:8px}h1{font-size:28px;line-height:1.3}h2{font-size:19px}p,li{overflow-wrap:anywhere}li{margin-bottom:12px}.status{background:#f3f3f5;border-left:4px solid #717182;padding:14px;border-radius:8px}nav{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}a{color:#1d4ed8}nav a{display:inline-block;padding:10px 14px;border:1px solid #0000001a;border-radius:8px;text-decoration:none}.primary{background:#030213;color:#fff}a:focus-visible{outline:3px solid #2563eb;outline-offset:4px}.note{color:#52525b;font-size:14px}@media(max-width:680px){main{margin:16px;padding:22px}nav{flex-direction:column}nav a{text-align:center}}</style></head><body><main><div class="logo"><span aria-hidden="true">S</span>ShopAI</div><h1>' + title + '</h1><p class="status" role="status">' + message + '</p>' + (recover ? recovery : '<p>Tiếp tục bằng màn hình đăng nhập chính thức của Cloudflare Access. Không nhập mật khẩu hoặc mã xác thực vào ShopAI.</p>') + '<nav aria-label="Điều hướng xác thực"><a class="primary" href="' + login + '">' + (signedIn ? 'Mở Cloudflare Access' : 'Đăng nhập / thử lại') + '</a><a href="/">Quay lại ứng dụng</a><a href="/auth/recover">Quên mật khẩu / hỗ trợ</a><a href="/auth/session">Kiểm tra phiên</a><a href="/cdn-cgi/access/logout">Đăng xuất Access</a></nav><p class="note">Đăng xuất dùng endpoint chính thức của Access; có thể cần đăng xuất riêng tại nhà cung cấp danh tính. Không có đăng ký tài khoản công khai.</p><p class="note">Các trang này vẫn nằm sau lớp bảo vệ Access của hostname. Trước xác thực, Cloudflare có thể hiển thị trang đăng nhập hoặc từ chối truy cập trước khi yêu cầu tới ShopAI; giao diện này không thay thế trang đăng nhập của Cloudflare.</p></main></body></html>';
+  return new Response(request.method === 'HEAD' ? null : html, { status: signedIn ? 200 : 401, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" } });
+}
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin');
@@ -32,6 +44,11 @@ export default {
     const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), { status, headers: { ...headers, ...extra } });
     if (origin && origin !== new URL(request.url).origin && !allowed.includes(origin)) return json({ error: 'Nguồn truy cập không được phép.' }, 403);
     const path = new URL(request.url).pathname;
+    if (['/auth/login', '/auth/recover', '/auth/reset', '/auth/session'].includes(path)) {
+      if (request.method !== 'GET' && request.method !== 'HEAD') return json({ error: 'Chỉ hỗ trợ GET hoặc HEAD.' }, 405, { Allow: 'GET, HEAD' });
+      if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ. Liên hệ quản trị viên.' }, 503);
+      return accessPage(request, path, await authenticate(request, env));
+    }
     if (path.startsWith('/storage/')) {
       if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
       if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access.' }, 401);
@@ -45,7 +62,7 @@ export default {
       if (request.method !== 'GET' && request.method !== 'HEAD') return json({ error: 'Chỉ hỗ trợ GET hoặc HEAD.' }, 405, { Allow: 'GET, HEAD' });
       if (!configured(env) || typeof env.FRONTEND_HTML !== 'string') return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
       if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access tại hostname ứng dụng.' }, 401);
-      return new Response(request.method === 'HEAD' ? null : env.FRONTEND_HTML.replace('<head>', '<head><meta name="shopai-ai-endpoint" content="/ai">' + (env.DB ? '<meta name="shopai-drafts-endpoint" content="/storage/drafts">' : '')), { headers: {
+      return new Response(request.method === 'HEAD' ? null : env.FRONTEND_HTML.replace('</body>', '<nav aria-label="Tài khoản ShopAI" style="padding:12px 24px;text-align:right;background:#fafafa;border-top:1px solid #0000001a"><a href="/auth/login">Đăng nhập</a> · <a href="/auth/session">Phiên đăng nhập</a> · <a href="/auth/recover">Hỗ trợ truy cập</a> · <a href="/cdn-cgi/access/logout">Đăng xuất</a></nav></body>').replace('<head>', '<head><meta name="shopai-ai-endpoint" content="/ai">' + (env.DB ? '<meta name="shopai-drafts-endpoint" content="/storage/drafts">' : '')), { headers: {
         'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
         'Content-Security-Policy': "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"

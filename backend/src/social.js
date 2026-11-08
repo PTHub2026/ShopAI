@@ -23,7 +23,7 @@ export async function handleSocial(req,env,who,json){
  try{decodeKey(env);}catch{return fail(json,503,'social_key_missing');}
  const ctx=await resolveShop(env,who,req);if(ctx.error)return json({error:ctx.error,code:ctx.code},ctx.status);
  const db=env.DB,shop=ctx.shop.id;await ensureSocialSchema(db);
- const [,,section,resource,action]=new URL(req.url).pathname.split('/');
+ const [,,,section,resource,action]=new URL(req.url).pathname.split('/');
  if(section==='accounts'&&!resource&&req.method==='GET'){
   if(!ctx.can('channels.view'))return fail(json,403,'forbidden');
   const {results}=await db.prepare('SELECT id,display_name,provider,target_id,status FROM social_accounts WHERE shop_id=? ORDER BY created_at DESC').bind(shop).all();return json({accounts:results.map(view)});

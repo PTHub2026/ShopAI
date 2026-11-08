@@ -23,8 +23,10 @@ function form(obj){return new URLSearchParams(obj);}
 async function graphRequest(e,path,token,fields={},method='GET'){
  const uri=new URL(graph(e,path));
  let init={method,redirect:'manual',signal:AbortSignal.timeout(12000)};
- if(method==='GET'){uri.search=form({...fields,access_token:token}).toString();}
- else {init.headers={'Content-Type':'application/x-www-form-urlencoded'};init.body=form({...fields,access_token:token}).toString();}
+ // Keep Graph access tokens out of URLs, browser history and edge request logs.
+ init.headers={Authorization:'Bearer '+token};
+ if(method==='GET'){uri.search=form(fields).toString();}
+ else {init.headers['Content-Type']='application/x-www-form-urlencoded';init.body=form(fields).toString();}
  const r=await fetch(uri,init);const data=await r.json().catch(()=>({}));
  if(!r.ok||data.error){const err=Error('META_API_FAILED');err.status=r.status;err.code=data.error?.code;err.subcode=data.error?.error_subcode;throw err;}
  return data;
@@ -45,6 +47,14 @@ export async function publishMeta(e,account,job){
   // Container creation is not publishing; once the publish call starts, network uncertainty is not retried.
   const container=await graphRequest(e,encodeURIComponent(account.target_id)+'/media',token,{image_url:p.photoUrl,caption:p.text},'POST');
   if(!container.id)throw Error('META_MISSING_CONTAINER');
+  // Instagram media creation can be asynchronous. Never publish an unready container.
+  const status=await graphRequest(e,encodeURIComponent(String(container.id)),token,{fields:'status_code'});
+  if(status.status_code!=='FINISHED'){
+   if(status.status_code==='IN_PROGRESS'){
+    const wait=Error('IG_MEDIA_PROCESSING');wait.status=429;wait.retryAfter=30;throw wait;
+   }
+   throw Error('IG_MEDIA_UNAVAILABLE');
+  }
   const publish=await graphRequest(e,encodeURIComponent(account.target_id)+'/media_publish',token,{creation_id:String(container.id)},'POST');
   if(!publish.id)throw Error('META_MISSING_ID');return String(publish.id);
  }
@@ -86,6 +96,8 @@ export async function handleMeta(req,env,who,json){
   return json({authorizationUrl:auth.toString()});
  }
  if(req.method!=='GET')return error(json,'method_not_allowed',405);
+ // Permissions may be removed while the user completes the OAuth consent screen.
+ if(!ctx.can('channels.configure_token')||ctx.shop.status!=='active')return error(json,'forbidden',403);
  if(url.origin!==new URL(env.META_REDIRECT_URI).origin||url.pathname!==new URL(env.META_REDIRECT_URI).pathname)return error(json,'callback_origin_mismatch',400);
  const state=url.searchParams.get('state'),code=url.searchParams.get('code');
  if(!state||!/^[-_A-Za-z0-9]{43}$/.test(state))return error(json,'invalid_oauth_state',400);

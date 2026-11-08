@@ -4,7 +4,9 @@ import { readFile } from 'node:fs/promises';
 await import('../build.mjs');
 const draftsSource = await readFile(new URL('../dist/drafts.js', import.meta.url), 'utf8');
 const draftsURL = 'data:text/javascript;base64,' + Buffer.from(draftsSource).toString('base64');
-const workerSource = (await readFile(new URL('../dist/worker.js', import.meta.url), 'utf8')).replace("'./drafts.js'", JSON.stringify(draftsURL));
+const authSource = await readFile(new URL('../dist/auth.js', import.meta.url), 'utf8');
+const authURL = 'data:text/javascript;base64,' + Buffer.from(authSource).toString('base64');
+const workerSource = (await readFile(new URL('../dist/worker.js', import.meta.url), 'utf8')).replace("'./drafts.js'", JSON.stringify(draftsURL)).replace("'./auth.js'", JSON.stringify(authURL));
 const workerURL = 'data:text/javascript;base64,' + Buffer.from(workerSource).toString('base64');
 const appSource = (await readFile(new URL('../dist/app.js', import.meta.url), 'utf8')).replace("'./worker.js'", JSON.stringify(workerURL));
 const app = (await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'))).default;
@@ -23,8 +25,16 @@ test('Build includes the repository frontend and serves it behind Access', async
     };
     const health = await app.fetch(new Request('https://shopai-backend.example/health'), env);
     assert.equal(health.status, 200);
+    // Chưa có Access JWT hay phiên đăng nhập: trả trang đăng nhập đã đóng gói, không phải giao diện ứng dụng.
     const page = await app.fetch(new Request('https://shopai-backend.example/'), env);
-    assert.equal(page.status, 401);
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get('Content-Type'), /text\/html/);
+    const loginHtml = await page.text();
+    assert.match(loginHtml, /Đăng nhập ShopAI/);
+    assert.equal(loginHtml.includes('shopai-user-scope'), false);
+    assert.equal(loginHtml.includes('__CSP_NONCE__'), false);
+    const nonce = /nonce="([A-Za-z0-9_-]+)"/.exec(loginHtml)[1];
+    assert.ok(page.headers.get('Content-Security-Policy').includes("'nonce-" + nonce + "'"));
   } finally { globalThis.fetch = original; }
 });
 

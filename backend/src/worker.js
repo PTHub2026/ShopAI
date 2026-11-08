@@ -1,4 +1,6 @@
 import { drafts } from './drafts.js';
+import { handleAuth, loginResponse, sessionFromRequest } from './auth.js';
+const LOGIN_REQUIRED = 'Phiên đăng nhập đã hết hạn hoặc chưa đăng nhập.';
 const TASKS = new Set(['generate', 'improve', 'adapt', 'reply']);
 const decode = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0));
 const configured = env => Boolean(env.AI && env.AI_RATE_LIMITER && /^[a-z0-9-]+\.cloudflareaccess\.com$/i.test(env.ACCESS_TEAM_DOMAIN || '') && typeof env.ACCESS_AUD === 'string' && env.ACCESS_AUD.trim());
@@ -28,6 +30,12 @@ async function authenticate(request, env) {
     return await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, decode(parts[2]), new TextEncoder().encode(parts[0] + '.' + parts[1]));
   } catch { return false; }
 }
+// Danh tính: ưu tiên Cloudflare Access JWT (owner = sub như cũ), nếu không có thì dùng phiên đăng nhập của ShopAI.
+async function identify(request, env) {
+  if (request.headers.get('Cf-Access-Jwt-Assertion') && await authenticate(request, env)) return { owner: subject(request), via: 'access' };
+  const session = await sessionFromRequest(request, env);
+  return session ? { owner: session.owner, via: 'session', provider: session.provider, name: session.name } : null;
+}
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin');
@@ -41,9 +49,10 @@ export default {
       // Bản nháp chỉ phục vụ cùng origin: chặn mọi origin khác (kể cả origin trong danh sách CORS) cho cả đọc lẫn ghi.
       if (origin && origin !== new URL(request.url).origin) return json({ error: 'Chỉ cho phép truy cập bản nháp từ cùng origin.' }, 403);
       if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
-      if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access.' }, 401);
-      // Chỉ đọc danh tính sau khi chữ ký và các claim JWT đã được xác minh.
-      const owner = subject(request);
+      // Chỉ đọc danh tính sau khi chữ ký JWT hoặc phiên đăng nhập đã được xác minh.
+      const who = await identify(request, env);
+      if (!who) return json({ error: LOGIN_REQUIRED }, 401);
+      const owner = who.owner;
       if (!owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
       const expectedScope = request.headers.get('X-ShopAI-User-Scope');
       if (expectedScope && expectedScope !== await scopeFor(owner)) return json({ code: 'ACCOUNT_CHANGED', error: 'Tài khoản đã thay đổi. Tải lại trang trước khi truy cập bản nháp.' }, 403);
@@ -52,17 +61,20 @@ export default {
     if (path === '/session') {
       if (request.method !== 'GET') return json({ error: 'Chỉ hỗ trợ GET.' }, 405, { Allow: 'GET' });
       if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
-      if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access.' }, 401);
-      const owner = subject(request);
+      const who = await identify(request, env);
+      if (!who) return json({ error: LOGIN_REQUIRED }, 401);
+      const owner = who.owner;
       if (!owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
-      return json({ userScope: await scopeFor(owner), capabilities: { ai: true, drafts: Boolean(env.DB), publishing: false, scheduling: false, inbox: false }, version: env.CF_VERSION_METADATA?.id || null, release: env.RELEASE_SHA || null });
+      return json({ userScope: await scopeFor(owner), auth: who.via, account: who.via === 'session' ? { provider: who.provider, name: who.name } : null, capabilities: { ai: true, drafts: Boolean(env.DB), publishing: false, scheduling: false, inbox: false }, version: env.CF_VERSION_METADATA?.id || null, release: env.RELEASE_SHA || null });
     }
-    // Giao diện và API cùng origin; vẫn bắt buộc JWT hợp lệ.
+    if (path.startsWith('/auth/')) return handleAuth(request, env, { json, headers, accessUser: async () => Boolean(request.headers.get('Cf-Access-Jwt-Assertion')) && await authenticate(request, env) });
+    // Giao diện và API cùng origin; cần Access JWT hợp lệ hoặc phiên đăng nhập, nếu không thì hiện trang đăng nhập.
     if (path === '/' || path === '/index.html') {
       if (request.method !== 'GET' && request.method !== 'HEAD') return json({ error: 'Chỉ hỗ trợ GET hoặc HEAD.' }, 405, { Allow: 'GET, HEAD' });
       if (!configured(env) || typeof env.FRONTEND_HTML !== 'string') return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
-      if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access tại hostname ứng dụng.' }, 401);
-      const owner = subject(request);
+      const who = await identify(request, env);
+      if (!who) return loginResponse(env, request.method);
+      const owner = who.owner;
       if (!owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
       const scope = await scopeFor(owner);
       return new Response(request.method === 'HEAD' ? null : env.FRONTEND_HTML.replace('<head>', '<head><meta name="shopai-ai-endpoint" content="/ai"><meta name="shopai-user-scope" content="' + scope + '">'), { headers: {
@@ -87,8 +99,9 @@ export default {
     }
     if (request.method !== 'POST') return json({ error: 'Chỉ hỗ trợ POST.' }, 405, { Allow: 'POST, OPTIONS' });
     if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
-    if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access.' }, 401);
-    const owner = subject(request);
+    const who = await identify(request, env);
+    if (!who) return json({ error: LOGIN_REQUIRED }, 401);
+    const owner = who.owner;
     if (!owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
     try {
       const key = await scopeFor(owner);

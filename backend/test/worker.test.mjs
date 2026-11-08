@@ -104,7 +104,8 @@ test('Giao diện yêu cầu JWT, hỗ trợ HEAD, và chèn endpoint cùng orig
   const make=(path,method='GET',jwt=valid)=>new Request('https://backend.example'+path,{method,headers:jwt?{'Cf-Access-Jwt-Assertion':jwt}:{}});
   const expired=await token({exp:0});
   for(const path of ['/','/index.html']){
-    for(const jwt of [null,'invalid',expired])assert.equal((await worker.fetch(make(path,'GET',jwt),e)).status,401);
+    // JWT thiếu/sai/hết hạn và không có phiên: trả trang đăng nhập (200) thay vì giao diện ứng dụng.
+    for(const jwt of [null,'invalid',expired]){const login=await worker.fetch(make(path,'GET',jwt),e);assert.equal(login.status,200);assert.doesNotMatch(await login.text(),/shopai-user-scope|shopai-ai-endpoint/)}
     const response=await worker.fetch(make(path),e);
     assert.equal(response.status,200);assert.match(await response.text(),/name="shopai-ai-endpoint" content="\/ai"/);
     const head=await worker.fetch(make(path,'HEAD'),e);

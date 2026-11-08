@@ -6,6 +6,10 @@ const frontendImport = "import frontend from '../../index.html';";
 let app = await readFile(new URL('src/app.js', root), 'utf8');
 if (!app.includes(frontendImport)) throw new Error('Không khớp điểm đóng gói giao diện; dừng build.');
 app = app.replace(frontendImport, 'const frontend = ' + JSON.stringify(html) + ';');
+const loginImport = "import loginPage from '../../login.html';";
+if (!app.includes(loginImport)) throw new Error('Không khớp điểm đóng gói trang đăng nhập; dừng build.');
+const loginHtml = await readFile(new URL('../login.html', root), 'utf8');
+app = app.replace(loginImport, () => 'const loginPage = ' + JSON.stringify(loginHtml) + ';');
 let release = process.env.SHOPAI_RELEASE_SHA || process.env.GITHUB_SHA || process.env.CF_COMMIT_HASH;
 if (!release) {
   try { release = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); }
@@ -18,5 +22,6 @@ await mkdir(new URL('dist/', root), { recursive: true });
 await writeFile(new URL('dist/app.js', root), app);
 await copyFile(new URL('src/worker.js', root), new URL('dist/worker.js', root));
 await copyFile(new URL('src/drafts.js', root), new URL('dist/drafts.js', root));
+await copyFile(new URL('src/auth.js', root), new URL('dist/auth.js', root));
 console.log('Đã đóng gói giao diện từ repository cùng backend; không cần tải HTML bên ngoài lúc chạy.');
 

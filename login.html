@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Đăng nhập ShopAI</title>
+<style>
+:root{--p:#030213;--fg:#0a0a0a;--mut:#ececf0;--mutf:#717182;--in:#f3f3f5;--bd:#0000001a;--sb:#fafafa;--red:#d4183d;--green:#16a34a;--r:10px;--fb:#1877F2;--zalo:#0068FF}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font-family:Inter,Geist,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--fg);background:var(--sb);font-size:14px;line-height:1.5;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 16px}
+main{width:100%;max-width:400px;background:#fff;border:1px solid var(--bd);border-radius:14px;padding:28px 24px;box-shadow:0 1px 2px #0000000d}
+.logo{font-weight:700;font-size:18px;display:flex;gap:8px;align-items:center;margin-bottom:20px}
+.logo i{background:var(--p);color:#fff;border-radius:8px;width:30px;height:30px;display:grid;place-items:center;font-style:normal}
+h1{font-size:22px;line-height:1.3;margin:0 0 6px}
+.muted{color:var(--mutf)}
+.lead{margin:0 0 20px}
+.status{border-radius:var(--r);padding:10px 12px;margin:0 0 16px;background:var(--in);font-size:13px}
+.status.error{background:#d4183d14;color:var(--red);border:1px solid #d4183d33}
+.status.ok{background:#16a34a14;color:var(--green);border:1px solid #16a34a33}
+.stack{display:flex;flex-direction:column;gap:10px}
+.btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:44px;padding:10px 14px;border-radius:var(--r);border:1px solid var(--bd);background:#fff;color:var(--fg);font:inherit;font-weight:600;cursor:pointer;text-decoration:none}
+.btn:focus-visible,input:focus-visible{outline:2px solid var(--p);outline-offset:2px}
+.btn[disabled],.btn[aria-disabled="true"]{opacity:.6;cursor:not-allowed}
+.btn svg{flex:none}
+.btn.fb{background:var(--fb);border-color:var(--fb);color:#fff}
+.btn.zalo{background:var(--zalo);border-color:var(--zalo);color:#fff}
+.btn.pri{background:var(--p);border-color:var(--p);color:#fff}
+.btn.link{background:none;border:none;min-height:auto;padding:4px;width:auto;font-weight:500;color:var(--mutf);text-decoration:underline}
+.zalo-mark{font-weight:800;font-size:13px;background:#fff;color:var(--zalo);border-radius:6px;padding:1px 5px}
+.divider{display:flex;align-items:center;gap:10px;color:var(--mutf);font-size:12px;margin:6px 0}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--bd)}
+label{display:block;font-weight:600;font-size:13px;margin:0 0 6px}
+input{width:100%;min-height:44px;padding:10px 12px;border-radius:var(--r);border:1px solid var(--bd);background:var(--in);font:inherit;color:inherit}
+input.code{font-size:22px;letter-spacing:8px;text-align:center;font-variant-numeric:tabular-nums}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.spinner{width:16px;height:16px;border:2px solid var(--mut);border-top-color:var(--p);border-radius:50%;animation:spin .8s linear infinite;display:inline-block;vertical-align:-3px;margin-right:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.note{font-size:12px;color:var(--mutf);margin:20px 0 0;border-top:1px solid var(--bd);padding-top:14px}
+.note p{margin:0 0 6px}
+.owner{font-size:12px;margin:14px 0 0;text-align:center}
+.owner a{color:var(--mutf)}
+footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
+[hidden]{display:none!important}
+@media (min-width:768px){main{padding:36px 36px 28px}h1{font-size:24px}}
+</style>
+</head>
+<body>
+<main>
+  <div class="logo"><i>S</i>ShopAI</div>
+  <h1>Đăng nhập ShopAI</h1>
+  <p class="lead muted">Trợ lý soạn nội dung bán hàng của bạn. Chọn một cách đăng nhập để tiếp tục.</p>
+  <div id="status" class="status" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span>Đang tải phương thức đăng nhập…</div>
+  <div id="methods" class="stack" hidden>
+    <button type="button" id="fb" class="btn fb" hidden>
+      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.69 4.53-4.69 1.31 0 2.68.24 2.68.24v2.97h-1.51c-1.49 0-1.96.93-1.96 1.89v2.25h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07z"/></svg>
+      <span>Tiếp tục với Facebook</span>
+    </button>
+    <a id="zalo" class="btn zalo" href="/auth/zalo/start" hidden><span class="zalo-mark" aria-hidden="true">Zalo</span><span>Tiếp tục với Zalo</span></a>
+    <div id="divider" class="divider" hidden>hoặc dùng email</div>
+    <form id="emailForm" class="stack" hidden novalidate>
+      <div>
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" inputmode="email" autocomplete="email" maxlength="254" placeholder="ban@vidu.vn" required>
+      </div>
+      <button type="submit" class="btn pri" id="sendCode">
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+        <span>Gửi mã đăng nhập</span>
+      </button>
+    </form>
+    <form id="codeForm" class="stack" hidden novalidate>
+      <p class="muted" style="margin:0">Mã gồm 6 chữ số đã được gửi tới <b id="sentTo"></b>. Mã có hiệu lực trong 10 phút.</p>
+      <div>
+        <label for="code">Mã đăng nhập</label>
+        <input id="code" name="code" class="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="••••••" required>
+      </div>
+      <button type="submit" class="btn pri" id="verify"><span>Xác nhận và đăng nhập</span></button>
+      <div class="row">
+        <button type="button" class="btn link" id="changeEmail">Đổi email</button>
+        <button type="button" class="btn link" id="resend" disabled>Gửi lại mã</button>
+      </div>
+    </form>
+  </div>
+  <div id="setup" class="status" hidden>Đăng nhập đang được thiết lập. Vui lòng quay lại sau ít phút.</div>
+  <p class="owner" id="owner" hidden><a id="ownerLink" href="#" rel="noopener">Chủ cửa hàng: đăng nhập qua Cloudflare Access</a></p>
+  <div class="note">
+    <p>Khi đăng nhập, ShopAI chỉ dùng tên, mã định danh tài khoản (Facebook/Zalo) hoặc địa chỉ email của bạn để nhận diện phiên làm việc và lưu bản nháp. ShopAI không tự đăng bài hay gửi tin nhắn thay bạn.</p>
+    <p>Phiên đăng nhập được lưu 30 ngày trên thiết bị này; bạn có thể đăng xuất bất cứ lúc nào.</p>
+  </div>
+</main>
+<footer>© ShopAI × ShopTrack</footer>
+<script nonce="__CSP_NONCE__">
+(() => {
+  const $ = s => document.querySelector(s);
+  const statusBox = $('#status');
+  const ERRORS = {
+    zalo_state: 'Phiên đăng nhập Zalo không hợp lệ hoặc đã được dùng. Vui lòng thử lại.',
+    zalo_het_han: 'Phiên đăng nhập Zalo đã hết hạn (quá 10 phút). Vui lòng thử lại.',
+    zalo_tu_choi: 'Bạn đã hủy đăng nhập hoặc Zalo chưa cấp quyền.',
+    zalo_token: 'Zalo từ chối mã xác thực. Vui lòng thử lại sau ít phút.',
+    zalo_ho_so: 'Không đọc được hồ sơ Zalo. Vui lòng thử lại.',
+    zalo_chua_cau_hinh: 'Đăng nhập Zalo chưa được kích hoạt.',
+    zalo_tam_loi: 'Đăng nhập Zalo tạm thời gặp lỗi. Vui lòng thử lại sau.'
+  };
+  function show(message, kind = '') {
+    statusBox.replaceChildren();
+    if (kind === 'loading') { const s = document.createElement('span'); s.className = 'spinner'; s.setAttribute('aria-hidden', 'true'); statusBox.appendChild(s); }
+    statusBox.appendChild(document.createTextNode(message || ''));
+    statusBox.className = 'status' + (kind === 'error' || kind === 'ok' ? ' ' + kind : '');
+    statusBox.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    statusBox.hidden = !message;
+  }
+  function busy(on) { document.querySelectorAll('#methods button, #methods input').forEach(el => { if (el.id !== 'resend') el.disabled = on; }); const z = $('#zalo'); z.setAttribute('aria-disabled', on ? 'true' : 'false'); }
+  async function post(path, data) {
+    try {
+      const r = await fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      let body = null; try { body = await r.json(); } catch { body = null; }
+      return { ok: r.ok, status: r.status, data: body || {} };
+    } catch { return { ok: false, status: 0, data: { error: 'Không kết nối được máy chủ. Kiểm tra mạng và thử lại.' } }; }
+  }
+  function done() { show('Đăng nhập thành công. Đang mở ShopAI…', 'ok'); location.replace('/'); }
+
+  const params = new URLSearchParams(location.search);
+  const initialError = ERRORS[params.get('loi')] || '';
+  if (params.has('loi')) history.replaceState(null, '', location.pathname);
+
+  function setupFacebook(appId) {
+    const btn = $('#fb'), label = btn.querySelector('span');
+    btn.hidden = false; btn.disabled = true; label.textContent = 'Đang tải Facebook…';
+    let ready = false, failed = false;
+    const fail = message => { if (ready || failed) return; failed = true; btn.disabled = true; label.textContent = 'Facebook chưa sẵn sàng'; show(message || 'Không tải được Facebook SDK. Kiểm tra mạng hoặc trình chặn quảng cáo rồi tải lại trang.', 'error'); };
+    window.fbAsyncInit = () => {
+      try { window.FB.init({ appId, version: 'v21.0', cookie: false, xfbml: false, status: false }); ready = true; btn.disabled = false; label.textContent = 'Tiếp tục với Facebook'; }
+      catch { fail('Ứng dụng Facebook chưa được cấu hình đúng. Vui lòng dùng cách đăng nhập khác.'); }
+    };
+    const script = document.createElement('script');
+    script.src = 'https://connect.facebook.net/vi_VN/sdk.js'; script.async = true; script.crossOrigin = 'anonymous';
+    script.onerror = () => fail();
+    document.head.appendChild(script);
+    setTimeout(() => fail(), 15000);
+    btn.addEventListener('click', () => {
+      if (!ready || !window.FB) return;
+      busy(true); show('Đang chờ Facebook xác nhận…', 'loading');
+      let answered = false;
+      const timer = setTimeout(() => { if (!answered) { busy(false); show('Facebook chưa phản hồi. Nếu cửa sổ đăng nhập bị chặn, hãy cho phép cửa sổ bật lên rồi thử lại.', 'error'); } }, 120000);
+      window.FB.login(response => {
+        answered = true; clearTimeout(timer);
+        if (!response || response.status !== 'connected' || !response.authResponse || !response.authResponse.accessToken) {
+          busy(false); show('Bạn đã hủy đăng nhập Facebook, hoặc tên miền này chưa được khai báo trong ứng dụng Facebook.', 'error'); return;
+        }
+        post('/auth/facebook', { accessToken: response.authResponse.accessToken }).then(r => {
+          if (r.ok) return done();
+          busy(false); show(r.data.error || 'Đăng nhập Facebook thất bại. Vui lòng thử lại.', 'error');
+        });
+      }, { scope: 'public_profile' });
+    });
+  }
+
+  let resendTimer = null;
+  function countdown(seconds) {
+    const btn = $('#resend'); clearInterval(resendTimer);
+    let left = Math.max(1, Math.min(3600, Number(seconds) || 60));
+    const tick = () => { if (left <= 0) { clearInterval(resendTimer); btn.disabled = false; btn.textContent = 'Gửi lại mã'; return; } btn.disabled = true; btn.textContent = 'Gửi lại mã (' + left + ' giây)'; left--; };
+    tick(); resendTimer = setInterval(tick, 1000);
+  }
+  async function sendCode(email) {
+    busy(true); show('Đang gửi mã tới email của bạn…', 'loading');
+    const r = await post('/auth/email/start', { email });
+    busy(false);
+    if (r.ok || (r.status === 429 && r.data.retryAfter && r.data.retryAfter <= 60)) {
+      $('#sentTo').textContent = email;
+      $('#emailForm').hidden = true; $('#codeForm').hidden = false;
+      countdown(r.data.retryAfter || 60);
+      show(r.ok ? 'Đã gửi mã. Kiểm tra hộp thư đến (và thư rác) của bạn.' : r.data.error, r.ok ? 'ok' : 'error');
+      $('#code').focus();
+    } else show(r.data.error || 'Không gửi được mã. Vui lòng thử lại.', 'error');
+  }
+  function setupEmail() {
+    $('#emailForm').hidden = false;
+    $('#emailForm').addEventListener('submit', event => {
+      event.preventDefault();
+      const email = $('#email').value.trim();
+      if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { show('Vui lòng nhập địa chỉ email hợp lệ.', 'error'); $('#email').focus(); return; }
+      sendCode(email);
+    });
+    $('#code').addEventListener('input', event => { event.target.value = event.target.value.replace(/\D/g, '').slice(0, 6); });
+    $('#codeForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const code = $('#code').value.trim();
+      if (!/^\d{6}$/.test(code)) { show('Mã gồm đúng 6 chữ số.', 'error'); $('#code').focus(); return; }
+      busy(true); show('Đang xác minh mã…', 'loading');
+      const r = await post('/auth/email/verify', { email: $('#sentTo').textContent, code });
+      if (r.ok) return done();
+      busy(false); show(r.data.error || 'Không xác minh được mã. Vui lòng thử lại.', 'error');
+      $('#code').select();
+    });
+    $('#resend').addEventListener('click', () => sendCode($('#sentTo').textContent));
+    $('#changeEmail').addEventListener('click', () => { clearInterval(resendTimer); $('#codeForm').hidden = true; $('#emailForm').hidden = false; $('#code').value = ''; show(''); $('#email').focus(); });
+  }
+
+  $('#zalo').addEventListener('click', event => {
+    if ($('#zalo').getAttribute('aria-disabled') === 'true') { event.preventDefault(); return; }
+    show('Đang chuyển tới Zalo…', 'loading');
+  });
+
+  fetch('/auth/providers', { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+    .then(p => {
+      show(initialError, initialError ? 'error' : '');
+      const fb = Boolean(p.facebook && p.facebook.enabled && /^\d{5,20}$/.test(String(p.facebook.appId || '')));
+      const zalo = Boolean(p.zalo && p.zalo.enabled);
+      const email = Boolean(p.email && p.email.enabled);
+      $('#methods').hidden = !(fb || zalo || email);
+      if (fb) setupFacebook(String(p.facebook.appId));
+      $('#zalo').hidden = !zalo;
+      if (email) setupEmail();
+      $('#divider').hidden = !(email && (fb || zalo));
+      $('#setup').hidden = fb || zalo || email;
+      if (p.access && typeof p.access.url === 'string' && /^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/i.test(p.access.url)) { $('#ownerLink').href = p.access.url; $('#owner').hidden = false; }
+    })
+    .catch(() => show('Không tải được phương thức đăng nhập. Vui lòng tải lại trang.', 'error'));
+})();
+</script>
+</body>
+</html>

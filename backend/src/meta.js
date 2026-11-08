@@ -122,8 +122,20 @@ export async function handleMeta(req,env,who,json){
   const long=await longResp.json().catch(()=>({}));
   if(!longResp.ok||typeof long.access_token!=='string')throw Error('META_LONG_TOKEN_FAILED');
   pages=await graphRequest(env,'me/accounts',long.access_token,{fields:'id,name,access_token,instagram_business_account{id,username}',limit:'100'});
+  const items=Array.isArray(pages.data)?[...pages.data]:[];
+  const seenCursors=new Set();
+  // Page inventory may span multiple pages; never report partial authorization as complete.
+  for(let pageNo=1;pages.paging?.next;pageNo++){
+   const after=pages.paging?.cursors?.after;
+   if(pageNo>=10||!after||seenCursors.has(after)||typeof after!=='string'||after.length>1024)throw Error('META_PAGE_LIST_INCOMPLETE');
+   seenCursors.add(after);
+   pages=await graphRequest(env,'me/accounts',long.access_token,{fields:'id,name,access_token,instagram_business_account{id,username}',limit:'100',after});
+   if(!Array.isArray(pages.data))throw Error('META_PAGE_LIST_INVALID');
+   items.push(...pages.data);
+  }
+  pages={data:items};
  }catch{return error(json,'meta_authorization_failed',502);}
- const items=Array.isArray(pages.data)?pages.data:[];
+ const items=pages.data;
  let count=0;
  for(const page of items){
   if(!/^\d+$/.test(String(page.id||''))||typeof page.access_token!=='string')continue;

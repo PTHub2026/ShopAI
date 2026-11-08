@@ -136,9 +136,28 @@ test('Session capabilities require a verified subject and separate local account
 }));
 
 test('Storage refuses an editor belonging to a different Access account',async()=>run(async()=>{
-  const response=await worker.fetch(request({path:'/storage/drafts',method:'GET',headers:{'X-ShopAI-User-Scope':'b'.repeat(64)}}),env({DB:{}}));
+  const response=await worker.fetch(request({path:'/storage/drafts',method:'GET',headers:{Origin:'https://backend.example','X-ShopAI-User-Scope':'b'.repeat(64)}}),env({DB:{}}));
   assert.equal(response.status,403);assert.equal((await response.json()).code,'ACCOUNT_CHANGED');
-  assert.equal((await worker.fetch(request({path:'/storage/drafts',method:'GET',jwt:null}),env({DB:{}}))).status,401);
+  assert.equal((await worker.fetch(request({path:'/storage/drafts',method:'GET',jwt:null,headers:{Origin:'https://backend.example'}}),env({DB:{}}))).status,401);
+}));
+test('Bản nháp chỉ phục vụ cùng origin: mọi origin khác bị từ chối ngay cả khi nằm trong CORS',async()=>run(async()=>{
+  // Origin github.io nằm trong ALLOWED_ORIGINS nhưng khác origin của backend → phải 403 trước cả khi xác thực.
+  for(const method of ['GET','PUT','DELETE']){
+    const response=await worker.fetch(request({path:'/storage/drafts/d_abc',method,body:method==='PUT'?{draft:{},revision:0}:undefined}),env({DB:{}}));
+    assert.equal(response.status,403);
+    const body=await response.json();
+    assert.equal(body.code,undefined);
+    assert.match(body.error,/cùng origin/);
+  }
+}));
+test('Các header bảo mật xuất hiện trên phản hồi JSON và trang HTML',async()=>run(async()=>{
+  const e=env({FRONTEND_HTML:'<html><head></head><body>ShopAI</body></html>'});
+  const jsonResp=await worker.fetch(request({path:'/health',method:'GET'}),e);
+  for(const resp of [jsonResp,await worker.fetch(new Request('https://backend.example/',{method:'GET',headers:{'Cf-Access-Jwt-Assertion':valid}}),e)]){
+    assert.equal(resp.headers.get('Strict-Transport-Security'),'max-age=15552000; includeSubDomains');
+    assert.equal(resp.headers.get('X-Frame-Options'),'DENY');
+    assert.equal(resp.headers.get('Permissions-Policy'),'geolocation=(), microphone=(), camera=()');
+  }
 }));
 test('Renewing a JWT does not reset the user AI rate-limit key',async()=>run(async()=>{
   const keys=[];const e=env({AI_RATE_LIMITER:{limit:async({key})=>{keys.push(key);return {success:true}}}});

@@ -32,12 +32,14 @@ export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin');
     const allowed = (env.ALLOWED_ORIGINS || '').split(',').map(x => x.trim()).filter(Boolean);
-    const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff' };
+    const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff', 'Strict-Transport-Security': 'max-age=15552000; includeSubDomains', 'X-Frame-Options': 'DENY', 'Permissions-Policy': 'geolocation=(), microphone=(), camera=()' };
     if (origin && allowed.includes(origin)) Object.assign(headers, { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Credentials': 'true' });
     const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), { status, headers: { ...headers, ...extra } });
     if (origin && origin !== new URL(request.url).origin && !allowed.includes(origin)) return json({ error: 'Nguồn truy cập không được phép.' }, 403);
     const path = new URL(request.url).pathname;
     if (path.startsWith('/storage/')) {
+      // Bản nháp chỉ phục vụ cùng origin: chặn mọi origin khác (kể cả origin trong danh sách CORS) cho cả đọc lẫn ghi.
+      if (origin && origin !== new URL(request.url).origin) return json({ error: 'Chỉ cho phép truy cập bản nháp từ cùng origin.' }, 403);
       if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
       if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access.' }, 401);
       // Chỉ đọc danh tính sau khi chữ ký và các claim JWT đã được xác minh.
@@ -66,6 +68,8 @@ export default {
       return new Response(request.method === 'HEAD' ? null : env.FRONTEND_HTML.replace('<head>', '<head><meta name="shopai-ai-endpoint" content="/ai"><meta name="shopai-user-scope" content="' + scope + '">'), { headers: {
         'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
+        'Strict-Transport-Security': 'max-age=15552000; includeSubDomains', 'X-Frame-Options': 'DENY',
+        'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
         'Content-Security-Policy': "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
       } });
     }

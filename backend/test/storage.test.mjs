@@ -19,9 +19,10 @@ function database() {
 }
 const draft = (id='draft-a', content='Nội dung người dùng') => ({ id, type:'post', content, channels:[], status:'draft', media:[], assets:[], custom:{} });
 const json = (data, status=200, headers={}) => Response.json(data, { status, headers });
-function call(DB, {owner='alice', id='draft-a', method='PUT', body={draft:draft(id),revision:0}, query='', headers={}, raw}={}) {
+function call(DB, {owner='alice', id='draft-a', method='PUT', body={draft:draft(id),revision:0}, query='', headers={}, raw, limiter}={}) {
   const url='https://app.example/storage/drafts'+(id ? '/'+id : '')+query;
-  return drafts(new Request(url, { method, headers:{Origin:'https://app.example','Content-Type':'application/json',...headers}, ...(method==='GET'?{}:{body:raw ?? JSON.stringify(body)}) }), { DB, AI_RATE_LIMITER:{limit:async()=>({success:true})} }, owner, json);
+  const sendBody = method!=='GET' && method!=='DELETE';
+  return drafts(new Request(url, { method, headers:{Origin:'https://app.example','Content-Type':'application/json',...headers}, ...(sendBody?{body:raw ?? JSON.stringify(body)}:{}) }), { DB, AI_RATE_LIMITER: limiter || {limit:async()=>({success:true})} }, owner, json);
 }
 test('Draft revisions prevent overwrites and isolate owners', async()=>{
   const db=database();
@@ -68,5 +69,42 @@ test('Storage rejects malformed, unsupported or oversized payloads without writi
     assert.equal((await call(db,{body:{draft:draft(),revision:Number.MAX_SAFE_INTEGER}})).status,400);
     assert.equal((await call(undefined)).status,503);
     assert.equal(db.sqlite.prepare('SELECT count(*) AS n FROM drafts').get().n,0);
+  } finally { db.sqlite.close(); }
+});
+test('Xóa bản nháp chỉ tác động đúng chủ sở hữu và từ chối ghi khác origin',async()=>{
+  const db=database();
+  try {
+    assert.equal((await call(db)).status,200); // alice tạo draft-a
+    // Chủ khác không xóa được bản nháp của alice: deleted=false, dữ liệu còn nguyên.
+    const other=await call(db,{owner:'bob',method:'DELETE'});
+    assert.equal(other.status,200);assert.equal((await other.json()).deleted,false);
+    assert.equal(db.sqlite.prepare('SELECT count(*) AS n FROM drafts').get().n,1);
+    // DELETE khác origin bị chặn như ghi.
+    assert.equal((await call(db,{method:'DELETE',headers:{Origin:'https://evil.example'}})).status,403);
+    // Thiếu id không cho DELETE.
+    assert.equal((await call(db,{id:null,method:'DELETE'})).status,405);
+    // Chủ sở hữu xóa thành công.
+    const ok=await call(db,{method:'DELETE'});
+    assert.equal(ok.status,200);assert.equal((await ok.json()).deleted,true);
+    assert.equal(db.sqlite.prepare('SELECT count(*) AS n FROM drafts').get().n,0);
+    // Xóa lại bản không còn: deleted=false.
+    assert.equal((await (await call(db,{method:'DELETE'})).json()).deleted,false);
+  } finally { db.sqlite.close(); }
+});
+test('Giới hạn tần suất chỉ áp cho ghi (PUT/DELETE), không áp cho đọc (GET)',async()=>{
+  const db=database();
+  try {
+    const keys=[];
+    const deny={limit:async v=>{keys.push(v.key);return {success:false}}};
+    // GET không bị giới hạn ngay cả khi limiter từ chối.
+    assert.equal((await call(db,{id:null,method:'GET',limiter:deny})).status,200);
+    assert.equal((await call(db,{method:'GET',limiter:deny})).status,404); // chưa có bản nháp, nhưng không 429
+    assert.equal(keys.length,0,'GET không được gọi limiter');
+    // PUT bị giới hạn → 429 và dùng key drafts-write:<owner>.
+    const put=await call(db,{limiter:deny});
+    assert.equal(put.status,429);assert.equal(put.headers.get('Retry-After'),'60');
+    // DELETE bị giới hạn → 429.
+    assert.equal((await call(db,{method:'DELETE',limiter:deny})).status,429);
+    assert.deepEqual(keys,['drafts-write:alice','drafts-write:alice']);
   } finally { db.sqlite.close(); }
 });

@@ -12,8 +12,10 @@ const sha=async s=>bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256
 const random=()=>btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 const version=e=>/^v\d{1,2}\.0$/.test(e.META_GRAPH_VERSION||'')?e.META_GRAPH_VERSION:'v26.0';
 const graph=(e,path)=>'https://graph.facebook.com/'+version(e)+'/'+path;
+const appId=e=>e.META_APP_ID||e.FACEBOOK_APP_ID;
+const appSecret=e=>e.META_APP_SECRET||e.FACEBOOK_APP_SECRET;
 export function metaConfigured(e){
- return /^\d{5,20}$/.test(String(e.META_APP_ID||''))&&Boolean(e.META_APP_SECRET)&&
+ return /^\d{5,20}$/.test(String(appId(e)||''))&&Boolean(appSecret(e))&&
  typeof e.META_REDIRECT_URI==='string'&&/^https:\/\/[^/?#]+\/api\/social\/meta\/callback$/.test(e.META_REDIRECT_URI)&&
  Boolean(e.SOCIAL_TOKEN_KEY);
 }
@@ -80,7 +82,7 @@ export async function handleMeta(req,env,who,json){
   const state=random(),t=stamp();
   await db.prepare('INSERT INTO meta_oauth_states(state_hash,shop_id,actor,expires_at,created_at) VALUES(?,?,?,?,?)').bind(await sha(state),ctx.shop.id,who.owner,t+600,t).run();
   const auth=new URL('https://www.facebook.com/'+version(env)+'/dialog/oauth');
-  auth.search=new URLSearchParams({client_id:env.META_APP_ID,redirect_uri:env.META_REDIRECT_URI,response_type:'code',state,scope:'pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish'}).toString();
+  auth.search=new URLSearchParams({client_id:appId(env),redirect_uri:env.META_REDIRECT_URI,response_type:'code',state,scope:'pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish'}).toString();
   return json({authorizationUrl:auth.toString()});
  }
  if(req.method!=='GET')return error(json,'method_not_allowed',405);
@@ -97,13 +99,13 @@ export async function handleMeta(req,env,who,json){
  let pages;
  try {
   const tokenUrl=new URL(graph(env,'oauth/access_token'));
-  tokenUrl.search=new URLSearchParams({client_id:env.META_APP_ID,client_secret:env.META_APP_SECRET,redirect_uri:env.META_REDIRECT_URI,code}).toString();
+  tokenUrl.search=new URLSearchParams({client_id:appId(env),client_secret:appSecret(env),redirect_uri:env.META_REDIRECT_URI,code}).toString();
   const tokenResp=await fetch(tokenUrl,{redirect:'manual',signal:AbortSignal.timeout(12000)});
   const tokenData=await tokenResp.json().catch(()=>({}));
   if(!tokenResp.ok||typeof tokenData.access_token!=='string')throw Error('META_TOKEN_FAILED');
   // Exchange short-lived token before deriving page tokens.
   const longUrl=new URL(graph(env,'oauth/access_token'));
-  longUrl.search=new URLSearchParams({grant_type:'fb_exchange_token',client_id:env.META_APP_ID,client_secret:env.META_APP_SECRET,fb_exchange_token:tokenData.access_token}).toString();
+  longUrl.search=new URLSearchParams({grant_type:'fb_exchange_token',client_id:appId(env),client_secret:appSecret(env),fb_exchange_token:tokenData.access_token}).toString();
   const longResp=await fetch(longUrl,{redirect:'manual',signal:AbortSignal.timeout(12000)});
   const long=await longResp.json().catch(()=>({}));
   if(!longResp.ok||typeof long.access_token!=='string')throw Error('META_LONG_TOKEN_FAILED');

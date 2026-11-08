@@ -160,3 +160,11 @@ test('Reasoning-only, tool-only and truncated outputs never become successful co
     assert.equal((await worker.fetch(request(),env({AI:{run:async()=>result}}))).status,502);
   }
 }));
+
+test('Facebook endpoints require verified Access and account scope before OAuth',async()=>run(async()=>{
+  assert.equal((await worker.fetch(request({path:'/channels/facebook',method:'GET',jwt:null}),env())).status,401);
+  assert.equal((await worker.fetch(request({path:'/channels/facebook',method:'GET',headers:{'X-ShopAI-User-Scope':'wrong'}}),env())).status,403);
+  assert.equal((await worker.fetch(request({path:'/channels/facebook/start',headers:{Origin:'https://backend.example'}}),env())).status,403);
+  const response=await worker.fetch(request({path:'/channels/facebook',method:'GET'}),env());
+  assert.equal(response.status,200);assert.equal((await response.json()).configured,false);
+}));

@@ -1,3 +1,4 @@
+import { facebook } from './facebook.js';
 import { drafts } from './drafts.js';
 const TASKS = new Set(['generate', 'improve', 'adapt', 'reply']);
 const decode = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0));
@@ -37,6 +38,15 @@ export default {
     const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), { status, headers: { ...headers, ...extra } });
     if (origin && origin !== new URL(request.url).origin && !allowed.includes(origin)) return json({ error: 'Nguồn truy cập không được phép.' }, 403);
     const path = new URL(request.url).pathname;
+    if (path === '/channels/facebook' || path.startsWith('/channels/facebook/')) {
+      if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
+      if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access.' }, 401);
+      const owner = subject(request);
+      if (!owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
+      const expected = request.headers.get('X-ShopAI-User-Scope');
+      if ((request.method === 'POST' || expected) && expected !== await scopeFor(owner)) return json({ error: 'Tài khoản đã thay đổi. Tải lại trang trước khi kết nối.' }, 403);
+      return facebook(request, env, owner, json);
+    }
     if (path.startsWith('/storage/')) {
       if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
       if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access.' }, 401);

@@ -207,3 +207,12 @@ test('Leaving and returning invalidates draft reads and old confirmation callbac
     }finally{r.close()}
   }
 });
+
+test('Managed channels are read from server and disabled until OAuth is configured',async()=>{
+  const r=runtime({fetchImpl:async path=>path==='/session'?Response.json(session):Response.json({configured:false,channels:[]})});
+  try{r.read("render('accounts')");await settle();assert.ok(r.w.document.querySelector('#facebook_connect').disabled);assert.match(r.w.document.querySelector('#facebook_status').textContent,/chưa.*cấu hình/i);assert.ok(!r.w.document.querySelector('#view').textContent.includes('Đã kết nối tất cả'))}finally{r.close()}
+});
+test('Channel inventory escapes provider text and never enables demo publishing',async()=>{
+ const r=runtime({fetchImpl:async path=>path==='/session'?Response.json(session):Response.json({configured:true,channels:[{pageId:'123',name:'<img src=x onerror=alert(1)>',status:'connected',verifiedAt:1000,scopes:['pages_show_list'],tasks:[]}]})});
+ try{r.read("render('accounts')");await settle();assert.equal(r.w.document.querySelectorAll('#facebook_list img').length,0);assert.match(r.w.document.querySelector('#facebook_list').textContent,/<img/);assert.equal(r.read('S.channels.length'),0);assert.match(r.w.document.querySelector('#view').textContent,/chưa bật/i)}finally{r.close()}
+});

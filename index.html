@@ -230,7 +230,7 @@ const V={};let route='create';
 function navRender(){const unread=S.convos.filter(c=>c.unread).length;const NEW=['feedback','groups','video','ai','library','inbox','response','bot'];
 $('#nav').innerHTML=MENU.map(([g,items])=>`<div class="grp">${g}</div>`+items.map(([k,ic,l])=>`<a href="#${k}" class="${route===k?'on':''}"><span>${ic}</span>${l}${k==='inbox'&&unread?`<span class="badge">${unread}</span>`:(NEW.includes(k)?'<span class="badge" style="background:#009588">MỚI</span>':'')}</a>`).join('')).join('');
 $('#mnav').innerHTML=MENU.flatMap(g=>g[1]).map(([k,ic,l])=>`<option value="${k}" ${route===k?'selected':''}>${ic} ${l}</option>`).join('')}
-function render(r){viewGeneration++;if(typeof r==='string')route=r;if(!V[route])route='create';navRender();const it=MENU.flatMap(g=>g[1]).find(m=>m[0]===route);$('#title').textContent=it?it[2]:(route==='qa'?'Kiểm thử tự động':'');V[route]();if(managedApp())$('#view').insertAdjacentHTML('afterbegin','<div class="card small" role="note">Ứng dụng máy chủ: AI và bản nháp cần phiên đăng nhập hợp lệ. Kết nối kênh, đăng bài, lịch đăng và gửi tin chưa được bật. Ảnh, video và cài đặt đang lưu trên thiết bị này.</div>');window.scrollTo(0,0)}
+function render(r){viewGeneration++;if(typeof r==='string')route=r;if(!V[route])route='create';navRender();const it=MENU.flatMap(g=>g[1]).find(m=>m[0]===route);$('#title').textContent=it?it[2]:(route==='qa'?'Kiểm thử tự động':'');V[route]();if(managedApp())$('#view').insertAdjacentHTML('afterbegin','<div class="card small" role="note">Ứng dụng máy chủ: AI và bản nháp cần phiên đăng nhập hợp lệ. Facebook cần cấu hình OAuth tại mục Kênh. Đăng bài, lịch đăng và gửi tin chưa được bật. Ảnh, video và cài đặt đang lưu trên thiết bị này.</div>');else $('#view').insertAdjacentHTML('afterbegin','<div class="card small" role="note"><b>Bản demo trên thiết bị.</b> <a href="https://shopai-backend.ct-3f8.workers.dev/">Mở ứng dụng đang hoạt động</a> để dùng AI đám mây và lưu bản nháp máy chủ.</div>');window.scrollTo(0,0)}
 function go(r){render(r);try{if(location.hash.slice(1)!==r)history.replaceState(null,'','#'+r)}catch(e){}}
 window.onhashchange=()=>{const k=location.hash.slice(1);if(k&&k!==route&&V[k])render(k)};
 document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#"]');if(!a)return;const k=a.getAttribute('href').slice(1);if(!k)return;e.preventDefault();go(k)});
@@ -490,9 +490,38 @@ function delScript(id){ask('Xóa kịch bản này?',()=>{S.scripts=S.scripts.fi
 async function aiScript(){try{const kw=$('#s_kw').value||$('#s_name').value;$('#s_rep').value=await AI.call('reply',{text:kw,name:'{ten}'})}catch(e){toast('Tác vụ AI chưa hoàn tất. Vui lòng thử lại.')}}
 
 /* ================= ACCOUNTS / HASHTAGS / SETTINGS ================= */
-V.accounts=()=>{const con=S.channels.filter(c=>c.connected),av=S.channels.filter(c=>!c.connected);$('#view').innerHTML=`<div class="card small" style="background:#fffbeb;border-color:#fde68a">${managedApp()?'Chưa có kết nối kênh thật. Các thao tác kết nối và gửi lên nền tảng đang bị khóa.':'ℹ️ Bản demo: việc kết nối kênh, đăng bài và tin nhắn đến đang được <b>mô phỏng</b> trong trình duyệt.'} Bản production cần backend OAuth với Meta Graph API (Facebook/Instagram/Threads), TikTok Content Posting API, YouTube Data API, Zalo OA API, Telegram Bot API, X API, LinkedIn API.</div>
+V.accounts=()=>{if(managedApp())return facebookAccounts();const con=S.channels.filter(c=>c.connected),av=S.channels.filter(c=>!c.connected);$('#view').innerHTML=`<div class="card small" style="background:#fffbeb;border-color:#fde68a">${managedApp()?'Chưa có kết nối kênh thật. Các thao tác kết nối và gửi lên nền tảng đang bị khóa.':'ℹ️ Bản demo: việc kết nối kênh, đăng bài và tin nhắn đến đang được <b>mô phỏng</b> trong trình duyệt.'} Bản production cần backend OAuth với Meta Graph API (Facebook/Instagram/Threads), TikTok Content Posting API, YouTube Data API, Zalo OA API, Telegram Bot API, X API, LinkedIn API.</div>
 <div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Nền tảng đã kết nối (${con.length})</h3><a class="small" href="#groups">👥 Quản lý nhóm kênh (${S.groups.length})</a></div><div style="height:10px"></div>${con.map(c=>`<div class="ch">${pfIcon(c.pf)}<div style="flex:1"><b>${esc(c.name)}</b><div class="small muted">${esc(c.handle)} · ${PF[c.pf].n}</div></div><button class="btn sm" onclick="toast('Đã làm mới kết nối (mô phỏng)')">Kết nối lại</button><button class="btn sm danger" onclick="setConn('${c.id}',false)">Ngắt kết nối</button></div>`).join('')||'<p class="muted">Chưa có</p>'}</div>
 <div class="card"><h3>Nền tảng khả dụng</h3><div class="grid g3">${av.map(c=>`<div class="ch" style="margin:0">${pfIcon(c.pf)}<div style="flex:1"><b>${PF[c.pf].n}</b><div class="small muted">${esc(c.name)}</div></div><button class="btn sm pri" onclick="setConn('${c.id}',true)">Kết nối</button></div>`).join('')||'<p class="muted">Đã kết nối tất cả</p>'}</div></div>`}
+function facebookAccounts(){
+  $('#view').innerHTML='<div class="card"><h3>Kết nối Facebook</h3><p>Chọn Trang bạn quản lý tại Meta. Token chỉ được lưu mã hóa trên máy chủ. Việc kết nối không tự đăng bài hoặc gửi tin.</p><p class="small muted">Quyền yêu cầu trong bước này: xem danh sách Trang bạn quản lý. Đăng bài, lịch đăng và hộp thư chưa bật trong bản này.</p><button id="facebook_connect" class="btn pri" disabled onclick="facebookConnect()">Tiếp tục đến Meta</button><p id="facebook_status" role="status">Đang kiểm tra cấu hình kết nối…</p><div id="facebook_list"></div></div><div class="card"><h3>Các kênh khác</h3><p class="muted">Instagram, Threads, TikTok, YouTube, Zalo OA, Telegram, X và LinkedIn chưa có kết nối máy chủ.</p></div>';
+  facebookLoad();
+}
+async function facebookLoad(){
+  const viewAt=viewGeneration,status=$('#facebook_status'),button=$('#facebook_connect'),list=$('#facebook_list');
+  try{
+    const result=await cloudRequest('/channels/facebook');
+    if(viewAt!==viewGeneration||!status?.isConnected)return;
+    if(typeof result.configured!=='boolean'||!Array.isArray(result.channels))throw Error('Phản hồi kết nối không hợp lệ.');
+    if(!result.configured){status.textContent='Facebook chưa được quản trị viên cấu hình và cấp quyền. Chưa có kết nối thật.';return}
+    button.disabled=false;status.textContent='Cấu hình OAuth đã có. Chỉ các Trang được Meta xác nhận mới xuất hiện bên dưới.';
+    list.innerHTML=result.channels.map(c=>{
+      if(!/^\d{1,32}$/.test(c.pageId)||typeof c.name!=='string'||!['connected','disconnected'].includes(c.status))throw Error('Thông tin Trang không hợp lệ.');
+      return '<div class="ch"><div style="flex:1"><b>'+esc(c.name)+'</b><div class="small muted">Trang '+esc(c.pageId)+' · '+(c.status==='connected'?'Đã xác nhận OAuth; chưa bật đăng/gửi':'Đã ngắt tại ShopAI')+'</div></div></div>';
+    }).join('')||'<p class="muted">Chưa có Trang được kết nối.</p>';
+  }catch(e){if(viewAt===viewGeneration&&status?.isConnected){button.disabled=true;status.textContent=e.message||'Không tải được kết nối.'}}
+}
+async function facebookConnect(){
+  const button=$('#facebook_connect'),status=$('#facebook_status'),viewAt=viewGeneration;
+  if(!button||button.disabled)return;button.disabled=true;
+  try{
+    const result=await cloudRequest('/channels/facebook/start',{method:'POST'});
+    const target=new URL(result.url);
+    if(target.origin!=='https://www.facebook.com'||target.pathname!=='/v27.0/dialog/oauth'||target.searchParams.get('redirect_uri')!==location.origin+'/channels/facebook/callback')throw Error('Địa chỉ OAuth không hợp lệ.');
+    if(viewAt!==viewGeneration||!button.isConnected)return;
+    location.assign(target.href);
+  }catch(e){if(viewAt===viewGeneration&&status?.isConnected){status.textContent=e.message||'Chưa bắt đầu được kết nối.';button.disabled=false}}
+}
 function setConn(id,v){if(!demoAction())return;chById(id).connected=v;if(!v)D.channels=D.channels.filter(x=>x!==id);save();V.accounts();toast(v?'Đã kết nối (mô phỏng)':'Đã ngắt kết nối')}
 V.hashtags=()=>{$('#view').innerHTML=`<div class="card"><h3>Tạo bộ hashtag</h3><div class="grid g2"><div><label>Tên bộ</label><input id="hs_n" placeholder="VD: Đại lý cước"></div><div><label>Hashtag (cách nhau bởi dấu cách)</label><input id="hs_t" placeholder="#ootd #fashion"></div></div><div style="margin-top:10px"><button class="btn pri" onclick="addHs()">Thêm bộ hashtag</button></div></div>${S.hashtags.map(h=>`<div class="card row" style="justify-content:space-between"><div><b>${esc(h.name)}</b><div>${h.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div></div><button class="btn sm danger" onclick="S.hashtags=S.hashtags.filter(x=>x.id!=='${h.id}');save();V.hashtags()">Xóa</button></div>`).join('')}`}
 function addHs(){const n=$('#hs_n').value.trim(),t=$('#hs_t').value.split(/[\s,]+/).filter(Boolean).map(x=>x.startsWith('#')?x:'#'+x);if(!n||!t.length)return toast('Nhập tên và hashtag');S.hashtags.push({id:uid(),name:n,tags:t});save();V.hashtags()}

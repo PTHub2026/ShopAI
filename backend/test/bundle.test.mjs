@@ -13,7 +13,7 @@ const app = (await import('data:text/javascript;base64,' + Buffer.from(appSource
 
 test('Build includes the repository frontend and serves it behind Access', async () => {
   const builtApp = await readFile(new URL('../dist/app.js', import.meta.url), 'utf8');
-  assert.ok(builtApp.includes('ShopAI'));
+  assert.ok(builtApp.includes('ShopPost'));
   const original = globalThis.fetch;
   globalThis.fetch = async () => { throw new Error('Không cho phép tải ngoài trong kiểm thử này'); };
   try {
@@ -30,7 +30,7 @@ test('Build includes the repository frontend and serves it behind Access', async
     assert.equal(page.status, 200);
     assert.match(page.headers.get('Content-Type'), /text\/html/);
     const loginHtml = await page.text();
-    assert.match(loginHtml, /Đăng nhập ShopAI/);
+    assert.match(loginHtml, /Đăng nhập ShopPost/);
     assert.equal(loginHtml.includes('shopai-user-scope'), false);
     assert.equal(loginHtml.includes('__CSP_NONCE__'), false);
     const nonce = /nonce="([A-Za-z0-9_-]+)"/.exec(loginHtml)[1];

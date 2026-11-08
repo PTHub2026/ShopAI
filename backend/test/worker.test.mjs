@@ -59,7 +59,7 @@ test('Bốn tác vụ thành công và prompt đúng tác vụ', async () => run
     let captured;
     const response = await worker.fetch(request({ body: { task, text: 'Dữ kiện thực tế' } }), env({ AI: { run: async (model, payload) => { captured = payload; return { response: ' Kết quả thử nghiệm ' }; } } }));
     assert.equal(response.status, 200); assert.deepEqual(await response.json(), { text: 'Kết quả thử nghiệm' });
-    assert.equal(JSON.parse(captured.messages[1].content).task, task); assert.equal(captured.max_tokens, 1200);
+    assert.equal(JSON.parse(captured.messages[1].content).task, task); assert.equal(captured.max_completion_tokens, 1200);
     assert.equal(response.headers.get('Cache-Control'), 'no-store');
   }
 }));
@@ -145,4 +145,18 @@ test('Renewing a JWT does not reset the user AI rate-limit key',async()=>run(asy
   await worker.fetch(request(),e);
   await worker.fetch(request({jwt:await token({exp:Math.floor(Date.now()/1000)+7200})}),e);
   assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);
+}));
+test('Current Workers AI chat-completion output is normalized without leaking reasoning', async () => run(async () => {
+  let used;
+  const response=await worker.fetch(request(),env({AI:{run:async(model,payload)=>{used={model,payload};return {choices:[{message:{content:' Nội dung mới ',reasoning_content:'private reasoning'},finish_reason:'stop'}]};}}}));
+  assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{text:'Nội dung mới'});
+  assert.equal(used.model,'@cf/google/gemma-4-26b-a4b-it');
+  assert.equal(used.payload.max_completion_tokens,1200);
+  assert.deepEqual(used.payload.chat_template_kwargs,{enable_thinking:false});
+}));
+test('Reasoning-only, tool-only and truncated outputs never become successful copy', async () => run(async () => {
+  for(const result of [{choices:[{message:{content:null,reasoning_content:'hidden'},finish_reason:'stop'}]},{choices:[{message:{content:'partial'},finish_reason:'length'}]}]){
+    assert.equal((await worker.fetch(request(),env({AI:{run:async()=>result}}))).status,502);
+  }
 }));

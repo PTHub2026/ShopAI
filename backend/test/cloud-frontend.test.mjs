@@ -193,6 +193,17 @@ test('Closing a pending draft read preserves empty and dirty editors',async()=>{
   }
 });
 
+test('Nhập JSON loại bỏ bản ghi có id độc hại và tham chiếu id không hợp lệ',()=>{
+  const r=runtime({managed:false});try{
+    const malicious={v:3,posts:[{id:"a') ;alert(1)//",type:'post'},{id:'good_1',type:'post',channels:["x');//",'c_ok'],assets:['id xấu','a_ok']}],channels:[{id:'c_ok'},{id:'<img src=x>'}],groups:[{id:'g1',channels:['c_ok','evil"']}]};
+    const out=JSON.parse(r.read('(()=>{const o=sanitizeImport('+JSON.stringify(malicious)+');return JSON.stringify({postIds:o.posts.map(p=>p.id),ch:o.posts[0]?o.posts[0].channels:null,assets:o.posts[0]?o.posts[0].assets:null,chIds:o.channels.map(c=>c.id),gch:o.groups[0].channels})})()'));
+    assert.deepEqual(out.postIds,['good_1']);
+    assert.deepEqual(out.ch,['c_ok']);
+    assert.deepEqual(out.assets,['a_ok']);
+    assert.deepEqual(out.chIds,['c_ok']);
+    assert.deepEqual(out.gch,['c_ok']);
+  }finally{r.close()}
+});
 test('Leaving and returning invalidates draft reads and old confirmation callbacks',async()=>{
   for(const confirm of [false,true]){
     const pending=deferred();

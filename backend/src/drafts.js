@@ -9,17 +9,20 @@ export async function drafts(request, env, owner, json) {
   if (!match) return json({ error: 'Đường dẫn bản nháp không hợp lệ.' }, 404);
   if (!env.DB) return json({ error: 'Chưa gắn cơ sở dữ liệu bản nháp.' }, 503);
   const id = match[1];
-  if (request.method !== 'GET' && !(request.method === 'PUT' && id)) {
-    return json({ error: 'Chỉ hỗ trợ đọc bản nháp hoặc PUT theo mã bản nháp.' }, 405, { Allow: id ? 'GET, PUT' : 'GET' });
+  if (request.method !== 'GET' && !((request.method === 'PUT' || request.method === 'DELETE') && id)) {
+    return json({ error: 'Chỉ hỗ trợ đọc bản nháp, PUT hoặc DELETE theo mã bản nháp.' }, 405, { Allow: id ? 'GET, PUT, DELETE' : 'GET' });
   }
-  if (request.method === 'PUT' && request.headers.get('Origin') !== url.origin) {
+  if ((request.method === 'PUT' || request.method === 'DELETE') && request.headers.get('Origin') !== url.origin) {
     return json({ error: 'Chỉ cho phép ghi từ cùng origin.' }, 403);
   }
-  try {
-    const limit = await env.AI_RATE_LIMITER?.limit({ key: 'drafts:' + owner });
-    if (!limit || typeof limit.success !== 'boolean') throw new Error('RATE_LIMIT_UNAVAILABLE');
-    if (!limit.success) return json({ error: 'Quá nhiều yêu cầu lưu trữ. Vui lòng thử lại sau.' }, 429, { 'Retry-After': '60' });
-  } catch { return json({ error: 'Giới hạn yêu cầu lưu trữ chưa khả dụng.' }, 503); }
+  // Chỉ áp giới hạn tần suất cho thao tác ghi (PUT/DELETE); đọc (GET) không bị giới hạn.
+  if (request.method !== 'GET') {
+    try {
+      const limit = await env.AI_RATE_LIMITER?.limit({ key: 'drafts-write:' + owner });
+      if (!limit || typeof limit.success !== 'boolean') throw new Error('RATE_LIMIT_UNAVAILABLE');
+      if (!limit.success) return json({ error: 'Quá nhiều yêu cầu lưu trữ. Vui lòng thử lại sau.' }, 429, { 'Retry-After': '60' });
+    } catch { return json({ error: 'Giới hạn yêu cầu lưu trữ chưa khả dụng.' }, 503); }
+  }
 
   try {
     if (request.method === 'GET' && id) {
@@ -43,6 +46,10 @@ export async function drafts(request, env, owner, json) {
       const rows = results.slice(0, limit), last = rows.at(-1);
       const nextCursor = results.length > limit ? btoa(JSON.stringify([last.updated_at, last.id])).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : null;
       return json({ drafts: rows.map(rowData), nextCursor });
+    }
+    if (request.method === 'DELETE') {
+      const res = await env.DB.prepare('DELETE FROM drafts WHERE owner = ? AND id = ?').bind(owner, id).run();
+      return json({ deleted: res.meta.changes > 0 });
     }
     if ((request.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase() !== 'application/json') return json({ error: 'Cần gửi application/json.' }, 415);
     if (!request.body) return json({ error: 'Thiếu nội dung.' }, 400);

@@ -9,7 +9,7 @@ const issuer = 'https://test-team.cloudflareaccess.com';
 const origin = 'https://pthub2026.github.io';
 const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
 async function token(changes = {}, head = {}) {
-  const data = encode({ alg: 'RS256', kid: 'test-key', ...head }) + '.' + encode({ iss: issuer, aud: ['test-audience'], exp: Math.floor(Date.now() / 1000) + 3600, ...changes });
+  const data = encode({ alg: 'RS256', kid: 'test-key', ...head }) + '.' + encode({ iss: issuer, sub: 'user-a', aud: ['test-audience'], exp: Math.floor(Date.now() / 1000) + 3600, ...changes });
   return data + '.' + Buffer.from(await subtle.sign('RSASSA-PKCS1-v1_5', pair.privateKey, Buffer.from(data))).toString('base64url');
 }
 const valid = await token();
@@ -115,4 +115,34 @@ test('Giao diện yêu cầu JWT, hỗ trợ HEAD, và chèn endpoint cùng orig
   assert.equal(aiCalls,0);assert.equal(limitCalls,0);
   const sameOrigin=await worker.fetch(request({headers:{Origin:'https://backend.example'}}),env({...e,ALLOWED_ORIGINS:''}));
   assert.equal(sameOrigin.status,200);assert.equal(aiCalls,1);assert.equal(limitCalls,1);
+}));
+
+
+test('Session capabilities require a verified subject and separate local account scopes', async()=>run(async()=>{
+  const first=await worker.fetch(request({path:'/session',method:'GET'}),env({DB:{}}));
+  assert.equal(first.status,200);
+  const session=await first.json();
+  assert.match(session.userScope,/^[a-f0-9]{64}$/);
+  assert.deepEqual(session.capabilities,{ai:true,drafts:true,publishing:false,scheduling:false,inbox:false});
+  const second=await (await worker.fetch(request({path:'/session',method:'GET',jwt:await token({sub:'user-b'})}),env())).json();
+  assert.notEqual(second.userScope,session.userScope);assert.equal(second.capabilities.drafts,false);
+  const page=await worker.fetch(request({path:'/',method:'GET'}),env({FRONTEND_HTML:'<head></head><body></body>'}));
+  assert.ok((await page.text()).includes('name="shopai-user-scope" content="'+session.userScope+'"'));
+  for(const sub of ['',undefined,42]){
+    assert.equal((await worker.fetch(request({path:'/session',method:'GET',jwt:await token({sub})}),env())).status,403);
+    assert.equal((await worker.fetch(request({path:'/',method:'GET',jwt:await token({sub})}),env({FRONTEND_HTML:'<head></head>'}))).status,403);
+  }
+  assert.equal((await worker.fetch(request({path:'/session',method:'GET',jwt:null}),env())).status,401);
+}));
+
+test('Storage refuses an editor belonging to a different Access account',async()=>run(async()=>{
+  const response=await worker.fetch(request({path:'/storage/drafts',method:'GET',headers:{'X-ShopAI-User-Scope':'b'.repeat(64)}}),env({DB:{}}));
+  assert.equal(response.status,403);assert.equal((await response.json()).code,'ACCOUNT_CHANGED');
+  assert.equal((await worker.fetch(request({path:'/storage/drafts',method:'GET',jwt:null}),env({DB:{}}))).status,401);
+}));
+test('Renewing a JWT does not reset the user AI rate-limit key',async()=>run(async()=>{
+  const keys=[];const e=env({AI_RATE_LIMITER:{limit:async({key})=>{keys.push(key);return {success:true}}}});
+  await worker.fetch(request(),e);
+  await worker.fetch(request({jwt:await token({exp:Math.floor(Date.now()/1000)+7200})}),e);
+  assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);
 }));

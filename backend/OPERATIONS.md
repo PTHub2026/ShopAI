@@ -35,3 +35,12 @@ Thành công trả `{"text":"..."}`; lỗi trả `{"error":"..."}`. Mã lỗi: 4
 Cần chạy build bằng Wrangler tương thích và kiểm thử riêng các trường hợp: JWT đúng chữ ký; thiếu JWT; JWT sai chữ ký, sai issuer/audience, hết hạn hoặc nbf không hợp lệ; endpoint/phương thức sai; origin hợp lệ và không hợp lệ; preflight sai method/header; JSON lỗi, mảng và nội dung rỗng; biên 32768 byte và vượt biên; hết hạn mức; binding giới hạn lỗi; AI lỗi hoặc phản hồi rỗng; đủ bốn tác vụ trả nội dung thành công. Kiểm tra hostname phụ không thể vượt bảo vệ Access.
 
 Chỉ xác nhận vận hành sau khi có bằng chứng chạy thật. Không bật đăng bài, gửi tin hoặc tự trả lời đa kênh trong thay đổi này.
+
+
+## Cập nhật 08/11/2026: bản nháp và lệnh kiểm chứng
+
+Các lệnh cài đặt hiện hành chạy tại gốc repository: `npm ci`, `npm test`, `npm run build`. Sử dụng Node.js 24 và package-lock; không dùng Wrangler trôi phiên bản. Build chỉ là dry-run.
+
+Trang server có nút lưu/mở bản nháp máy chủ. `/session` cần Access và trả các khả năng cấu hình; `/health.release` trả SHA đã đóng gói. D1 chỉ được gắn trong preview, chưa có production database. Xem `READINESS.md` và `D1_PREVIEW.md` cho hợp đồng cập nhật; phần mô tả cũ không có D1 không còn phản ánh toàn bộ mã hiện tại.
+
+Không ghi đè production hoặc bỏ Access để làm preview truy cập được. Hiện cần phiên Cloudflare hợp lệ để triển khai preview và kiểm chứng AI/D1 cloud.

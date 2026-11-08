@@ -45,7 +45,7 @@ export default {
       if (request.method !== 'GET' && request.method !== 'HEAD') return json({ error: 'Chỉ hỗ trợ GET hoặc HEAD.' }, 405, { Allow: 'GET, HEAD' });
       if (!configured(env) || typeof env.FRONTEND_HTML !== 'string') return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
       if (!(await authenticate(request, env))) return json({ error: 'Cần đăng nhập qua Cloudflare Access tại hostname ứng dụng.' }, 401);
-      return new Response(request.method === 'HEAD' ? null : env.FRONTEND_HTML.replace('<head>', '<head><meta name="shopai-ai-endpoint" content="/ai">'), { headers: {
+      return new Response(request.method === 'HEAD' ? null : env.FRONTEND_HTML.replace('<head>', '<head><meta name="shopai-ai-endpoint" content="/ai">' + (env.DB ? '<meta name="shopai-drafts-endpoint" content="/storage/drafts">' : '')), { headers: {
         'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
         'Content-Security-Policy': "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"

@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { createHash, webcrypto } from 'node:crypto';
 const worker = (await import(new URL('../src/worker.js', import.meta.url))).default;
-const { AUTH_SCHEMA, SESSION_COOKIE, normalizeEmail, normalizePhone, pkceChallenge, pkceVerifier, sameText, tiktokChallenge } = await import(new URL('../src/auth.js', import.meta.url));
+const { AUTH_SCHEMA, SESSION_COOKIE, normalizeEmail, normalizePhone, parseEmailFrom, pkceChallenge, pkceVerifier, sameText, sendEmail, tiktokChallenge } = await import(new URL('../src/auth.js', import.meta.url));
 
 const BASE = 'https://shoppost.example';
 const FB_ID = '123456789012', ZALO_ID = '1234567890123456789', ZALO_SECRET = 'zalo-secret-khong-duoc-lo', RESEND_KEY = 're_khoa_bi_mat_thu_nghiem';
@@ -373,6 +373,114 @@ test('Email OTP: mã hết hạn, sai quá 5 lần, gửi quá 5 mã/giờ và l
     assert.equal(failed.status, 502); assert.equal((await failed.text()).includes(RESEND_KEY), false);
     assert.equal(row(e.DB, 'SELECT code_hash FROM auth_otp_codes WHERE email = ?', 'loi@shoppost.net').code_hash, '');
   });
+});
+
+// ---- Cloudflare Email Service (binding env.EMAIL) ----
+function emailBinding(behavior) {
+  const calls = [];
+  return { calls, binding: { async send(message) { calls.push(message); if (behavior) return behavior(message); return { messageId: 'msg-' + calls.length }; } } };
+}
+async function captureErrors(callback) {
+  const logged = [], original = console.error;
+  console.error = (...args) => logged.push(args.map(String).join(' '));
+  try { return await callback(logged); } finally { console.error = original; }
+}
+
+test('parseEmailFrom: tách tên hiển thị và địa chỉ, từ chối giá trị chèn header', () => {
+  assert.deepEqual(parseEmailFrom('ShopPost <no-reply@shoppost.net>'), { email: 'no-reply@shoppost.net', name: 'ShopPost' });
+  assert.deepEqual(parseEmailFrom(' "ShopPost Hỗ trợ" <Ho-Tro@ShopPost.net> '), { email: 'ho-tro@shoppost.net', name: 'ShopPost Hỗ trợ' });
+  assert.deepEqual(parseEmailFrom('no-reply@shoppost.net'), { email: 'no-reply@shoppost.net' });
+  assert.deepEqual(parseEmailFrom('<no-reply@shoppost.net>'), { email: 'no-reply@shoppost.net' });
+  for (const bad of [undefined, '', 'ShopPost', 'ShopPost <khong-hop-le>', 'sai\r\nBcc: x@y.vn', 'A <a@b.vn> <c@d.vn>', 'x'.repeat(201) + '@a.vn']) assert.equal(parseEmailFrom(bad), null, String(bad));
+});
+
+test('Email OTP qua binding Cloudflare: gửi thành công, email tiếng Việt có html + text, đăng nhập được', async () => {
+  const { calls, binding } = emailBinding();
+  await withFetch(null, async fetchCalls => {
+    const e = env({ EMAIL: binding, RESEND_API_KEY: undefined });
+    assert.equal((await (await get(e, '/auth/providers')).json()).email.enabled, true);
+    const start = await post(e, '/auth/email/start', { email: ' Khach.Moi@Example.com ' });
+    assert.equal(start.status, 200); assert.deepEqual(await start.json(), { ok: true, retryAfter: 60, expiresIn: 600 });
+    assert.equal(calls.length, 1); assert.equal(fetchCalls.length, 0);
+    const message = calls[0];
+    assert.deepEqual(message.from, { email: 'no-reply@shoppost.net', name: 'ShopPost' });
+    assert.equal(message.to, 'khach.moi@example.com');
+    assert.equal(message.subject, 'Mã đăng nhập ShopPost của bạn');
+    const code = message.text.match(/\b(\d{6})\b/)[1];
+    for (const part of [message.text, message.html]) {
+      assert.ok(part.includes(code)); assert.match(part, /hiệu lực trong 10 phút/); assert.ok(part.includes('Nếu bạn không yêu cầu, hãy bỏ qua email này'));
+    }
+    assert.match(message.html, /^<!DOCTYPE html><html lang="vi">/);
+    const ok = await post(e, '/auth/email/verify', { email: 'khach.moi@example.com', code });
+    assert.equal(ok.status, 200);
+    assert.equal(row(e.DB, 'SELECT owner FROM auth_sessions WHERE token_hash = ?', sha(sessionToken(ok))).owner, 'email:khach.moi@example.com');
+  });
+  // Có cả binding lẫn RESEND_API_KEY: binding được ưu tiên, không gọi Resend.
+  const both = emailBinding();
+  await withFetch(null, async fetchCalls => {
+    const response = await post(env({ EMAIL: both.binding }), '/auth/email/start', { email: 'uu-tien@shoppost.net' });
+    assert.equal(response.status, 200); assert.equal(both.calls.length, 1); assert.equal(fetchCalls.length, 0);
+  });
+});
+
+test('Email OTP qua binding Cloudflare: lỗi gửi không lộ chi tiết nội bộ, chỉ ghi mã lỗi vào log máy chủ', async () => {
+  const failing = emailBinding(() => { const error = new Error('sender no-reply@shoppost.net not verified for account 3f8-noi-bo'); error.code = 'E_SENDER_NOT_VERIFIED'; throw error; });
+  await captureErrors(async logged => {
+    await withFetch(null, async () => {
+      const e = env({ EMAIL: failing.binding, RESEND_API_KEY: undefined });
+      const response = await post(e, '/auth/email/start', { email: 'loi-binding@shoppost.net' });
+      assert.equal(response.status, 502);
+      const text = await response.text();
+      assert.deepEqual(JSON.parse(text), { error: 'Không gửi được email lúc này. Vui lòng thử lại sau ít phút.' });
+      for (const secret of ['E_SENDER_NOT_VERIFIED', 'not verified', '3f8-noi-bo']) assert.equal(text.includes(secret), false);
+      assert.equal(row(e.DB, 'SELECT code_hash FROM auth_otp_codes WHERE email = ?', 'loi-binding@shoppost.net').code_hash, '');
+      // Giới hạn gửi lại 60 giây vẫn giữ nguyên sau lỗi gửi.
+      assert.equal((await post(e, '/auth/email/start', { email: 'loi-binding@shoppost.net' })).status, 429);
+    });
+    assert.equal(logged.length, 1);
+    assert.match(logged[0], /E_SENDER_NOT_VERIFIED/); assert.equal(logged[0].includes('3f8-noi-bo'), false); assert.equal(logged[0].includes('loi-binding@'), false);
+  });
+  // Lỗi không có mã: ghi "unknown"; sendEmail không bao giờ ném lỗi ra ngoài.
+  await captureErrors(async logged => {
+    const e = env({ EMAIL: emailBinding(() => { throw new Error('boom'); }).binding });
+    assert.equal(await sendEmail(e, { to: 'a@b.vn', subject: 'x', html: '<p>x</p>', text: 'x' }), false);
+    assert.match(logged[0], /"code":"unknown"/);
+  });
+});
+
+test('Thiếu cấu hình email: /auth/providers tắt email, trang đăng nhập ẩn ô email, /auth/email/start trả 503', async () => {
+  const { JSDOM } = await import('jsdom');
+  const LOGIN = readFileSync(new URL('../../login.html', import.meta.url), 'utf8');
+  const emailEnabled = async e => (await (await get(e, '/auth/providers')).json()).email.enabled;
+  const loginShowsEmail = async e => {
+    const dom = new JSDOM(LOGIN, { url: BASE + '/', runScripts: 'dangerously', beforeParse(window) {
+      window.fetch = async path => { const response = await get(e, String(path)); return { ok: response.ok, status: response.status, json: () => response.json() }; };
+    } });
+    for (let i = 0; i < 20 && dom.window.document.querySelector('#methods').hidden && dom.window.document.querySelector('#setup').hidden; i++) await new Promise(r => setTimeout(r, 10));
+    await new Promise(r => setTimeout(r, 20));
+    const doc = dom.window.document;
+    assert.equal(doc.querySelector('#methods').hidden && doc.querySelector('#setup').hidden, false, 'trang đăng nhập phải đọc xong /auth/providers');
+    const visible = !doc.querySelector('#emailForm').hidden;
+    dom.window.close();
+    return visible;
+  };
+  const { binding, calls } = emailBinding();
+  const configured = env({ EMAIL: binding, RESEND_API_KEY: undefined, FACEBOOK_APP_ID: undefined, ZALO_APP_SECRET: undefined });
+  assert.equal(await emailEnabled(configured), true); assert.equal(await loginShowsEmail(configured), true);
+  for (const overrides of [
+    { EMAIL: binding, EMAIL_FROM: undefined, RESEND_API_KEY: undefined },
+    { EMAIL: binding, EMAIL_FROM: 'ShopPost <khong-hop-le>', RESEND_API_KEY: undefined },
+    { EMAIL: {}, RESEND_API_KEY: undefined },
+    { EMAIL: { send: 'khong-phai-ham' }, RESEND_API_KEY: undefined },
+    { EMAIL: undefined, RESEND_API_KEY: undefined },
+    { EMAIL: binding, DB: undefined }
+  ]) {
+    const e = env({ FACEBOOK_APP_ID: undefined, ZALO_APP_SECRET: undefined, ...overrides });
+    assert.equal(await emailEnabled(e), false, JSON.stringify(Object.keys(overrides)));
+    assert.equal(await loginShowsEmail(e), false);
+    if (e.DB) assert.equal((await post(e, '/auth/email/start', { email: 'a@b.vn' })).status, 503);
+  }
+  assert.equal(calls.length, 0);
 });
 
 

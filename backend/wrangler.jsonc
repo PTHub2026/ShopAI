@@ -29,8 +29,14 @@
     "ACCESS_AUD": "ff20e92c80e07676c17aa8c812769813ff3aaf0407e58bdf76fa02a844c630a0",
     "ALLOWED_ORIGINS": "https://pthub2026.github.io,https://shopai-backend.ct-3f8.workers.dev",
     "AI_MODEL": "@cf/google/gemma-4-26b-a4b-it",
-    "ZALO_APP_ID": "2482889752593796664"
+    "ZALO_APP_ID": "2482889752593796664",
+    "EMAIL_FROM": "ShopPost <no-reply@shoppost.net>"
   },
+  "send_email": [
+    {
+      "name": "EMAIL"
+    }
+  ],
   "previews": {
     "vars": {
       "ACCESS_TEAM_DOMAIN": "restless-butterfly-687f.cloudflareaccess.com",

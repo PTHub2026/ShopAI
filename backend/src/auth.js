@@ -88,12 +88,63 @@ function readCookie(request, name) {
 }
 const setCookie = (name, value, maxAge) => `${name}=${value}; Max-Age=${maxAge}; Path=/; HttpOnly; Secure; SameSite=Lax`;
 const displayName = value => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, 80) : '';
-const validEmailFrom = value => { const v = clean(value); return v.length > 3 && v.length <= 200 && v.includes('@') && !/[\r\n]/.test(v); };
 export function normalizeEmail(value) {
   if (typeof value !== 'string') return null;
   const email = value.trim().toLowerCase();
   if (!email || email.length > 254) return null;
   return /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(email) ? email : null;
+}
+// EMAIL_FROM dạng "ShopPost <no-reply@shoppost.net>" hoặc "no-reply@shoppost.net" → { email, name? }; sai định dạng → null.
+export function parseEmailFrom(value) {
+  const v = clean(value);
+  if (v.length < 3 || v.length > 200 || /[\r\n]/.test(v)) return null;
+  const match = v.match(/^(?:"?([^"<>]*?)"?\s*)?<([^<>\s]+)>$/);
+  const email = normalizeEmail(match ? match[2] : v);
+  if (!email) return null;
+  const name = match ? displayName(match[1] || '') : '';
+  return name ? { email, name } : { email };
+}
+// Adapter email: ưu tiên binding Cloudflare Email Service (env.EMAIL), dự phòng Resend; thiếu EMAIL_FROM hợp lệ thì tắt email.
+function emailProvider(env) {
+  if (!parseEmailFrom(env.EMAIL_FROM)) return null;
+  if (env.EMAIL && typeof env.EMAIL.send === 'function') return 'cloudflare';
+  if (clean(env.RESEND_API_KEY)) return 'resend';
+  return null;
+}
+export const emailConfigured = env => Boolean(emailProvider(env));
+// Trả true/false; không bao giờ ném lỗi ra ngoài và không đưa chi tiết lỗi nội bộ cho client, chỉ ghi mã lỗi vào log máy chủ.
+export async function sendEmail(env, { to, subject, html, text }) {
+  const provider = emailProvider(env);
+  if (!provider) return false;
+  try {
+    if (provider === 'cloudflare') {
+      await env.EMAIL.send({ to, from: parseEmailFrom(env.EMAIL_FROM), subject, html, text });
+      return true;
+    }
+    const response = await fetch(RESEND_API, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(8000), headers: { Authorization: 'Bearer ' + clean(env.RESEND_API_KEY), 'Content-Type': 'application/json' }, body: JSON.stringify({ from: clean(env.EMAIL_FROM), to: [to], subject, text, html }) });
+    if (!response.ok) console.error('email_send_failed', JSON.stringify({ provider, code: 'http_' + response.status }));
+    return response.ok;
+  } catch (error) {
+    const code = error && typeof error.code === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(error.code) ? error.code : (error && error.name === 'TimeoutError' ? 'timeout' : 'unknown');
+    console.error('email_send_failed', JSON.stringify({ provider, code }));
+    return false;
+  }
+}
+const escapeHtml = value => String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+// Khung email chung (tiếng Việt, có bản html và text).
+export function emailLayout(paragraphs, highlight = '') {
+  const body = paragraphs.map(p => `<p style="margin:0 0 12px">${escapeHtml(p)}</p>`);
+  if (highlight) body.splice(1, 0, `<p style="margin:0 0 12px;font-size:28px;font-weight:700;letter-spacing:6px">${escapeHtml(highlight)}</p>`);
+  return `<!DOCTYPE html><html lang="vi"><head><meta charset="utf-8"></head><body style="margin:0;padding:24px;background:#f6f6f8"><div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:12px;padding:24px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#0a0a0a"><p style="margin:0 0 16px;font-weight:700;font-size:18px">ShopPost</p>${body.join('')}</div></body></html>`;
+}
+export function otpEmail(code) {
+  const minutes = Math.round(OTP_TTL / 60);
+  const ignore = 'Nếu bạn không yêu cầu, hãy bỏ qua email này.';
+  return {
+    subject: 'Mã đăng nhập ShopPost của bạn',
+    text: `Mã đăng nhập ShopPost của bạn là ${code}.\n\nMã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.\n\n${ignore}\n\nShopPost – https://shoppost.net`,
+    html: emailLayout(['Mã đăng nhập ShopPost của bạn là:', `Mã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.`, ignore], code)
+  };
 }
 
 export function providers(env) {
@@ -102,7 +153,7 @@ export function providers(env) {
   const team = clean(env.ACCESS_TEAM_DOMAIN);
   const facebook = db && /^\d{5,20}$/.test(facebookId);
   const zalo = db && /^\d{5,25}$/.test(zaloId) && Boolean(clean(env.ZALO_APP_SECRET));
-  const email = db && Boolean(clean(env.RESEND_API_KEY)) && validEmailFrom(env.EMAIL_FROM);
+  const email = db && emailConfigured(env);
   const tiktok = db && /^[A-Za-z0-9_-]{4,64}$/.test(clean(env.TIKTOK_CLIENT_KEY)) && Boolean(clean(env.TIKTOK_CLIENT_SECRET));
   const phone = db && Boolean(smsProvider(env));
   return {
@@ -186,15 +237,6 @@ async function fetchJson(url, init = {}) {
   let data = null;
   try { data = await response.json(); } catch { data = null; }
   return { ok: response.ok, status: response.status, data };
-}
-
-async function sendEmailCode(env, email, code) {
-  const response = await fetch(RESEND_API, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(8000), headers: { Authorization: 'Bearer ' + clean(env.RESEND_API_KEY), 'Content-Type': 'application/json' }, body: JSON.stringify({
-    from: clean(env.EMAIL_FROM), to: [email], subject: 'Mã đăng nhập ShopPost của bạn',
-    text: `Mã đăng nhập ShopPost của bạn là ${code}. Mã có hiệu lực trong 10 phút và chỉ dùng được một lần. Nếu bạn không yêu cầu đăng nhập, hãy bỏ qua email này.`,
-    html: `<div style="font-family:Arial,sans-serif;font-size:15px;color:#0a0a0a"><p>Mã đăng nhập ShopPost của bạn là:</p><p style="font-size:28px;font-weight:700;letter-spacing:6px">${code}</p><p>Mã có hiệu lực trong 10 phút và chỉ dùng được một lần.</p><p style="color:#717182">Nếu bạn không yêu cầu đăng nhập, hãy bỏ qua email này.</p></div>`
-  }) });
-  return response.ok;
 }
 
 // eSMS.vn: tin chăm sóc khách hàng có brandname (SmsType 2); nội dung phải khớp mẫu đã đăng ký với eSMS.
@@ -311,7 +353,7 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
         await env.DB.prepare('INSERT INTO auth_otp_codes (email, code_hash, salt, expires_at, attempts, sent_at, window_start, sent_count) VALUES (?, ?, ?, ?, 0, ?, ?, ?) ON CONFLICT(email) DO UPDATE SET code_hash = excluded.code_hash, salt = excluded.salt, expires_at = excluded.expires_at, attempts = 0, sent_at = excluded.sent_at, window_start = excluded.window_start, sent_count = excluded.sent_count')
           .bind(email, code ? await hashHex(salt + ':' + email + ':' + code) : TWILIO_MARK, salt, t + OTP_TTL, t, windowStart, count + 1).run();
         let sent = false;
-        try { sent = viaPhone ? await sendSmsCode(env, sms, email, code) : await sendEmailCode(env, email, code); } catch { sent = false; }
+        try { sent = viaPhone ? await sendSmsCode(env, sms, email, code) : await sendEmail(env, { to: email, ...otpEmail(code) }); } catch { sent = false; }
         if (!sent) {
           await env.DB.prepare("UPDATE auth_otp_codes SET code_hash = '' WHERE email = ?").bind(email).run();
           return json({ error: viaPhone ? 'Không gửi được tin nhắn SMS lúc này. Vui lòng thử lại sau ít phút.' : 'Không gửi được email lúc này. Vui lòng thử lại sau ít phút.' }, 502);

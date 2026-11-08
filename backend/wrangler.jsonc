@@ -1,11 +1,15 @@
 {
   "name": "shopai-backend",
   "main": "dist/app.js",
-  "build": { "command": "node build.mjs" },
+  "build": {
+    "command": "node build.mjs"
+  },
   "compatibility_date": "2026-11-07",
   "workers_dev": true,
   "preview_urls": true,
-  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
   "ai": {
     "binding": "AI"
   },
@@ -53,6 +57,13 @@
         "migrations_dir": "migrations"
       }
     ]
-  }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "shopai-drafts-production",
+      "database_id": "50da4192-8c86-4168-b3ff-5ef11f6e3a96",
+      "migrations_dir": "migrations"
+    }
+  ]
 }
-

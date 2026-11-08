@@ -69,14 +69,19 @@ export async function facebook(request, env, owner, json) {
     }
     if(path.endsWith('/disconnect')) {
       const id=path.split('/')[1];
-      const result=await env.DB.prepare("UPDATE facebook_connections SET token_cipher = NULL, status = 'disconnected' WHERE owner = ? AND page_id = ?").bind(owner,id).run();
-      return result.meta.changes ? json({disconnected:true}) : json({error:'Không tìm thấy kết nối.'},404);
+      const results=await env.DB.batch([
+        env.DB.prepare("UPDATE facebook_connections SET token_cipher = NULL, status = 'disconnected' WHERE owner = ? AND page_id = ?").bind(owner,id),
+        env.DB.prepare('UPDATE facebook_owners SET generation = generation + 1 WHERE owner = ? AND EXISTS (SELECT 1 FROM facebook_connections WHERE owner = ? AND page_id = ?)').bind(owner,owner,id)
+      ]);
+      return results[0].meta.changes ? json({disconnected:true}) : json({error:'Không tìm thấy kết nối.'},404);
     }
     const callback=`${env.APP_ORIGIN}/channels/facebook/callback`;
     if(path==='/start') {
       const state=base64(crypto.getRandomValues(new Uint8Array(32))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
       await env.DB.prepare('DELETE FROM oauth_states WHERE expires_at < ?').bind(Date.now()).run();
-      await env.DB.prepare('INSERT INTO oauth_states (state_hash, owner, origin, expires_at) VALUES (?, ?, ?, ?)').bind(await hash(state),owner,env.APP_ORIGIN,Date.now()+600000).run();
+      await env.DB.prepare('INSERT INTO facebook_owners (owner, generation) VALUES (?, 0) ON CONFLICT(owner) DO NOTHING').bind(owner).run();
+      const attempt=await env.DB.prepare('UPDATE facebook_owners SET generation = generation + 1 WHERE owner = ? RETURNING generation').bind(owner).first();
+      await env.DB.prepare('INSERT INTO oauth_states (state_hash, owner, origin, generation, expires_at) VALUES (?, ?, ?, ?, ?)').bind(await hash(state),owner,env.APP_ORIGIN,attempt.generation,Date.now()+600000).run();
       const target=new URL(`https://www.facebook.com/${VERSION}/dialog/oauth`);
       target.searchParams.set('client_id',env.FACEBOOK_APP_ID);
       target.searchParams.set('redirect_uri',callback);
@@ -89,7 +94,7 @@ export async function facebook(request, env, owner, json) {
     const state=url.searchParams.get('state');
     if(!state || !/^[A-Za-z0-9_-]{43}$/.test(state))return json({error:'Phiên kết nối không hợp lệ. Bắt đầu lại từ Kênh.'},400);
     // Atomic consumption also prevents two concurrent callbacks from exchanging the same code.
-    const stored=await env.DB.prepare('DELETE FROM oauth_states WHERE state_hash = ? AND owner = ? AND origin = ? AND expires_at >= ? RETURNING owner').bind(await hash(state),owner,env.APP_ORIGIN,Date.now()).first();
+    const stored=await env.DB.prepare('DELETE FROM oauth_states WHERE state_hash = ? AND owner = ? AND origin = ? AND expires_at >= ? RETURNING owner, generation').bind(await hash(state),owner,env.APP_ORIGIN,Date.now()).first();
     if(!stored)return json({error:'Phiên kết nối hết hạn hoặc đã sử dụng. Bắt đầu lại từ Kênh.'},400);
     if(url.searchParams.has('error'))return redirect(env.APP_ORIGIN,'cancelled');
     const code=url.searchParams.get('code');
@@ -119,9 +124,15 @@ export async function facebook(request, env, owner, json) {
         if(typeof after!=='string' || !after || after.length>2048 || n===9)throw Error('PAGINATION');
       }
     } catch { return json({error:'Meta chưa xác nhận được tài khoản, quyền hoặc danh sách Trang. Kết nối cũ được giữ nguyên; hãy thử lại.'},502); }
-    const statements=[env.DB.prepare("UPDATE facebook_connections SET token_cipher = NULL, status = 'disconnected' WHERE owner = ?").bind(owner)];
-    for(const page of pages)statements.push(env.DB.prepare("INSERT INTO facebook_connections (owner,page_id,name,token_cipher,scopes,tasks,verified_at,status) VALUES (?,?,?,?,?,?,?,'connected') ON CONFLICT(owner,page_id) DO UPDATE SET name=excluded.name, token_cipher=excluded.token_cipher, scopes=excluded.scopes, tasks=excluded.tasks, verified_at=excluded.verified_at,status='connected'").bind(owner,page.id,page.name,await sealToken(page.access_token,env.CHANNEL_TOKEN_KEY,owner,page.id),JSON.stringify(scopes),JSON.stringify(page.tasks),Date.now()));
-    await env.DB.batch(statements);
+    // D1 batch is transactional. The same generation guards every write; disconnect or
+    // a newer OAuth start invalidates the whole older inventory before it can restore tokens.
+    const statements=[
+      env.DB.prepare('UPDATE facebook_owners SET generation = generation WHERE owner = ? AND generation = ?').bind(owner,stored.generation),
+      env.DB.prepare("UPDATE facebook_connections SET token_cipher = NULL, status = 'disconnected' WHERE owner = ? AND EXISTS (SELECT 1 FROM facebook_owners WHERE owner = ? AND generation = ?)").bind(owner,owner,stored.generation)
+    ];
+    for(const page of pages)statements.push(env.DB.prepare("INSERT INTO facebook_connections (owner,page_id,name,token_cipher,scopes,tasks,verified_at,status) SELECT ?,?,?,?,?,?,?,'connected' WHERE EXISTS (SELECT 1 FROM facebook_owners WHERE owner = ? AND generation = ?) ON CONFLICT(owner,page_id) DO UPDATE SET name=excluded.name, token_cipher=excluded.token_cipher, scopes=excluded.scopes, tasks=excluded.tasks, verified_at=excluded.verified_at,status='connected'").bind(owner,page.id,page.name,await sealToken(page.access_token,env.CHANNEL_TOKEN_KEY,owner,page.id),JSON.stringify(scopes),JSON.stringify(page.tasks),Date.now(),owner,stored.generation));
+    const committed=await env.DB.batch(statements);
+    if(committed[0].meta.changes!==1)return json({error:'Kết nối đã thay đổi hoặc đã bị ngắt. Callback cũ không được áp dụng.'},409);
     return redirect(env.APP_ORIGIN,pages.length?'connected':'empty');
   } catch { return json({error:'Không thể truy cập cấu hình kết nối. Chưa xác nhận kết nối thành công.'},503); }
 }

@@ -14,7 +14,7 @@ function setup() {
         async first(){return statement.get(...params)||null},
         async all(){return {results:statement.all(...params)}},
         async run(){return {meta:{changes:Number(statement.run(...params).changes)}}},
-        _run(){return statement.run(...params)}
+        _run(){return {meta:{changes:Number(statement.run(...params).changes)}}}
       }}};
     },
     async batch(statements){
@@ -82,4 +82,15 @@ test('Expired provider token cannot connect',async(t)=>{
 
 test('Inventory OAuth requests only Page-list permission; config-ID scope must be explicitly verified',async()=>{
  const s=setup();try{const u=await start(s);assert.equal(u.searchParams.get('scope'),'pages_show_list');assert.deepEqual((await (await s.call()).json()).permissions,['pages_show_list']);s.env.FACEBOOK_CONFIG_ID='999999';assert.equal((await s.call('/start',{method:'POST'})).status,503);s.env.FACEBOOK_CONFIG_SCOPES='pages_show_list';const config=await start(s);assert.equal(config.searchParams.get('config_id'),'999999');assert.equal(config.searchParams.has('scope'),false);s.env.FACEBOOK_CONFIG_SCOPES='pages_show_list,pages_manage_posts';assert.equal((await s.call('/start',{method:'POST'})).status,503)}finally{s.sqlite.close()}
+});
+
+test('Disconnect while OAuth is in flight cannot be undone by the late callback',async(t)=>{
+ const s=setup();graph(t);try{
+  let u=await start(s);assert.equal((await s.call('/callback?state='+u.searchParams.get('state')+'&code=first')).status,303);
+  let release,entered;const pending=new Promise(r=>release=r),reached=new Promise(r=>entered=r);const original=fetch;
+  t.mock.method(globalThis,'fetch',async(url,init)=>{if(String(url).includes('/me/accounts')){entered();await pending}return original(url,init)});
+  u=await start(s);const callback=s.call('/callback?state='+u.searchParams.get('state')+'&code=second');await reached;
+  assert.equal((await s.call('/123/disconnect',{method:'POST'})).status,200);release();
+  assert.equal((await callback).status,409);const row=s.sqlite.prepare('SELECT status,token_cipher FROM facebook_connections').get();assert.equal(row.status,'disconnected');assert.equal(row.token_cipher,null);
+ }finally{s.sqlite.close()}
 });

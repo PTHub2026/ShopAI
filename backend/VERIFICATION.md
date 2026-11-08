@@ -67,3 +67,5 @@ Phần này cập nhật các giới hạn cloud nêu trong những mốc trư�
 - Không cấu hình secrets, không cấp Page grant, không bật OAuth trên cloud trong bước này. Publishing, scheduling và inbox tiếp tục false.
 
 - Sau review độc lập OAuth: đã thu hẹp quyền yêu cầu chỉ còn pages_show_list và yêu cầu khai báo đã xác minh phạm vi khi dùng Login for Business config ID. Test mới tái hiện yêu cầu quyền quá rộng trước sửa; toàn suite cuối **60/60 pass**, Wrangler dry-run exit 0. Các minor còn lại được ghi ở FACEBOOK_SETUP.md, không bật OAuth thật trong bản này.
+
+- Review GitHub phát hiện race callback OAuth đến sau thao tác ngắt liên kết có thể khôi phục token. Test tái hiện nhận303 trước sửa; generation lưu D1 được tăng khi start/disconnect, mọi ghi inventory kiểm tra cùng generation trong transaction. Test sau sửa nhận409 và token vẫn NULL; suite **61/61 pass** và dry-run pass.

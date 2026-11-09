@@ -99,7 +99,7 @@ test('legacy plaintext tokens are encrypted before use and cannot be moved to an
  try{await mocked(graph,()=>callback(f,start));
  f.sqlite.prepare('UPDATE shop_channels SET access_token=?,refresh_token=?').run(access,refresh);
  const {publishZaloArticle}=await import('../src/channels.js');
- await mocked(async(url,init)=>{assert.equal(init.headers.access_token,access);return String(url).endsWith('/create')?Response.json({error:0,data:{token:'article'}}):Response.json({error:0,data:{id:'post'}});},async()=>{
+ await mocked(async(url,init)=>{assert.equal(init.headers.access_token,access);if(String(url).endsWith('/getoa'))return Response.json({error:0,data:{oa_id:'123456789'}});return String(url).endsWith('/create')?Response.json({error:0,data:{token:'article'}}):Response.json({error:0,data:{id:'post'}});},async()=>{
   assert.equal((await publishZaloArticle(f.env,f.env.DB,f.sqlite.prepare('SELECT * FROM shop_channels').get(),{content:'Test',images:['https://example.com/cover.png']})).ok,true);
   const stored=f.sqlite.prepare('SELECT * FROM shop_channels').get();assert.ok(stored.access_token.startsWith('enc1.'));assert.ok(stored.refresh_token.startsWith('enc1.'));
   await assert.rejects(publishZaloArticle(f.env,f.env.DB,{...stored,shop_id:'other-shop'},{content:'Test',images:['https://example.com/cover.png']}));
@@ -131,4 +131,46 @@ test('Zalo articles without required cover fail locally before contacting Zalo',
  await mocked(()=>{throw Error('must not send');},async()=>{
   await assert.rejects(publishZaloArticle({}, {}, {}, {content:'Test',images:[]}),/ảnh bìa/);
  });
+});
+test('reconnecting an OA supersedes an in-flight refresh without overwriting tokens',async()=>{
+ const f=fixture(),owner=f.login('email:owner@example.com');
+ await mocked(graph,()=>begin(f,owner).then(s=>callback(f,s)));
+ f.sqlite.exec('UPDATE shop_channels SET expires_at=1');
+ const old=f.sqlite.prepare('SELECT * FROM shop_channels').get();
+ const start=await begin(f,owner);
+ const {publishZaloArticle}=await import('../src/channels.js');
+ let unblock, entered;
+ const pending=new Promise(r=>{entered=r;});
+ let publishToken;
+ await mocked(async(url,init)=>{
+  if(String(url).includes('access_token')){
+   if(new URLSearchParams(init.body).get('grant_type')==='refresh_token'){
+    entered();await new Promise(r=>{unblock=r;});
+    return Response.json({access_token:'OA1-rotated-access',refresh_token:'OA1-rotated-refresh',expires_in:90000});
+   }
+   return Response.json({access_token:'OA2-access',refresh_token:'OA2-refresh',expires_in:90000});
+  }
+  if(String(url).endsWith('/getoa'))return Response.json({error:0,data:{oa_id:'222222',name:'New OA'}});
+  publishToken=init.headers.access_token;
+  return String(url).endsWith('/create')?Response.json({error:0,data:{token:'article'}}):Response.json({error:0,data:{id:'post'}});
+ },async()=>{
+  const publishing=publishZaloArticle(f.env,f.env.DB,old,{content:'Test',images:['https://example.com/cover.png']});
+  const rejected=assert.rejects(publishing,/thay đổi|kết nối lại/);
+  await pending;
+  assert.match((await callback(f,start)).headers.get('Location'),/connected=zalo/);
+  const newTokens=f.sqlite.prepare('SELECT * FROM shop_channels').get();
+  unblock();await rejected;
+  const row=f.sqlite.prepare('SELECT * FROM shop_channels').get();
+  assert.equal(row.external_id,'222222');
+  await publishZaloArticle(f.env,f.env.DB,row,{content:'After reconnect',images:['https://example.com/cover.png']});
+  assert.equal(row.access_token,newTokens.access_token);assert.equal(row.refresh_token,newTokens.refresh_token);assert.equal(publishToken,'OA2-access');
+ });f.sqlite.close();
+});
+test('unverified legacy connections are not shown connected and cannot publish',async()=>{
+ const f=fixture(),owner=f.login('email:owner@example.com'),start=await begin(f,owner);
+ try{await mocked(graph,()=>callback(f,start));f.sqlite.prepare('UPDATE shop_channels SET external_id=NULL,access_token=?,refresh_token=?').run(access,refresh);
+ const j=await (await f.req(owner,'/channels')).json();assert.equal(j.channels[0].status,'reauth_required');assert.equal(j.channels[0].needsReconnect,true);
+ const {publishZaloArticle}=await import('../src/channels.js');
+ await mocked(()=>{throw Error('must not publish');},async()=>{await assert.rejects(publishZaloArticle(f.env,f.env.DB,f.sqlite.prepare('SELECT * FROM shop_channels').get(),{content:'Test',images:['https://example.com/cover.png']}),/kết nối lại/);});
+ }finally{f.sqlite.close();}
 });

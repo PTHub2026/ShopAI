@@ -21,7 +21,7 @@
 - ZALO_APP_ID / ZALO_APP_SECRET và callback đã cấu hình trên ứng dụng Shoptrack. Callback: https://shoppost.net/auth/zalo/callback.
 
 ## Kiểm chứng
-127/127 test và Wrangler dry-run PASS. Các regression gồm: OA info bị từ chối, callback replay/sai actor/hết hạn, token mã hóa/tách shop, refresh đồng thời, refresh mất phản hồi, token cũ, media public và API article đúng phiên bản/thiếu ID.
+129/129 test và Wrangler dry-run PASS. Các regression gồm: OA info bị từ chối, callback replay/sai actor/hết hạn, token mã hóa/tách shop, refresh đồng thời, refresh mất phản hồi, token cũ, media public và API article đúng phiên bản/thiếu ID.
 
 ## Chưa thể nghiệm thu thật
 Phiên Zalo hiện tại đã được kiểm tra trên OA Manager và không có OA. Chưa có OAuth thành công hoặc bài thử trên OA thật. Cần tài khoản quản trị OA, quyền Article được duyệt và điều kiện dịch vụ phù hợp. Không hứa chỉ có một tài khoản Zalo bất kỳ là có thể dùng OA.
@@ -29,3 +29,8 @@ Phiên Zalo hiện tại đã được kiểm tra trên OA Manager và không c�
 Nguồn:
 https://developers.zalo.me/docs/official-account/noi-dung/noi-dung-dang-bai-viet
 https://developers.zalo.me/docs/official-account/noi-dung/noi-dung-dang-bai-viet/kiem-tra-ket-qua-tien-trinh-tao-noi-dung
+
+## Rà soát độc lập trước phát hành
+- Đã tái hiện refresh cũ ghi đè token sau khi kết nối OA mới; sửa bằng CAS trên token/identity snapshot cho callback, cập nhật refresh thành công và đánh dấu lỗi refresh. Nếu kết nối đổi, không gửi bằng kết quả cũ.
+- Đã tái hiện dữ liệu legacy thiếu OA ID vẫn hiện connected; nay không hiện connected. Token legacy có OA ID chỉ được nâng cấp sau getOA xác minh đúng ID; nếu không phải cấp quyền lại. Không xóa dữ liệu cũ.
+- Hai regression đã chạy đỏ trước sửa và xanh sau sửa; full suite 129/129 và dry-run đạt.

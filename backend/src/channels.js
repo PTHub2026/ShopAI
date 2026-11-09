@@ -129,27 +129,32 @@ async function getOaInfo(accessToken) {
   return fetchJson(ZALO_GETOA, { method: 'GET', headers: { access_token: accessToken } });
 }
 
-async function upsertChannel(db,env, { shopId, provider, externalId, name, accessToken, refreshToken, expiresAt, connectedBy }) {
+async function upsertChannel(db,env, { shopId, provider, externalId, name, accessToken, refreshToken, expiresAt, connectedBy, expected }) {
   const t = now();
   accessToken=await protectToken(env,shopId,'access',accessToken);
   refreshToken=await protectToken(env,shopId,'refresh',refreshToken);
-  await db.prepare(
+  const saved=await db.prepare(
     'INSERT INTO shop_channels (shop_id, provider, external_id, name, access_token, refresh_token, expires_at, status, connected_by, connected_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(shop_id, provider) DO UPDATE SET external_id = excluded.external_id, name = excluded.name, access_token = excluded.access_token, refresh_token = excluded.refresh_token, expires_at = excluded.expires_at, status = excluded.status, connected_by = excluded.connected_by, connected_at = excluded.connected_at, updated_at = excluded.updated_at'
-  ).bind(shopId, provider, externalId, name, accessToken, refreshToken, expiresAt, 'connected', connectedBy, t, t).run();
+    'ON CONFLICT(shop_id, provider) DO UPDATE SET external_id = excluded.external_id, name = excluded.name, access_token = excluded.access_token, refresh_token = excluded.refresh_token, expires_at = excluded.expires_at, status = excluded.status, connected_by = excluded.connected_by, connected_at = excluded.connected_at, updated_at = excluded.updated_at WHERE shop_channels.access_token IS ? AND shop_channels.refresh_token IS ? AND shop_channels.external_id IS ?'
+  ).bind(shopId, provider, externalId, name, accessToken, refreshToken, expiresAt, 'connected', connectedBy, t, t, expected?.access_token??null,expected?.refresh_token??null,expected?.external_id??null).run();
+  if(saved.meta.changes!==1)throw Error('Kết nối OA đã thay đổi. Hãy kết nối lại.');
 }
-async function persistTokens(db, env, shopId, provider, { accessToken, refreshToken, expiresAt }) {
+async function persistTokens(db, env, shopId, provider, { accessToken, refreshToken, expiresAt }, expected) {
   accessToken=await protectToken(env,shopId,'access',accessToken);
   refreshToken=await protectToken(env,shopId,'refresh',refreshToken);
-  await db.prepare('UPDATE shop_channels SET access_token = ?, refresh_token = ?, expires_at = ?, updated_at = ? WHERE shop_id = ? AND provider = ?')
-    .bind(accessToken, refreshToken, expiresAt, now(), shopId, provider).run();
+  const saved=await db.prepare("UPDATE shop_channels SET access_token = ?, refresh_token = ?, expires_at = ?, updated_at = ? WHERE shop_id = ? AND provider = ? AND access_token IS ? AND refresh_token IS ? AND status='connected'")
+    .bind(accessToken, refreshToken, expiresAt, now(), shopId, provider,expected.access_token,expected.refresh_token).run();
+  if(saved.meta.changes!==1)throw Error('Kết nối OA đã thay đổi. Hãy kết nối lại.');
 }
 
 // Làm mới access_token nếu sắp/đã hết hạn và lưu lại cặp token mới (refresh_token Zalo dùng một lần, phải lưu cái mới trả về).
 async function ensureFreshToken(env, db, channel) {
  const access=await unprotectToken(env,channel.shop_id,'access',channel.access_token);
  const refresh=await unprotectToken(env,channel.shop_id,'refresh',channel.refresh_token);
+ if(!/^\d+$/.test(String(channel.external_id||'')))throw Error('Cần kết nối lại Zalo OA để xác minh danh tính.');
  if(!channel.access_token.startsWith('enc1.')){
+  const verified=await getOaInfo(access);
+  if(!verified.ok||Number(verified.data?.error)!==0||String(verified.data?.data?.oa_id||'')!==String(channel.external_id))throw Error('Cần kết nối lại Zalo OA để xác minh quyền truy cập.');
   const a=await protectToken(env,channel.shop_id,'access',access),r=await protectToken(env,channel.shop_id,'refresh',refresh);
   await db.prepare('UPDATE shop_channels SET access_token=?,refresh_token=? WHERE shop_id=? AND provider=? AND access_token=? AND refresh_token IS ?').bind(a,r,channel.shop_id,channel.provider,channel.access_token,channel.refresh_token).run();
  }
@@ -169,11 +174,11 @@ async function ensureFreshToken(env, db, channel) {
   let r;
   try{r=await refreshAccessToken(env,currentRefresh);}catch{r=null;}
   if(!r?.ok||!r.data?.access_token||!r.data?.refresh_token){
-   await db.prepare("UPDATE shop_channels SET status='reauth_required',refresh_token=NULL,updated_at=? WHERE shop_id=? AND provider=?").bind(now(),channel.shop_id,channel.provider).run();
+   await db.prepare("UPDATE shop_channels SET status='reauth_required',refresh_token=NULL,updated_at=? WHERE shop_id=? AND provider=? AND access_token IS ? AND refresh_token IS ?").bind(now(),channel.shop_id,channel.provider,latest.access_token,latest.refresh_token).run();
    throw Error('Không thể làm mới phiên Zalo. Hãy kết nối lại OA tại mục Kênh.');
   }
   const expiresAt=now()+Number(r.data.expires_in||90000);
-  await persistTokens(db,env,channel.shop_id,channel.provider,{accessToken:r.data.access_token,refreshToken:r.data.refresh_token,expiresAt});
+  await persistTokens(db,env,channel.shop_id,channel.provider,{accessToken:r.data.access_token,refreshToken:r.data.refresh_token,expiresAt},latest);
   return {token:r.data.access_token};
  }finally{await db.prepare('DELETE FROM channel_refresh_locks WHERE shop_id=? AND provider=? AND lease=?').bind(channel.shop_id,channel.provider,lease).run();}
 }
@@ -314,8 +319,11 @@ export async function channels(request, env, who, json) {
     try { ctx = await resolveShop(env, who, request); } catch { return json({ error: 'Không thể truy cập ngữ cảnh shop lúc này.' }, 503); }
     if (ctx.error) return json({ error: ctx.error, code: ctx.code }, ctx.status);
     if (!ctx.can('channels.view')) return json({ error: 'Vai trò của bạn trong shop này không được xem kênh.', code: 'forbidden' }, 403);
-    const { results } = await env.DB.prepare('SELECT provider, external_id, name, status, connected_at, expires_at FROM shop_channels WHERE shop_id = ?').bind(ctx.shop.id).all();
-    const list = (results || []).map(r => ({ provider: r.provider, external_id: r.external_id, oa_id: r.external_id, name: r.name, status: r.status, connected_at: Number(r.connected_at) || null, expires_at:Number(r.expires_at)||null, needsReconnect:r.status==='reauth_required' }));
+    const { results } = await env.DB.prepare('SELECT provider, external_id, name, status, connected_at, expires_at, access_token FROM shop_channels WHERE shop_id = ?').bind(ctx.shop.id).all();
+    const list = (results || []).map(r => {
+      const needsReconnect=r.status==='reauth_required'||!/^\d+$/.test(String(r.external_id||''))||!r.access_token?.startsWith('enc1.');
+      return {provider:r.provider,external_id:r.external_id,oa_id:r.external_id,name:r.name,status:needsReconnect?'reauth_required':r.status,connected_at:Number(r.connected_at)||null,expires_at:Number(r.expires_at)||null,needsReconnect};
+    });
     let keyReady=false;try{await tokenKey(env);keyReady=true;}catch{}
     return json({ channels:list, setup:{zalo:{configured:Boolean(env.ZALO_APP_ID&&env.ZALO_APP_SECRET&&keyReady),canConnect:ctx.can('channels.configure_token'),callbackUri:url.origin+'/auth/zalo/callback'}} });
   }
@@ -448,6 +456,7 @@ export async function zaloCallback(request, env, who) {
   if(used.meta.changes!==1)return fail();
 
   try {
+  const expected=await env.DB.prepare('SELECT * FROM shop_channels WHERE shop_id=? AND provider=?').bind(ctx.shop.id,'zalo').first();
   const redirectUri = url.origin + '/auth/zalo/callback';
   const tok = await exchangeToken(env, { code, verifier: data.v, redirectUri });
   if (!tok.ok || !tok.data || !tok.data.access_token) return fail();
@@ -461,7 +470,7 @@ export async function zaloCallback(request, env, who) {
   const externalId = String(oaData.oa_id);
   const name = oaData && clean(oaData.name) ? clean(oaData.name) : 'Zalo OA';
 
-  await upsertChannel(env.DB, env, { shopId: ctx.shop.id, provider: 'zalo', externalId, name, accessToken, refreshToken, expiresAt, connectedBy: who.owner });
+  await upsertChannel(env.DB, env, { shopId: ctx.shop.id, provider: 'zalo', externalId, name, accessToken, refreshToken, expiresAt, connectedBy: who.owner, expected });
   return redirectTo(url.origin + '/?connected=zalo#accounts', [clearCookie(CONNECT_COOKIE)]);
   }catch{return fail('temporary_error');}
 }

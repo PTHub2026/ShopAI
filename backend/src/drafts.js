@@ -118,7 +118,16 @@ export async function drafts(request, env, owner, json, ctx) {
       ? env.DB.prepare("INSERT INTO drafts (owner, id, payload, revision, updated_at, shop_id, status, assigned_to, created_by) VALUES (?, ?, ?, 1, ?, ?, 'draft', NULL, ?) ON CONFLICT(owner, id) DO NOTHING").bind(owner, id, payload, now, shopId, owner)
       : env.DB.prepare('UPDATE drafts SET payload = ?, revision = revision + 1, updated_at = ?, status = ? WHERE shop_id = ? AND id = ? AND revision = ?').bind(payload, now, status, shopId, id, body.revision);
     const result = await statement.run();
-    if (result.meta.changes !== 1) return json({ error: 'Bản nháp đã thay đổi trên máy chủ. Mở lại hoặc lưu thành bản mới.' }, 409);
+    if (result.meta.changes !== 1) {
+      // Khi tạo mới (revision=0): xung đột PRIMARY KEY (owner, id) có thể xảy ra nếu owner
+      // đã tạo bản nháp cùng ID trong một shop khác (shop_id khác). Phân biệt trường hợp này
+      // để trả thông điệp lỗi rõ ràng thay vì thông điệp "đã thay đổi trên máy chủ" gây nhầm lẫn.
+      if (body.revision === 0) {
+        const crossShop = await env.DB.prepare('SELECT shop_id FROM drafts WHERE owner = ? AND id = ?').bind(owner, id).first();
+        if (crossShop) return json({ error: 'Mã bản nháp này đã được dùng trong shop khác. Hãy lưu với mã khác.' }, 409);
+      }
+      return json({ error: 'Bản nháp đã thay đổi trên máy chủ. Mở lại hoặc lưu thành bản mới.' }, 409);
+    }
     return json({ draft: JSON.parse(payload), revision: body.revision + 1, updatedAt: now, status, createdBy: existing ? existing.created_by || existing.owner : owner, assignedTo: existing ? existing.assigned_to || null : null });
   } catch { return json({ error: 'Không thể truy cập kho bản nháp; không xác nhận đã lưu.' }, 503); }
 }

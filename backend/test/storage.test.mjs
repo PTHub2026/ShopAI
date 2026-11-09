@@ -112,3 +112,22 @@ test('Giới hạn tần suất chỉ áp cho ghi (PUT/DELETE), không áp cho �
     assert.deepEqual(keys,['drafts-write:alice','drafts-write:alice']);
   } finally { db.sqlite.close(); }
 });
+
+
+test('Xung đột ID bản nháp giữa hai shop trả lỗi rõ ràng thay vì "đã thay đổi trên máy chủ"',async()=>{
+  const db=database();
+  try {
+    // alice tạo draft-a trong shop A (ctxFor mặc định).
+    assert.equal((await call(db)).status,200);
+    // alice tạo cùng ID draft-a trong shop B (shop_id khác) → phải báo lỗi cross-shop.
+    const shopBCtx={shop:{id:'s_shopBxxx'},membership:{role:'owner',can_publish:true},can:action=>can({role:'owner',can_publish:true},action)};
+    const url='https://app.example/storage/drafts/draft-a';
+    const req=new Request(url,{method:'PUT',headers:{Origin:'https://app.example','Content-Type':'application/json'},body:JSON.stringify({draft:draft(),revision:0})});
+    const r=await drafts(req,{DB:db,AI_RATE_LIMITER:{limit:async()=>({success:true})}},
+      'alice',json,shopBCtx);
+    assert.equal(r.status,409);
+    const body=await r.json();
+    // Thông điệp phải đề cập "shop khác", không phải "đã thay đổi trên máy chủ".
+    assert.ok(body.error.includes('shop khác'),'Thông điệp lỗi phải chỉ rõ xung đột cross-shop: '+body.error);
+  } finally { db.sqlite.close(); }
+});

@@ -131,8 +131,8 @@ export function emailDomainAllowed(env, email) {
   if (at < 0) return false;
   return emailLoginDomains(env).includes(email.slice(at + 1));
 }
-// Thông điệp từ chối khi email không thuộc tên miền cho phép.
-const emailDomainMessage = env => `Đăng nhập bằng email chỉ dành cho địa chỉ ${emailLoginDomains(env).map(d => '@' + d).join(' và ')}.`;
+// Thông điệp từ chối khi email không thuộc tên miền cho phép. action: 'Đăng nhập' (mặc định) hoặc 'Đăng ký'.
+const emailDomainMessage = (env, action = 'Đăng nhập') => `${action} bằng email chỉ dành cho địa chỉ ${emailLoginDomains(env).map(d => '@' + d).join(' và ')}.`;
 // EMAIL_FROM dạng "ShopPost <no-reply@shoppost.net>" hoặc "no-reply@shoppost.net" → { email, name? }; sai định dạng → null.
 export function parseEmailFrom(value) {
   const v = clean(value);
@@ -492,7 +492,7 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
       if (path === '/auth/register/start') {
         const email = normalizeEmail(body.email);
         if (!email) return json({ error: 'Địa chỉ email không hợp lệ.' }, 400);
-        if (!emailDomainAllowed(env, email)) return json({ error: emailDomainMessage(env) }, 403);
+        if (!emailDomainAllowed(env, email)) return json({ error: emailDomainMessage(env, 'Đăng ký') }, 403);
         const pwErr = passwordError(body.password);
         if (pwErr) return json({ error: pwErr }, 400);
         try {
@@ -506,7 +506,7 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
       if (path === '/auth/register/verify') {
         const email = normalizeEmail(body.email);
         if (!email) return json({ error: 'Địa chỉ email không hợp lệ.' }, 400);
-        if (!emailDomainAllowed(env, email)) return json({ error: emailDomainMessage(env) }, 403);
+        if (!emailDomainAllowed(env, email)) return json({ error: emailDomainMessage(env, 'Đăng ký') }, 403);
         const pwErr = passwordError(body.password);
         if (pwErr) return json({ error: pwErr }, 400);
         const code = body.code;

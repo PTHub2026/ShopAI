@@ -406,7 +406,7 @@ test('Đăng ký bằng mật khẩu cũng chỉ dành cho @pthub.vn và @shoptr
       : { email: 'nguoila@gmail.com', password: '********' };
     const r = await post(e, path, body);
     assert.equal(r.status, 403);
-    assert.match((await r.json()).error, /@pthub\.vn và @shoptrack\.vn/);
+    assert.match((await r.json()).error, /^Đăng ký bằng email chỉ dành cho địa chỉ @pthub\.vn và @shoptrack\.vn/);
   }
   // Email bị từ chối không hề được tạo mã đăng ký trong kho.
   assert.equal(row(e.DB, 'SELECT code_hash FROM auth_otp_codes WHERE email = ?', 'nguoila@gmail.com'), null);

@@ -8,6 +8,15 @@ Tên hiển thị thống nhất **Shoppost**, tên miền shoppost.net. Giữ r
 
 Dùng Cloudflare Workers + D1, giao diện hiện có và backend kiểm tra quyền theo shop. Lấy main 090d727 làm nền ban đầu; luôn lấy lại HEAD mới trước khi hợp nhất. Main đã gỡ đăng nhập Zalo/Facebook: kết nối OA/Page là quyền dùng kênh, độc lập với đăng nhập Shoppost.
 
+## Quyết định người dùng chốt — 09/11/2026
+
+- Bỏ chức năng **đăng nhập bằng Zalo/Facebook**. Không khôi phục nút, route đăng nhập hoặc provider đăng nhập này khi hợp nhất #17/#18.
+- Chỉ giữ **kết nối Zalo OA/Facebook Page** để cấp quyền quản lý kênh, đăng nội dung hoặc trả lời tin nhắn theo API/quyền được cấp. Kết nối kênh chỉ thực hiện sau khi đã đăng nhập Shoppost; callback kết nối không tạo phiên đăng nhập Shoppost.
+- Bảo toàn tài khoản, shop, tư cách thành viên và dữ liệu cũ. Tài khoản đã có email/mật khẩu tiếp tục dùng phương thức đó.
+- Với tài khoản trước đây chỉ có danh tính Zalo/Facebook, phải có luồng chuyển đổi được xác minh sang email/mật khẩu và giữ nguyên owner/shop. Chưa xác minh thì ghi nhận cần khôi phục, không tự gộp theo tên/email chưa xác thực và không tạo shop thay thế.
+- Kiểm thử bắt buộc: login Zalo/Facebook không được quảng bá/chấp nhận; OAuth OA/Page không đăng nhập được vào Shoppost; ngắt kênh không xóa tài khoản hoặc quyền shop; tài khoản cũ sau chuyển đổi vẫn đọc đúng dữ liệu, tài khoản khác không chiếm được quyền.
+- Đây là yêu cầu triển khai và nghiệm thu. Luồng chuyển đổi tài khoản cũ chưa được xem là đã xây dựng hoặc kiểm chứng chỉ vì tài liệu này được cập nhật.
+
 ## Các cách hợp nhất và lựa chọn đề xuất
 
 | Cách | Lợi ích | Rủi ro | Kết luận |
@@ -29,7 +38,7 @@ Dùng Cloudflare Workers + D1, giao diện hiện có và backend kiểm tra quy
 
 Kết nối **Zalo Official Account** bằng API chính thức. V1 cần: cấp quyền OA, trạng thái kết nối và quyền, làm mới token, ngắt kết nối, nhận tin qua webhook và trả lời trong điều kiện API cho phép. Nội dung/broadcast chỉ bật sau khi xác minh API, quyền OA và hạn mức tương ứng; không coi API chat là API đăng bài.
 
-Không tự phục hồi login Zalo. Không dùng phiên Zalo cá nhân, tự quét nhóm hoặc mô phỏng đã gửi. Đây là quyết định kỹ thuật đề xuất theo mục tiêu sản phẩm đa kênh.
+Không phục hồi login Zalo/Facebook theo quyết định người dùng đã chốt. Không dùng phiên Zalo cá nhân, tự quét nhóm hoặc mô phỏng đã gửi. Đây là quyết định kỹ thuật đề xuất theo mục tiêu sản phẩm đa kênh.
 
 ## Thứ tự công việc và tiêu chí đạt
 

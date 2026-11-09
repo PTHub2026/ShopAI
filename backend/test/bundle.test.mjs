@@ -2,17 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 await import('../build.mjs');
-const dataURL = source => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
-const dist = async name => readFile(new URL('../dist/' + name, import.meta.url), 'utf8');
-// Nối các mô-đun đã build theo thứ tự phụ thuộc: permissions → auth → shops → drafts → worker.
-const permissionsURL = dataURL(await dist('permissions.js'));
-const authURL = dataURL(await dist('auth.js'));
-const shopsURL = dataURL((await dist('shops.js')).replace("'./auth.js'", JSON.stringify(authURL)).replace("'./permissions.js'", JSON.stringify(permissionsURL)));
-const draftsURL = dataURL((await dist('drafts.js')).replace("'./shops.js'", JSON.stringify(shopsURL)));
-const workerSource = (await dist('worker.js')).replace("'./drafts.js'", JSON.stringify(draftsURL)).replace("'./auth.js'", JSON.stringify(authURL)).replace("'./shops.js'", JSON.stringify(shopsURL)).replace("'./permissions.js'", JSON.stringify(permissionsURL));
-const workerURL = dataURL(workerSource);
-const appSource = (await readFile(new URL('../dist/app.js', import.meta.url), 'utf8')).replace("'./worker.js'", JSON.stringify(workerURL));
-const app = (await import('data:text/javascript;base64,' + Buffer.from(appSource).toString('base64'))).default;
+// Import the emitted module graph, including circular Meta/social dependencies.
+const app = (await import('../dist/app.js')).default;
 
 test('Build includes the repository frontend and serves it behind Access', async () => {
   const builtApp = await readFile(new URL('../dist/app.js', import.meta.url), 'utf8');

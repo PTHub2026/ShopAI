@@ -802,7 +802,7 @@ test('Số điện thoại (Twilio Verify): Twilio gửi và kiểm mã, Worker 
   });
 });
 
-test('Thương hiệu ShopPost: giao diện hiển thị ShopPost, giữ định danh kỹ thuật shopai; trang đăng nhập đủ 5 phương thức đúng thứ tự', async () => {
+test('Thương hiệu ShopPost: giao diện hiển thị ShopPost, giữ định danh kỹ thuật shopai; trang đăng nhập đủ các phương thức đúng thứ tự', async () => {
   const index = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
   const TECH = /shopai-ai-endpoint|shopai-user-scope|X-ShopAI-User-Scope|__Host-shopai_\w+|SHOPAI_RELEASE_SHA|shopai-backend|shopai-drafts[\w-]*/g;
@@ -812,8 +812,11 @@ test('Thương hiệu ShopPost: giao diện hiển thị ShopPost, giữ định
   }
   assert.match(index, /<title>ShopPost × ShopTrack/); assert.match(index, /name="shopai-ai-endpoint"/); assert.match(index, /name="shopai-user-scope"/);
   assert.match(LOGIN_FILE, /<title>Đăng nhập ShopPost<\/title>/); assert.ok(LOGIN_FILE.includes('© ShopPost × ShopTrack'));
-  const order = ['id="zalo"', 'id="fb"', 'id="tiktok"', 'id="phoneBtn"', 'id="emailForm"'].map(id => LOGIN_FILE.indexOf(id));
+  const order = ['id="tiktok"', 'id="phoneBtn"', 'id="emailForm"'].map(id => LOGIN_FILE.indexOf(id));
   assert.ok(order.every(i => i > 0), JSON.stringify(order)); assert.deepEqual([...order].sort((a, b) => a - b), order);
+  // Đã gỡ đăng nhập nền tảng Zalo/Facebook khỏi trang đăng nhập.
+  assert.ok(!LOGIN_FILE.includes('id="fb"') && !LOGIN_FILE.includes('id="zalo"'), 'nút Zalo/Facebook vẫn còn');
+  assert.ok(!LOGIN_FILE.includes('/auth/zalo/start') && !LOGIN_FILE.includes('setupFacebook'), 'vẫn còn tham chiếu đăng nhập Zalo/Facebook');
   assert.match(LOGIN_FILE, /<a id="tiktok" class="btn tiktok" href="\/auth\/tiktok\/start" hidden>/);
   assert.match(LOGIN_FILE, /<input id="phone"[^>]*type="tel"[^>]*inputmode="tel"/);
   // CSP trang đăng nhập không thêm nguồn ngoài cho TikTok/SMS (TikTok điều hướng toàn trang, SMS gửi từ máy chủ).

@@ -45,17 +45,24 @@ export async function publishMeta(e,account,job){
  if(account.provider==='instagram'){
   if(job.kind!=='photo')throw Error('IG_REQUIRES_PHOTO');
   // Container creation is not publishing; once the publish call starts, network uncertainty is not retried.
-  const container=await graphRequest(e,encodeURIComponent(account.external_id)+'/media',token,{image_url:p.photoUrl,caption:p.text},'POST');
-  if(!container.id)throw Error('META_MISSING_CONTAINER');
+  if(!e.DB||!job.id||!job.shop_id)throw Error('IG_JOB_STORAGE_REQUIRED');
+  let containerId=job.instagram_container_id;
+  if(!containerId){
+   const container=await graphRequest(e,encodeURIComponent(account.external_id)+'/media',token,{image_url:p.photoUrl,caption:p.text},'POST');
+   if(!container.id)throw Error('META_MISSING_CONTAINER');
+   containerId=String(container.id);
+   const saved=await e.DB.prepare("UPDATE publish_jobs SET instagram_container_id=? WHERE id=? AND shop_id=? AND account_id=? AND status='sending' AND instagram_container_id IS NULL").bind(containerId,job.id,job.shop_id,account.id).run();
+   if(saved.meta.changes!==1)throw Error('IG_CONTAINER_NOT_SAVED');
+  }
   // Instagram media creation can be asynchronous. Never publish an unready container.
-  const status=await graphRequest(e,encodeURIComponent(String(container.id)),token,{fields:'status_code'});
+  const status=await graphRequest(e,encodeURIComponent(containerId),token,{fields:'status_code'});
   if(status.status_code!=='FINISHED'){
    if(status.status_code==='IN_PROGRESS'){
     const wait=Error('IG_MEDIA_PROCESSING');wait.status=429;wait.retryAfter=30;throw wait;
    }
    throw Error('IG_MEDIA_UNAVAILABLE');
   }
-  const publish=await graphRequest(e,encodeURIComponent(account.external_id)+'/media_publish',token,{creation_id:String(container.id)},'POST');
+  const publish=await graphRequest(e,encodeURIComponent(account.external_id)+'/media_publish',token,{creation_id:containerId},'POST');
   if(!publish.id)throw Error('META_MISSING_ID');return String(publish.id);
  }
  throw Error('UNSUPPORTED_PROVIDER');

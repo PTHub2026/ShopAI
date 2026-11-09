@@ -154,3 +154,58 @@ test('publish-now operates the existing scheduled job and cannot duplicate it',a
   assert.equal((await f.request(owner,path,{method:'POST'})).data.job.status,'sent');assert.equal(sent,1);
  });
 });
+
+test('Instagram processing retry reuses its persisted container after a new request',async()=>{
+ const {encryptToken}=await import('../src/social.js');
+ const f=fixture(),owner=f.login('email:instagram@example.com');
+ const previous=globalThis.fetch;const calls=[];let polls=0;
+ try{
+  const shop=(await f.request(owner,'/session')).data.shop.id;
+  await f.request(owner,'/api/social/accounts');
+  const token=await encryptToken(f.env,'synthetic-ig-token');
+  f.db.sqlite.prepare("INSERT INTO channels(id,shop_id,provider,external_id,name,token,token_iv,status) VALUES(?,?,'instagram','987654','IG',?,?,'connected')").run('ig-account',shop,token.cipher,token.iv);
+  globalThis.fetch=async(url,options)=>{
+   const path=new URL(url).pathname.split('/').at(-1);calls.push(path);
+   if(path==='media')return Response.json({id:'persisted-container'});
+   if(path==='persisted-container')return Response.json({status_code:++polls===1?'IN_PROGRESS':'FINISHED'});
+   if(path==='media_publish'){
+    assert.equal(new URLSearchParams(options.body).get('creation_id'),'persisted-container');
+    return Response.json({id:'published-media'});
+   }
+   throw Error('Unexpected endpoint');
+  };
+  const first=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'instagram-persist-123',body:{accountId:'ig-account',kind:'photo',text:'Caption',photoUrl:'https://example.com/image.jpg'}});
+  assert.equal(first.status,429);const id=first.data.job.id;
+  f.db.sqlite.prepare('UPDATE publish_jobs SET next_attempt_at=0 WHERE id=?').run(id);
+  f.env.DB={prepare:f.db.prepare,batch:f.db.batch};
+  const retries=await Promise.all([f.request(owner,'/api/social/jobs/'+id+'/retry',{method:'POST'}),f.request(owner,'/api/social/jobs/'+id+'/retry',{method:'POST'})]);
+  assert.deepEqual(retries.map(r=>r.status).sort(),[200,409]);
+  assert.equal(retries.find(r=>r.status===200).data.job.remoteMessageId,'published-media');
+  assert.deepEqual(calls,['media','persisted-container','persisted-container','media_publish']);
+  assert.equal(f.db.sqlite.prepare('SELECT instagram_container_id FROM publish_jobs WHERE id=?').get(id).instagram_container_id,'persisted-container');
+ }finally{globalThis.fetch=previous;f.db.sqlite.close();}
+});
+
+test('Instagram uncertain publish keeps its container and refuses a second publish',async()=>{
+ const {encryptToken}=await import('../src/social.js');
+ const f=fixture(),owner=f.login('email:ig-unknown@example.com');
+ const previous=globalThis.fetch;const calls=[];
+ try{
+  const shop=(await f.request(owner,'/session')).data.shop.id;
+  await f.request(owner,'/api/social/accounts');
+  const token=await encryptToken(f.env,'synthetic-ig-token');
+  f.db.sqlite.prepare("INSERT INTO channels(id,shop_id,provider,external_id,name,token,token_iv,status) VALUES(?,?,'instagram','987654','IG',?,?,'connected')").run('ig-account',shop,token.cipher,token.iv);
+  globalThis.fetch=async(url)=>{
+   const path=new URL(url).pathname.split('/').at(-1);calls.push(path);
+   if(path==='media')return Response.json({id:'uncertain-container'});
+   if(path==='uncertain-container')return Response.json({status_code:'FINISHED'});
+   throw Error('network response lost after publish');
+  };
+  const first=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'instagram-uncertain-123',body:{accountId:'ig-account',kind:'photo',text:'Caption',photoUrl:'https://example.com/image.jpg'}});
+  assert.equal(first.status,502);assert.equal(first.data.job.status,'unknown');
+  const id=first.data.job.id;
+  assert.equal(f.db.sqlite.prepare('SELECT instagram_container_id FROM publish_jobs WHERE id=?').get(id).instagram_container_id,'uncertain-container');
+  assert.equal((await f.request(owner,'/api/social/jobs/'+id+'/retry',{method:'POST'})).status,409);
+  assert.deepEqual(calls,['media','uncertain-container','media_publish']);
+ }finally{globalThis.fetch=previous;f.db.sqlite.close();}
+});

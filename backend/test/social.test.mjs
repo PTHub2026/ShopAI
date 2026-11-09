@@ -23,7 +23,7 @@ test('schema enforces per-shop idempotency and scoped accounts',()=>{
  assert.match(s,/UNIQUE\(shop_id,idempotency_key\)/);
  assert.match(s,/UNIQUE\(shop_id,provider,target_id\)/);
  assert.match(s,/CHECK\(status IN \('pending','sending','sent','retryable','unknown','failed'\)\)/);
- const migration=readFileSync(new URL('../migrations/0005_social_publishing.sql',import.meta.url),'utf8');
+ const migration=readFileSync(new URL('../migrations/0008_social_publishing.sql',import.meta.url),'utf8');
  assert.match(migration,/UNIQUE\(shop_id,idempotency_key\)/);
  assert.match(migration,/UNIQUE\(shop_id,provider,target_id\)/);
 });
@@ -33,6 +33,6 @@ test('publisher safeguards: shop scoping, conditional claim and unknown no repla
  assert.match(source,/WHERE shop_id=\? AND id=\?/);
  assert.match(source,/status IN \('pending','retryable'\)/);
  assert.match(source,/delivery_uncertain/);
- assert.match(source,/status='revoked',token_ciphertext='',token_iv=''/);
+ assert.match(source,/status='revoked',token='',token_iv=''/);
  assert.doesNotMatch(source,/console\.log\([^)]*token/);
 });

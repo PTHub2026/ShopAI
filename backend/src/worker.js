@@ -2,7 +2,9 @@ import { handleSocial } from './social.js';
 import { drafts } from './drafts.js';
 import { handleAuth, loginResponse, normalizeEmail, sessionFromRequest } from './auth.js';
 import { INVITE_PATH, handleApi, resolveShop } from './shops.js';
+import { channels, zaloCallback, runDueScheduledPosts, publicZaloMedia } from './channels.js';
 import { isPlatformAdmin } from './permissions.js';
+import { legalResponse } from './legal.js';
 const INVITE_COOKIE = '__Host-shopai_invite';
 const LOGIN_REQUIRED = 'Phiên đăng nhập đã hết hạn hoặc chưa đăng nhập.';
 const TASKS = new Set(['generate', 'improve', 'adapt', 'reply']);
@@ -58,6 +60,11 @@ function appResponse(env, request, scope, invite = '', extra = {}) {
   } });
 }
 export default {
+  // Cron Trigger (xem triggers.crons trong wrangler.jsonc): quét lịch đăng đến giờ và đăng lên kênh thật.
+  async scheduled(event, env, ctx) {
+    if (!env.DB) return;
+    ctx.waitUntil(runDueScheduledPosts(env).then(result => console.info(JSON.stringify({event:'publish.cron',processed:result.processed}))).catch(() => console.error(JSON.stringify({event:'publish.cron',code:'scheduler_failed'}))));
+  },
   async fetch(request, env) {
     const origin = request.headers.get('Origin');
     const allowed = (env.ALLOWED_ORIGINS || '').split(',').map(x => x.trim()).filter(Boolean);
@@ -66,6 +73,9 @@ export default {
     const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), { status, headers: { ...headers, ...extra } });
     if (origin && origin !== new URL(request.url).origin && !allowed.includes(origin)) return json({ error: 'Nguồn truy cập không được phép.' }, 403);
     const path = new URL(request.url).pathname;
+    if(path.startsWith('/media/zalo/'))return publicZaloMedia(request,env);
+    const legal = legalResponse(path, request.method);
+    if (legal) return legal;
     if (path.startsWith('/storage/')) {
       // Bản nháp chỉ phục vụ cùng origin: chặn mọi origin khác (kể cả origin trong danh sách CORS) cho cả đọc lẫn ghi.
       if (origin && origin !== new URL(request.url).origin) return json({ error: 'Chỉ cho phép truy cập bản nháp từ cùng origin.' }, 403);
@@ -95,6 +105,26 @@ export default {
       if (path.startsWith('/api/social/')) return handleSocial(request, env, who, json);
       return handleApi(request, env, who, json);
     }
+    if (path === '/channels' || path.startsWith('/channels/')) {
+      // Kênh chỉ phục vụ cùng origin cho các lời gọi fetch; riêng /channels/zalo/connect là điều hướng cấp trang (không có Origin) nên vẫn qua được.
+      if (origin && origin !== new URL(request.url).origin) return json({ error: 'Chỉ cho phép truy cập kênh từ cùng origin.' }, 403);
+      if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
+      const who = await identify(request, env);
+      if (!who) return json({ error: LOGIN_REQUIRED }, 401);
+      if (!who.owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
+      const expectedScope = request.headers.get('X-ShopAI-User-Scope');
+      if (expectedScope && expectedScope !== await scopeFor(who.owner)) return json({ code: 'ACCOUNT_CHANGED', error: 'Tài khoản đã thay đổi. Tải lại trang trước khi tiếp tục.' }, 403);
+      if (!env.DB) return json({ error: 'Chưa gắn cơ sở dữ liệu.' }, 503);
+      return channels(request, env, who, json);
+    }
+    // Callback OA của Zalo: điều hướng cấp trang từ Zalo (KHÔNG có Origin) — không áp dụng chặn cùng origin, dựa vào cookie state đã ký.
+    if (path === '/auth/zalo/callback') {
+      if (request.method !== 'GET') return json({ error: 'Chỉ hỗ trợ GET.' }, 405, { Allow: 'GET' });
+      if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
+      if (!env.DB) return json({ error: 'Chưa gắn cơ sở dữ liệu.' }, 503);
+      const who = await identify(request, env);
+      return zaloCallback(request, env, who);
+    }
     if (path === '/session') {
       if (request.method !== 'GET') return json({ error: 'Chỉ hỗ trợ GET.' }, 405, { Allow: 'GET' });
       if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
@@ -107,7 +137,7 @@ export default {
         try { const ctx = await resolveShop(env, who, request); if (ctx.error) shopError = { code: ctx.code, error: ctx.error }; else shop = { id: ctx.shop.id, name: ctx.shop.name, role: ctx.membership.role, canPublish: ctx.membership.can_publish, permissions: ctx.permissions }; }
         catch { shopError = { code: 'shop_unavailable', error: 'Không thể tải thông tin shop lúc này.' }; }
       }
-      return json({ userScope: await scopeFor(owner), auth: who.via, account: who.via === 'session' ? { provider: who.provider, name: who.name } : null, admin: isPlatformAdmin(env, who), shop, shopError, capabilities: { ai: true, drafts: Boolean(env.DB), publishing: false, scheduling: false, inbox: false }, version: env.CF_VERSION_METADATA?.id || null, release: env.RELEASE_SHA || null });
+      return json({ userScope: await scopeFor(owner), auth: who.via, account: who.via === 'session' ? { provider: who.provider, name: who.name } : null, admin: isPlatformAdmin(env, who), shop, shopError, capabilities: { ai: true, drafts: Boolean(env.DB), publishing: Boolean(env.DB), scheduling: Boolean(env.DB), inbox: false }, version: env.CF_VERSION_METADATA?.id || null, release: env.RELEASE_SHA || null });
     }
     if (path.startsWith('/auth/')) return handleAuth(request, env, { json, headers, accessUser: async () => Boolean(request.headers.get('Cf-Access-Jwt-Assertion')) && await authenticate(request, env) });
     // Giao diện và API cùng origin; cần Access JWT hợp lệ hoặc phiên đăng nhập, nếu không thì hiện trang đăng nhập.

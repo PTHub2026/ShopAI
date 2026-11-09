@@ -70,8 +70,8 @@ test('Meta OAuth: one-use state, same actor, scoped accounts, encrypted Page tok
   const accounts=(await listed.json()).accounts;
   assert.deepEqual(accounts.map(x=>x.provider).sort(),['facebook','facebook','instagram']);
   assert.equal(JSON.stringify(accounts).includes('PAGE_SECRET'),false);
-  const row=f.sqlite.prepare("SELECT token_ciphertext, token_iv FROM social_accounts WHERE provider='facebook'").get();
-  assert.notEqual(row.token_ciphertext,'PAGE_SECRET_DO_NOT_EXPOSE');assert.ok(row.token_iv.length>10);
+  const row=f.sqlite.prepare("SELECT token, token_iv FROM channels WHERE provider='facebook'").get();
+  assert.notEqual(row.token,'PAGE_SECRET_DO_NOT_EXPOSE');assert.ok(row.token_iv.length>10);
   assert.equal((await f.req(owner,cb)).status,403,'callback replay rejected');
   assert.deepEqual(calls.map(p=>p.split('/').at(-1)),['access_token','access_token','permissions','accounts','accounts']);
  }finally{globalThis.fetch=previous;f.sqlite.close();}

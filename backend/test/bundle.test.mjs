@@ -2,7 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 await import('../build.mjs');
-// Import the emitted module graph, including circular Meta/social dependencies.
 const app = (await import('../dist/app.js')).default;
 
 test('Build includes the repository frontend and serves it behind Access', async () => {
@@ -37,4 +36,11 @@ test('Built health exposes the packaged commit for deployment verification', asy
   const response=await app.fetch(new Request('https://shopai-backend.example/health'),{});
   const body=await response.json();
   assert.match(body.release,/^[a-f0-9]{40}$/);
+});
+
+test('deployed entry exports scheduled handler and forwards cron to backend', async()=>{
+ assert.equal(typeof app.scheduled,'function');
+ const {sqliteDB}=await import('./sqlite-fixture.mjs');const DB=sqliteDB(),tasks=[];
+ try{await app.scheduled({cron:'*/5 * * * *'},{DB},{waitUntil:p=>tasks.push(p)});
+ await Promise.all(tasks);assert.equal(tasks.length,1);assert.ok(DB.sqlite.prepare("SELECT name FROM sqlite_master WHERE name='publish_jobs'").get());}finally{DB.sqlite.close();}
 });

@@ -2,6 +2,8 @@
 
 Ngày: 09/11/2026. Trạng thái: phương án triển khai; không phải xác nhận phần mềm đã hoàn thiện.
 
+> Đồng bộ 10/11/2026: tài liệu này giữ phương án ngày 09/11 để đối chiếu. Nhánh đã hợp nhất main `a8096cd`, gồm kho `channels`, hàng đợi chung, Zalo OA và các bản sửa tiếp theo. Trạng thái mới xem `docs/releases/2026-11-10-channels-execution.md`. Các số migration và ô chưa hoàn tất bên dưới là lịch sử kế hoạch, không phải lệnh triển khai hiện hành. Dùng danh sách migration hiện tại và ledger của từng database, không áp lại các tệp social 0005–0007 cũ.
+
 ## Mục tiêu và nền tảng
 
 Tên hiển thị thống nhất **Shoppost**, tên miền shoppost.net. Giữ repository PTHub2026/ShopAI, Worker, cookie, database, header và khóa localStorage hiện tại để không làm mất phiên hoặc dữ liệu. Đổi repository là việc độc lập, không cần để đổi thương hiệu sản phẩm.

@@ -1,6 +1,6 @@
 # Kết nối Meta / Facebook Pages / Instagram Professional — staging
 
-**PR này là draft, xếp sau PR #17. Không chạy migration hoặc Wrangler deploy lên production khi chưa kiểm thử staging.**
+**Nhánh hợp nhất dựa trên main có Zalo OA; phần đa kênh lấy từ PR #20. Không chạy migration hoặc Wrangler deploy lên production khi chưa kiểm thử staging.**
 
 ## Kiến trúc
 
@@ -13,7 +13,7 @@
 
 ## Cấu hình staging Cloudflare
 
-1. Tạo D1 staging riêng; áp migrations 0001–0006 (chỉ phần chưa có) qua Wrangler với môi trường staging phù hợp. Đảm bảo không dùng D1 production.
+1. Tạo D1 staging riêng; áp migrations 0001–0010 theo tên tệp trong nhánh hợp nhất (0007 được để trống) (chỉ phần chưa có) qua Wrangler với môi trường staging phù hợp. Đảm bảo không dùng D1 production.
 2. `wrangler secret put SOCIAL_TOKEN_KEY`: base64 của 32 byte ngẫu nhiên (không commit, không đưa secret vào URL/log). Cần khóa ổn định qua các lần deploy.
 3. Dùng `FACEBOOK_APP_ID` và `FACEBOOK_APP_SECRET` **nếu Meta App hiện có được quyền Pages + Instagram**; nếu không, cấu hình `META_APP_ID` và `META_APP_SECRET` tách riêng. Secret chỉ đặt trong Cloudflare Secrets.
 4. Cấu hình `META_REDIRECT_URI=https://<staging-host>/api/social/meta/callback`. Thêm URI này *chính xác* vào Valid OAuth Redirect URIs trong Meta App Dashboard. Có thể dùng `META_GRAPH_VERSION=v26.0` để pin version sau khi kiểm chứng.

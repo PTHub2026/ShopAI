@@ -70,8 +70,8 @@ test('Meta OAuth: one-use state, same actor, scoped accounts, encrypted Page tok
   const accounts=(await listed.json()).accounts;
   assert.deepEqual(accounts.map(x=>x.provider).sort(),['facebook','facebook','instagram']);
   assert.equal(JSON.stringify(accounts).includes('PAGE_SECRET'),false);
-  const row=f.sqlite.prepare("SELECT token_ciphertext, token_iv FROM social_accounts WHERE provider='facebook'").get();
-  assert.notEqual(row.token_ciphertext,'PAGE_SECRET_DO_NOT_EXPOSE');assert.ok(row.token_iv.length>10);
+  const row=f.sqlite.prepare("SELECT token, token_iv FROM channels WHERE provider='facebook'").get();
+  assert.notEqual(row.token,'PAGE_SECRET_DO_NOT_EXPOSE');assert.ok(row.token_iv.length>10);
   assert.equal((await f.req(owner,cb)).status,403,'callback replay rejected');
   assert.deepEqual(calls.map(p=>p.split('/').at(-1)),['access_token','access_token','permissions','accounts','accounts']);
  }finally{globalThis.fetch=previous;f.sqlite.close();}
@@ -101,7 +101,7 @@ test('Meta OAuth callback cannot restore an account disconnected while provider 
  const callback=state=>'/api/social/meta/callback?state='+encodeURIComponent(state)+'&code=FAKE_CODE_FOR_TEST';
  try{
   assert.equal((await f.req(owner,callback(await start()))).status,303);
-  const account=f.sqlite.prepare("SELECT id FROM social_accounts WHERE provider='facebook' AND target_id='111111'").get();
+  const account=f.sqlite.prepare("SELECT id FROM channels WHERE provider='facebook' AND external_id='111111'").get();
   const pendingState=await start();
   pauseExchange=true;
   const pendingCallback=f.req(owner,callback(pendingState));
@@ -111,9 +111,9 @@ test('Meta OAuth callback cannot restore an account disconnected while provider 
   const result=await pendingCallback;
   assert.equal(result.status,409);
   assert.equal((await result.json()).code,'meta_connection_revoked');
-  const revoked=f.sqlite.prepare('SELECT status,token_ciphertext,token_iv FROM social_accounts WHERE id=?').get(account.id);
+  const revoked=f.sqlite.prepare('SELECT status,token,token_iv FROM channels WHERE id=?').get(account.id);
   assert.equal(revoked.status,'revoked');
-  assert.equal(revoked.token_ciphertext,'');
+  assert.equal(revoked.token,'');
   assert.equal(revoked.token_iv,'');
  }finally{globalThis.fetch=previous;f.sqlite.close();}
 });

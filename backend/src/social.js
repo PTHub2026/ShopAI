@@ -113,10 +113,19 @@ export async function handleSocial(req,env,who,json){
  if(section==='jobs'&&resource&&['retry','run'].includes(action)&&req.method==='POST'){
   if(!ctx.can('channels.operate')&&!ctx.can('drafts.publish'))return fail(json,403,'forbidden');
   if(ctx.shop.status!=='active')return fail(json,403,'shop_suspended');
-  const j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND id=?').bind(shop,resource).first();
+  let j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND id=?').bind(shop,resource).first();
   if(!j)return fail(json,404,'not_found');
-  const account=await db.prepare('SELECT provider FROM channels WHERE shop_id=? AND id=?').bind(shop,j.account_id).first();
+  const account=await db.prepare('SELECT provider,external_id,status FROM channels WHERE shop_id=? AND id=?').bind(shop,j.account_id).first();
   if(provider!=='all'&&account?.provider!==provider)return fail(json,404,'not_found');
+  // Only explicit user recovery of an unambiguously rejected, pre-delivery attempt.
+  // A successful reconnect must still resolve to the same immutable target.
+  if(j.status==='failed'&&j.error_code==='provider_denied'&&account?.status==='connected'){
+   const payload=JSON.parse(j.payload);
+   if(!payload.externalId||String(payload.externalId)===String(account.external_id)){
+    await db.prepare("UPDATE publish_jobs SET status='pending',error_code=NULL,next_attempt_at=0,updated_at=? WHERE shop_id=? AND id=? AND status='failed' AND error_code='provider_denied' AND attempts<5").bind(now(),shop,j.id).run();
+    j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND id=?').bind(shop,j.id).first();
+   }
+  }
   if(action==='run'&&j.status==='pending'){await db.prepare("UPDATE publish_jobs SET next_attempt_at=0,updated_at=? WHERE shop_id=? AND id=? AND status='pending'").bind(now(),shop,j.id).run();j.next_attempt_at=0;}
   return deliver(j,db,env,shop,json);
  }

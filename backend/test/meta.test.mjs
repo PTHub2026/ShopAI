@@ -69,3 +69,16 @@ function photoJob(db){
  db.sqlite.prepare("INSERT INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at) VALUES('ig-job','shop','ig-account','ig-unit-job','photo',?,'sending','actor',1,1)").run(JSON.stringify({text:'Caption',photoUrl:'https://example.com/photo.jpg'}));
  return db.sqlite.prepare("SELECT * FROM publish_jobs WHERE id='ig-job'").get();
 }
+
+test('Instagram stops before status or publish if the container checkpoint cannot be saved',async()=>{
+ const e=env();e.DB=sqliteDB();await ensureSocialSchema(e.DB);
+ const job=photoJob(e.DB),secret=await encryptToken(e,token);
+ const account={id:'different-account',provider:'instagram',external_id:'987654',token:secret.cipher,token_iv:secret.iv};
+ const previous=globalThis.fetch,calls=[];
+ globalThis.fetch=async url=>{calls.push(new URL(url).pathname.split('/').at(-1));return Response.json({id:'orphan-container'});};
+ try{
+  await assert.rejects(publishMeta(e,account,job),/IG_CONTAINER_NOT_SAVED/);
+  assert.deepEqual(calls,['media']);
+  assert.equal(e.DB.sqlite.prepare('SELECT instagram_container_id FROM publish_jobs').get().instagram_container_id,null);
+ }finally{globalThis.fetch=previous;e.DB.sqlite.close();}
+});

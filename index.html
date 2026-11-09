@@ -60,7 +60,7 @@ main,.content,#view{min-width:0}.card{max-width:100%}.grid>*,.two>*{min-width:0}
 </style></head><body>
 <div class="app">
 <aside><div class="logo"><i>S</i>ShopPost</div>
-<select><option>Dự án: Mặc định</option></select><div id="shop_box" class="shopbox" hidden></div><nav class="nav" id="nav"></nav></aside>
+<select id="proj_sel" onchange="projOnChange(this.value)" title="Dự án – nhóm dữ liệu làm việc riêng trong trình duyệt này" aria-label="Dự án"><option>Dự án: Mặc định</option></select><div id="shop_box" class="shopbox" hidden></div><nav class="nav" id="nav"></nav></aside>
 <main><header><div class="row"><select class="mnav" id="mnav" onchange="go(this.value)"></select><select class="mshop" id="mshop" onchange="shopSwitch(this.value)" title="Shop đang làm việc" aria-label="Shop đang làm việc"></select><b id="title"></b></div><div class="row"><span class="small muted" id="clock"></span><button class="btn sm" id="fbquick" title="Gửi góp ý / báo lỗi cho trang đang xem" aria-label="Góp ý nhanh" onclick="fbQuick()">💬 Góp ý</button><span class="pf" style="background:#030213">U</span></div></header>
 <div class="content" id="view"></div></main></div>
 <div class="modal" id="modal"><div class="box" id="mbox"></div></div><div class="toast" id="toast"></div>
@@ -73,7 +73,26 @@ function addLogoutButton(){const pf=document.querySelector('header .pf');if(!pf|
 const APP_SCOPE=(()=>{const v=document.querySelector('meta[name="shopai-user-scope"]')?.content||'';return /^[a-f0-9]{64}$/.test(v)?v:''})();
 function demoAction(){if(window.QA_RUNNING||!managedApp())return true;toast('Chức năng kênh này chưa được kết nối. Chưa thực hiện thao tác trên nền tảng.');return false}
 function localKey(key){return key+(managedApp()?':'+(APP_SCOPE||'unverified'):'')}
-const KEY=managedApp()?'pdk_live_v1:'+(APP_SCOPE||'unverified'):'pdk_pro_v2';
+/* ===== DỰ ÁN (project): nhóm dữ liệu làm việc riêng trong trình duyệt này =====
+   Dự án "Mặc định" (id='default') giữ nguyên các khóa lưu trữ cũ (không hậu tố) nên dữ liệu hiện có được bảo toàn.
+   Mỗi dự án khác có hậu tố "::<id>" riêng cho KEY/IDB/DKEY/VKEY → dữ liệu tách biệt hoàn toàn. */
+function _lsGet(k){try{return window.localStorage.getItem(k)}catch(e){return null}}
+function _lsSet(k,v){try{window.localStorage.setItem(k,v)}catch(e){}}
+function _lsDel(k){try{window.localStorage.removeItem(k)}catch(e){}}
+const PROJ_PFX=managedApp()?':'+(APP_SCOPE||'unverified'):'_local';
+const PROJ_LKEY='pdk_projects'+PROJ_PFX, PROJ_CKEY='pdk_proj_cur'+PROJ_PFX;
+function loadProjects(){let list=null;try{list=JSON.parse(_lsGet(PROJ_LKEY))}catch(e){}if(!Array.isArray(list))list=[];list=list.filter(p=>p&&typeof p.id==='string'&&/^[A-Za-z0-9_-]{1,64}$/.test(p.id)&&typeof p.name==='string'&&p.name);if(!list.some(p=>p.id==='default'))list.unshift({id:'default',name:'Mặc định'});return list}
+let PROJECTS=loadProjects();
+let CUR_PROJ=(function(){const c=_lsGet(PROJ_CKEY);return PROJECTS.some(p=>p.id===c)?c:'default'})();
+function saveProjects(){_lsSet(PROJ_LKEY,JSON.stringify(PROJECTS));_lsSet(PROJ_CKEY,CUR_PROJ)}
+const PROJ_SUFFIX=CUR_PROJ==='default'?'':'::'+CUR_PROJ;
+const IDB_NAME=(APP_SCOPE?'pdk_pro_'+APP_SCOPE:(managedApp()?'pdk_unverified':'pdk_pro'))+PROJ_SUFFIX;
+function renderProjects(){const sel=document.getElementById('proj_sel');if(!sel)return;let h=PROJECTS.map(p=>'<option value="'+esc(p.id)+'"'+(p.id===CUR_PROJ?' selected':'')+'>Dự án: '+esc(p.name)+'</option>').join('');h+='<option value="__new">➕ Tạo dự án mới…</option>';h+='<option value="__rename">✏️ Đổi tên dự án hiện tại…</option>';if(CUR_PROJ!=='default')h+='<option value="__del">🗑️ Xóa dự án hiện tại…</option>';sel.innerHTML=h}
+function projOnChange(v){renderProjects();if(v==='__new')return projCreate();if(v==='__rename')return projRename();if(v==='__del')return projDelete();if(v===CUR_PROJ||!PROJECTS.some(p=>p.id===v))return;CUR_PROJ=v;saveProjects();location.reload()}
+function projCreate(){askText('Tên dự án mới (ví dụ: Chiến dịch Tết)','',function(name){name=(name||'').trim().slice(0,60);if(!name)return;const id='p_'+uid();PROJECTS.push({id:id,name:name});CUR_PROJ=id;saveProjects();location.reload()})}
+function projRename(){const p=PROJECTS.find(function(x){return x.id===CUR_PROJ});if(!p)return;askText('Đổi tên dự án',p.name,function(name){name=(name||'').trim().slice(0,60);if(!name)return;p.name=name;saveProjects();renderProjects();toast('Đã đổi tên dự án thành “'+name+'”')})}
+function projDelete(){if(CUR_PROJ==='default')return;const p=PROJECTS.find(function(x){return x.id===CUR_PROJ});ask('Xóa dự án “'+(p?p.name:'')+'”? Toàn bộ dữ liệu cục bộ của dự án này trong trình duyệt sẽ bị xóa và không thể khôi phục. Dự án “Mặc định” không bị ảnh hưởng.',function(){_lsDel(KEY);_lsDel(DKEY);_lsDel(VKEY);try{indexedDB.deleteDatabase(IDB_NAME)}catch(e){}PROJECTS=PROJECTS.filter(function(x){return x.id!==CUR_PROJ});CUR_PROJ='default';saveProjects();location.reload()},{danger:true,ok:'Xóa dự án'})}
+const KEY=(managedApp()?'pdk_live_v1:'+(APP_SCOPE||'unverified'):'pdk_pro_v2')+PROJ_SUFFIX;
 const LS=(()=>{try{const s=window.localStorage;s.setItem('__pdk_t','1');s.removeItem('__pdk_t');return s}catch(e){const m={};return {getItem:k=>k in m?m[k]:null,setItem:(k,v)=>{m[k]=String(v)},removeItem:k=>{delete m[k]},_mem:true}}})();
 const $=s=>document.querySelector(s), uid=()=>Math.random().toString(36).slice(2,10);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -110,7 +129,7 @@ function closeModal(){modalGeneration++;$('#modal').classList.remove('on')}
 $('#modal').onclick=e=>{if(e.target.id==='modal')closeModal()};
 function load(){try{const s=JSON.parse(LS.getItem(KEY));if(s&&s.v===3)return fixState(s);if(s&&s.v===2)return migrate3(s)}catch(e){}return managedApp()?emptyState():migrate3(seed())}
 function emptyState(){return {v:3,channels:[],posts:[],convos:[],scripts:[],hashtags:[],groups:[],feedback:[],assets:[],folders:defaultFolders(),connectors:{drive:null,dropbox:null,onedrive:null,email:null},fbEmail:'',settings:{...DEFAULT_PROFILE,open:8,close:22,slaMin:15,botOn:false,aiEndpoint:'',tone:'chuyen_nghiep'},lastSync:null}}
-const IDB={db:null,open(){return new Promise(res=>{try{const r=indexedDB.open(APP_SCOPE?'pdk_pro_'+APP_SCOPE:(managedApp()?'pdk_unverified':'pdk_pro'),1);r.onupgradeneeded=()=>{const d=r.result;if(!d.objectStoreNames.contains('kv'))d.createObjectStore('kv');if(!d.objectStoreNames.contains('files'))d.createObjectStore('files')};r.onsuccess=()=>{IDB.db=r.result;res(r.result)};r.onerror=()=>res(null);r.onblocked=()=>res(null)}catch(e){res(null)}})},
+const IDB={db:null,open(){return new Promise(res=>{try{const r=indexedDB.open(IDB_NAME,1);r.onupgradeneeded=()=>{const d=r.result;if(!d.objectStoreNames.contains('kv'))d.createObjectStore('kv');if(!d.objectStoreNames.contains('files'))d.createObjectStore('files')};r.onsuccess=()=>{IDB.db=r.result;res(r.result)};r.onerror=()=>res(null);r.onblocked=()=>res(null)}catch(e){res(null)}})},
 op(s,mode,fn){return new Promise(res=>{if(!IDB.db)return res(null);try{const tx=IDB.db.transaction(s,mode);const rq=fn(tx.objectStore(s));tx.oncomplete=()=>res(rq?rq.result:null);tx.onerror=()=>res(null);tx.onabort=()=>res(null)}catch(e){res(null)}})},
 get(s,k){return IDB.op(s,'readonly',st=>st.get(k))},put(s,k,v){return IDB.op(s,'readwrite',st=>st.put(v,k))},del(s,k){return IDB.op(s,'readwrite',st=>st.delete(k))},clear(s){return IDB.op(s,'readwrite',st=>st.clear())},
 all(s){return new Promise(res=>{const out=[];if(!IDB.db)return res(out);try{const rq=IDB.db.transaction(s).objectStore(s).openCursor();rq.onsuccess=()=>{const c=rq.result;if(c){out.push([c.key,c.value]);c.continue()}else res(out)};rq.onerror=()=>res(out)}catch(e){res(out)}})}};
@@ -243,7 +262,7 @@ window.onhashchange=()=>{const k=location.hash.slice(1);if(k&&k!==route&&V[k])re
 document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#"]');if(!a)return;const k=a.getAttribute('href').slice(1);if(!k)return;e.preventDefault();go(k)});
 
 /* ================= CREATE POST ================= */
-const DKEY='pdk_draft_v1'+(managedApp()?':'+(APP_SCOPE||'unverified'):'');
+const DKEY='pdk_draft_v1'+(managedApp()?':'+(APP_SCOPE||'unverified'):'')+PROJ_SUFFIX;
 function saveDraft(key){if(window.QA_RUNNING&&!key)return;try{LS.setItem(key||DKEY,JSON.stringify({...D,media:D.media.map(({name,type,size,thumb,assetId,fid})=>({name,type,size,thumb,assetId,fid})),savedAt:Date.now()}))}catch(e){}}
 function loadDraft(key){try{const d=JSON.parse(LS.getItem(key||DKEY));if(d&&typeof d.content==='string'){const n=Object.assign(newDraft(),d);n.media=(d.media||[]).map(m=>({...m,url:null}));return n}}catch(e){}return newDraft()}
 function draftDirty(){return !!(D.content.trim()||D.media.length)}
@@ -810,7 +829,7 @@ ${f.shots.length?`<div class="thumbs">${f.shots.map(s=>`<a href="${s}" target="_
 <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn sm" onclick="event.stopPropagation();fbMail('${escAttr(f.id)}')">✉️ Gửi qua email</button>${f.page&&V[f.page]?`<button class="btn sm" onclick="event.stopPropagation();go('${f.page}')">↗ Mở trang liên quan</button>`:''}<button class="btn sm danger" onclick="event.stopPropagation();fbDel('${escAttr(f.id)}')">Xóa</button></div></div>`}
 
 /* ================= VIDEO NGẮN ================= */
-const VKEY='pdk_video_v1'+(managedApp()?':'+(APP_SCOPE||'unverified'):'');
+const VKEY='pdk_video_v1'+(managedApp()?':'+(APP_SCOPE||'unverified'):'')+PROJ_SUFFIX;
 const VRATIO={'9:16':[720,1280,'Dọc 9:16 – TikTok, Reels, Shorts'],'1:1':[720,720,'Vuông 1:1 – Facebook, Instagram'],'16:9':[1280,720,'Ngang 16:9 – YouTube, Facebook']};
 const VTHEME={dark:['#030213','#1e1b4b','#ffffff','Tối (thương hiệu)'],teal:['#009588','#104e64','#ffffff','Xanh ShopTrack'],orange:['#f05100','#f99c00','#ffffff','Cam năng động'],light:['#f8fafc','#e2e8f0','#030213','Sáng']};
 function vNewProject(){return {topic:'',dur:30,ratio:'9:16',theme:'dark',pos:'center',logo:true,fit:'fit',caption:'',scenes:[]}}
@@ -991,6 +1010,6 @@ ${groups.map(g=>`<div class="card"><h3>${esc(g)} <span class="tag">${r.filter(x=
 
 /* ================= SCHEDULER & BOOT ================= */
 function tick(){let ch=false;if(!managedApp()||window.QA_RUNNING)S.posts.forEach(p=>{if(p.status==='scheduled'&&p.time<=Date.now()){if(p.channels.map(chById).some(c=>!c||!c.connected)){p.status='failed';p.error='Kênh đã ngắt kết nối'}else publish(p);ch=true}});if(ch){save();toast('Đã xử lý bài đến giờ đăng');if(route==='posts'||route==='calendar')render()}$('#clock').textContent=new Date().toLocaleString('vi-VN',{weekday:'short',hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'})}
-setInterval(tick,15000);tick();if(managedApp()){addLogoutButton();shopInit().catch(()=>{})}render(location.hash.slice(1)||'create');bootStorage().then(()=>{if(LS._mem&&!IDB.db){const b=document.createElement('div');b.id='storewarn';b.setAttribute('role','alert');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:60;background:#fff7e6;border-top:1px solid #f5c26b;padding:8px 14px;font-size:13px;display:flex;gap:10px;align-items:center;justify-content:space-between';b.innerHTML='<span>⚠️ Trình duyệt đang <b>chặn lưu trữ</b> trong khung nhúng này: dữ liệu và nháp sẽ <b>mất khi tải lại trang</b>. Để lưu lâu dài, tải file <code>shoppost.html</code> về máy rồi mở bằng Chrome (hoặc đưa lên hosting riêng).</span><button class="btn sm" onclick="this.parentNode.remove()">Đã hiểu</button>';document.body.appendChild(b)}});
+setInterval(tick,15000);tick();renderProjects();if(managedApp()){addLogoutButton();shopInit().catch(()=>{})}render(location.hash.slice(1)||'create');bootStorage().then(()=>{if(LS._mem&&!IDB.db){const b=document.createElement('div');b.id='storewarn';b.setAttribute('role','alert');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:60;background:#fff7e6;border-top:1px solid #f5c26b;padding:8px 14px;font-size:13px;display:flex;gap:10px;align-items:center;justify-content:space-between';b.innerHTML='<span>⚠️ Trình duyệt đang <b>chặn lưu trữ</b> trong khung nhúng này: dữ liệu và nháp sẽ <b>mất khi tải lại trang</b>. Để lưu lâu dài, tải file <code>shoppost.html</code> về máy rồi mở bằng Chrome (hoặc đưa lên hosting riêng).</span><button class="btn sm" onclick="this.parentNode.remove()">Đã hiểu</button>';document.body.appendChild(b)}});
 </script></body></html>
 

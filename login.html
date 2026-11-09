@@ -196,7 +196,7 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
   <div id="setup" class="status" hidden>Đăng nhập đang được thiết lập. Vui lòng quay lại sau ít phút.</div>
   <p class="owner" id="owner" hidden><a id="ownerLink" href="#" rel="noopener">Chủ cửa hàng: đăng nhập qua Cloudflare Access</a></p>
   <div class="note">
-    <p>Khi đăng nhập, ShopPost chỉ dùng tên, mã định danh tài khoản (Zalo/Facebook/TikTok), số điện thoại hoặc địa chỉ email của bạn để nhận diện phiên làm việc và lưu bản nháp. ShopPost không tự đăng bài hay gửi tin nhắn thay bạn.</p>
+    <p>Khi đăng nhập, ShopPost chỉ dùng tên, mã định danh tài khoản, số điện thoại hoặc địa chỉ email của bạn để nhận diện phiên làm việc và lưu bản nháp. ShopPost không tự đăng bài hay gửi tin nhắn thay bạn.</p>
     <p>Phiên đăng nhập được lưu 30 ngày trên thiết bị này; bạn có thể đăng xuất bất cứ lúc nào.</p>
   </div>
 </main>
@@ -295,7 +295,7 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
     email: { sending: 'Đang gửi mã tới email của bạn…', sent: 'Đã gửi mã. Kiểm tra hộp thư đến (và thư rác) của bạn.', lead: 'Mã gồm 6 chữ số đã được gửi tới', change: 'Đổi email', input: '#email' },
     phone: { sending: 'Đang gửi mã qua SMS tới số điện thoại của bạn…', sent: 'Đã gửi mã qua SMS. Kiểm tra tin nhắn trên điện thoại của bạn.', lead: 'Mã gồm 6 chữ số đã được gửi qua SMS tới', change: 'Đổi số điện thoại', input: '#phone' }
   };
-  const enabled = { email: false, phone: false, divider: false };
+  const enabled = { email: false, phone: false, divider: false, social: false };
   let otpMode = 'email', otpTarget = '';
   // Chuẩn hóa giống máy chủ: 0912345678 / 84912345678 / +84912345678 → +84912345678.
   function normalizePhone(value) {
@@ -347,7 +347,7 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
       $('#code').select();
     });
     $('#resend').addEventListener('click', () => sendCode(otpMode, otpTarget));
-    $('#changeTarget').addEventListener('click', () => { resetOtp(otpMode); $('#pwLoginForm').hidden = !pwEnabled; $('#pwDivider').hidden = !pwEnabled; show(''); $(OTP[otpMode].input).focus(); });
+    $('#changeTarget').addEventListener('click', () => { resetOtp(otpMode); $('#pwLoginForm').hidden = !pwEnabled; $('#pwDivider').hidden = !(pwEnabled && enabled.social); show(''); $(OTP[otpMode].input).focus(); });
   }
   function setupEmail() {
     $('#emailForm').hidden = false;
@@ -361,7 +361,7 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
   function setupPhone() {
     $('#phoneBtn').hidden = false;
     $('#phoneBtn').addEventListener('click', () => { resetOtp('phone'); $('#pwLoginForm').hidden = true; $('#pwDivider').hidden = true; show(''); $('#phone').focus(); });
-    $('#phoneCancel').addEventListener('click', () => { resetOtp('email'); $('#pwLoginForm').hidden = !pwEnabled; $('#pwDivider').hidden = !pwEnabled; show(''); $('#phoneBtn').focus(); });
+    $('#phoneCancel').addEventListener('click', () => { resetOtp('email'); $('#pwLoginForm').hidden = !pwEnabled; $('#pwDivider').hidden = !(pwEnabled && enabled.social); show(''); $('#phoneBtn').focus(); });
     $('#phoneForm').addEventListener('submit', event => {
       event.preventDefault();
       const phone = normalizePhone($('#phone').value);
@@ -489,12 +489,12 @@ footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
       const any = tiktok || phone || email || pwEnabled;
       $('#methods').hidden = !any;
       $('#tiktok').hidden = !tiktok;
-      enabled.phone = phone; enabled.email = email; enabled.divider = email && (social || pwEnabled);
+      enabled.phone = phone; enabled.email = email; enabled.social = social; enabled.divider = email && (social || pwEnabled);
       if (phone || email) setupOtp();
       if (phone) setupPhone();
       if (email) setupEmail();
       if (pwEnabled) { setupPwLogin(); setupRegister(); setupForgot(); }
-      $('#pwDivider').hidden = !(pwEnabled && (social || email));
+      $('#pwDivider').hidden = !(pwEnabled && social);
       $('#divider').hidden = !enabled.divider;
       $('#setup').hidden = any;
       if (p.access && typeof p.access.url === 'string' && /^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/i.test(p.access.url)) { $('#ownerLink').href = p.access.url; $('#owner').hidden = false; }

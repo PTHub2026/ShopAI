@@ -76,3 +76,15 @@ test('Meta OAuth: one-use state, same actor, scoped accounts, encrypted Page tok
   assert.deepEqual(calls.map(p=>p.split('/').at(-1)),['access_token','access_token','permissions','accounts','accounts']);
  }finally{globalThis.fetch=previous;f.sqlite.close();}
 });
+
+test('OAuth start prunes expired states and preserves live states',async()=>{
+ const f=fixture(),cookie=f.login('email:cleanup@example.com');
+ try{
+  await f.req(cookie,'/api/social/meta/start','POST');
+  f.sqlite.prepare('INSERT INTO meta_oauth_states VALUES(?,?,?,?,?)').run('expired','shop','actor',now()-1,now()-601);
+  f.sqlite.prepare('INSERT INTO meta_oauth_states VALUES(?,?,?,?,?)').run('boundary','shop','actor',now(),now()-600);
+  await f.req(cookie,'/api/social/meta/start','POST');
+  assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM meta_oauth_states WHERE expires_at<=?').get(now()).n,0);
+  assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM meta_oauth_states').get().n,2);
+ }finally{f.sqlite.close();}
+});

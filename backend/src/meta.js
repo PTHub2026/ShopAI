@@ -28,7 +28,12 @@ async function graphRequest(e,path,token,fields={},method='GET'){
  if(method==='GET'){uri.search=form(fields).toString();}
  else {init.headers['Content-Type']='application/x-www-form-urlencoded';init.body=form(fields).toString();}
  const r=await fetch(uri,init);const data=await r.json().catch(()=>({}));
- if(!r.ok||data.error){const err=Error('META_API_FAILED');err.status=r.status;err.code=data.error?.code;err.subcode=data.error?.error_subcode;throw err;}
+ if(!r.ok||data.error){
+  const err=Error('META_API_FAILED');err.status=r.status;err.code=data.error?.code;err.subcode=data.error?.error_subcode;
+  const delay=Number(r.headers.get('Retry-After'));
+  if(Number.isFinite(delay)&&delay>0)err.retryAfter=delay;
+  throw err;
+ }
  return data;
 }
 export async function publishMeta(e,account,job){
@@ -45,8 +50,12 @@ export async function publishMeta(e,account,job){
  if(account.provider==='instagram'){
   if(job.kind!=='photo')throw Error('IG_REQUIRES_PHOTO');
   // Container creation is not publishing; once the publish call starts, network uncertainty is not retried.
-  const container=await graphRequest(e,encodeURIComponent(account.target_id)+'/media',token,{image_url:p.photoUrl,caption:p.text},'POST');
-  if(!container.id)throw Error('META_MISSING_CONTAINER');
+  let container=job.id?await e.DB.prepare('SELECT container_id AS id FROM meta_publish_containers WHERE job_id=? AND shop_id=?').bind(job.id,job.shop_id).first():null;
+  if(!container){
+   container=await graphRequest(e,encodeURIComponent(account.target_id)+'/media',token,{image_url:p.photoUrl,caption:p.text},'POST');
+   if(!container.id)throw Error('META_MISSING_CONTAINER');
+   if(job.id)await e.DB.prepare('INSERT INTO meta_publish_containers(job_id,shop_id,container_id) VALUES(?,?,?)').bind(job.id,job.shop_id,String(container.id)).run();
+  }
   // Instagram media creation can be asynchronous. Never publish an unready container.
   const status=await graphRequest(e,encodeURIComponent(String(container.id)),token,{fields:'status_code'});
   if(status.status_code!=='FINISHED'){
@@ -55,7 +64,10 @@ export async function publishMeta(e,account,job){
    }
    throw Error('IG_MEDIA_UNAVAILABLE');
   }
-  const publish=await graphRequest(e,encodeURIComponent(account.target_id)+'/media_publish',token,{creation_id:String(container.id)},'POST');
+  let publish;
+  try{publish=await graphRequest(e,encodeURIComponent(account.target_id)+'/media_publish',token,{creation_id:String(container.id)},'POST');}
+  // A publish attempt must never become retryable, even if Graph sends Retry-After.
+  catch(err){err.retryAfter=0;throw err;}
   if(!publish.id)throw Error('META_MISSING_ID');return String(publish.id);
  }
  throw Error('UNSUPPORTED_PROVIDER');
@@ -75,6 +87,7 @@ export async function handleMeta(req,env,who,json){
  if(!['start','callback'].includes(act))return error(json,'not_found',404);
  const db=env.DB;
  await db.batch(META_SCHEMA.map(s=>db.prepare(s)));
+ await db.prepare('DELETE FROM meta_oauth_states WHERE expires_at<=?').bind(stamp()).run();
  let scopedRequest=req;
  if(act==='callback'){
   const state=url.searchParams.get('state');

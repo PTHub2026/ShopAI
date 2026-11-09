@@ -103,3 +103,44 @@ test('Telegram malformed success remains unknown and cannot be retried',async()=
   assert.equal(calls,1);
  });}finally{f.db.sqlite.close();}
 });
+
+import {encryptToken} from '../src/social.js';
+async function metaFixture(provider){
+ const f=fixture(),cookie=f.login('email:meta@example.com');
+ const shop=(await f.request(cookie,'/session')).data.shop.id;
+ await f.request(cookie,'/api/social/accounts');
+ const enc=await encryptToken(f.env,'synthetic-meta-token');
+ f.db.sqlite.prepare("INSERT INTO social_accounts VALUES(?,?,?,?,?,?,?,'active',?,?,?)").run('meta_account',shop,provider,'Meta','123456',enc.cipher,enc.iv,'email:meta@example.com',now(),now());
+ return {...f,cookie,shop};
+}
+test('Meta numeric Retry-After preserves jobs API retry handling',async()=>{
+ const f=await metaFixture('facebook'),original=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>++calls===1?Response.json({error:{code:4}},{status:429,headers:{'Retry-After':'12'}}):Response.json({id:'post_1'});
+ try{
+  const first=await f.request(f.cookie,'/api/social/jobs',{method:'POST',idem:'meta-rate-limit-123',body:{accountId:'meta_account',kind:'text',text:'Hello'}});
+  assert.equal(first.status,429);assert.equal(first.data.job.status,'retryable');
+  assert.equal((await f.request(f.cookie,'/api/social/jobs/'+first.data.job.id+'/retry',{method:'POST'})).status,200);
+ }finally{globalThis.fetch=original;f.db.sqlite.close();}
+});
+for(const outcome of ['success','timeout','429'])test('Instagram resumes persisted container; publish outcome '+outcome,async()=>{
+ const f=await metaFixture('instagram'),original=globalThis.fetch;let creates=0,polls=0,publishes=0;
+ globalThis.fetch=async(url)=>{
+  const path=new URL(url).pathname.split('/').at(-1);
+  if(path==='media'){creates++;return Response.json({id:'container_'+creates});}
+  if(path.startsWith('container_'))return Response.json({status_code:++polls===1?'IN_PROGRESS':'FINISHED'});
+  if(path==='media_publish'){publishes++;if(outcome==='timeout')throw Error('timeout');if(outcome==='429')return Response.json({error:{code:4}},{status:429,headers:{'Retry-After':'10'}});return Response.json({id:'ig_post'});}
+  throw Error('Unexpected Graph call');
+ };
+ try{
+  const body={accountId:'meta_account',kind:'photo',text:'Caption',photoUrl:'https://example.com/image.jpg'};
+  const first=await f.request(f.cookie,'/api/social/jobs',{method:'POST',idem:'ig-container-test-123',body});
+  assert.equal(first.status,429);
+  const retry=()=>f.request(f.cookie,'/api/social/jobs/'+first.data.job.id+'/retry',{method:'POST'});
+  const second=await retry();
+  assert.equal(creates,1,'retry must reuse the original container');
+  assert.equal(second.data.job.status,outcome==='success'?'sent':'unknown');
+  assert.equal((await retry()).status,outcome==='success'?200:409);
+  assert.equal(publishes,1);
+  assert.equal((await f.request(f.cookie,'/api/social/jobs',{method:'POST',idem:'ig-container-test-123',body})).status,outcome==='success'?200:409);
+ }finally{globalThis.fetch=original;f.db.sqlite.close();}
+});

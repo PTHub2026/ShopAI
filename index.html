@@ -592,10 +592,13 @@ async function socialRequest(path,options={}){
  if(!r.ok)throw Error(data.error||data.code||'Không thể thực hiện thao tác');
  return data;
 }
+let shopInitialization=Promise.resolve();
 async function socialAccountsLive(){
  const root=$('#view');
  root.innerHTML='<div class="card"><h3>Kênh đa nền tảng</h3><p>Đang tải kết nối từ máy chủ...</p></div>';
  try {
+  await shopInitialization;
+  if(!SHOP.ready)throw Error(SHOP.error||'Chưa tải được shop.');
   const [accounts,jobs,providers]=await Promise.all([socialRequest('accounts'),socialRequest('jobs'),socialRequest('providers')]);
   if(location.hash!=='#accounts')return;
   root.innerHTML=`<div class="card"><h3>Kết nối Facebook & Instagram</h3><p class="small muted">Dùng Facebook Login để cấp quyền đăng bài lên Facebook Page và Instagram Professional đã liên kết Page. Không hỗ trợ đăng trang cá nhân.</p><button class="btn pri" onclick="socialConnectMeta()" ${providers.facebook.enabled?"":"disabled title=\"Meta App chưa được cấu hình ở backend\""}>Kết nối Facebook / Instagram</button>${providers.facebook.enabled?"":"<p class=\"small muted\">Chưa có Meta App ID, App Secret hoặc Redirect URI hợp lệ trong backend staging.</p>"}</div><div class="card"><h3>Kết nối Telegram Bot thật</h3><p class="small muted">Bot phải được cấp quyền đăng trong nhóm hoặc kênh. Token chỉ gửi tới máy chủ và không hiển thị lại.</p>
@@ -1047,6 +1050,6 @@ ${groups.map(g=>`<div class="card"><h3>${esc(g)} <span class="tag">${r.filter(x=
 
 /* ================= SCHEDULER & BOOT ================= */
 function tick(){let ch=false;if(!managedApp()||window.QA_RUNNING)S.posts.forEach(p=>{if(p.status==='scheduled'&&p.time<=Date.now()){if(p.channels.map(chById).some(c=>!c||!c.connected)){p.status='failed';p.error='Kênh đã ngắt kết nối'}else publish(p);ch=true}});if(ch){save();toast('Đã xử lý bài đến giờ đăng');if(route==='posts'||route==='calendar')render()}$('#clock').textContent=new Date().toLocaleString('vi-VN',{weekday:'short',hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'})}
-setInterval(tick,15000);tick();if(managedApp()){addLogoutButton();shopInit().catch(()=>{})}render(location.hash.slice(1)||'create');bootStorage().then(()=>{if(LS._mem&&!IDB.db){const b=document.createElement('div');b.id='storewarn';b.setAttribute('role','alert');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:60;background:#fff7e6;border-top:1px solid #f5c26b;padding:8px 14px;font-size:13px;display:flex;gap:10px;align-items:center;justify-content:space-between';b.innerHTML='<span>⚠️ Trình duyệt đang <b>chặn lưu trữ</b> trong khung nhúng này: dữ liệu và nháp sẽ <b>mất khi tải lại trang</b>. Để lưu lâu dài, tải file <code>shoppost.html</code> về máy rồi mở bằng Chrome (hoặc đưa lên hosting riêng).</span><button class="btn sm" onclick="this.parentNode.remove()">Đã hiểu</button>';document.body.appendChild(b)}});
+setInterval(tick,15000);tick();if(managedApp()){addLogoutButton();shopInitialization=shopInit().catch(()=>{})}render(location.hash.slice(1)||'create');bootStorage().then(()=>{if(LS._mem&&!IDB.db){const b=document.createElement('div');b.id='storewarn';b.setAttribute('role','alert');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:60;background:#fff7e6;border-top:1px solid #f5c26b;padding:8px 14px;font-size:13px;display:flex;gap:10px;align-items:center;justify-content:space-between';b.innerHTML='<span>⚠️ Trình duyệt đang <b>chặn lưu trữ</b> trong khung nhúng này: dữ liệu và nháp sẽ <b>mất khi tải lại trang</b>. Để lưu lâu dài, tải file <code>shoppost.html</code> về máy rồi mở bằng Chrome (hoặc đưa lên hosting riêng).</span><button class="btn sm" onclick="this.parentNode.remove()">Đã hiểu</button>';document.body.appendChild(b)}});
 </script></body></html>
 

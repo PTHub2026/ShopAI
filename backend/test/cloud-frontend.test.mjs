@@ -7,10 +7,10 @@ const scope='a'.repeat(64);
 const session={userScope:scope,capabilities:{ai:true,drafts:true,publishing:false,scheduling:false,inbox:false}};
 const envelope=(id='cloud-a',content='Đã lưu từ thiết bị khác',revision=1)=>({draft:{id,type:'post',content,channels:[],status:'draft',media:[],assets:[],custom:{}},revision,updatedAt:1000});
 // api: mock cho /api/* (shop, thành viên, lời mời); mặc định trả tài khoản chưa có shop để các mock bản nháp cũ không bị lẫn yêu cầu khởi động.
-function runtime({managed=true,fetchImpl,stored={},api,invite=''}={}) {
+function runtime({managed=true,fetchImpl,stored={},api,invite='',hash=''}={}) {
   const requests=[],errors=[];
   const html=managed?source.replace('<head>','<head><meta name="shopai-ai-endpoint" content="/ai"><meta name="shopai-user-scope" content="'+scope+'">'+(invite?'<meta name="shoppost-invite" content="'+invite+'">':'')):source;
-  const dom=new JSDOM(html,{url:'https://app.example/',runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:new VirtualConsole(),beforeParse(w){
+  const dom=new JSDOM(html,{url:'https://app.example/'+hash,runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:new VirtualConsole(),beforeParse(w){
     w.scrollTo=()=>{};w.AbortSignal=AbortSignal;w.TextEncoder=TextEncoder;
     for(const [k,v] of Object.entries(stored))w.localStorage.setItem(k,JSON.stringify(v));
     w.fetch=async(url,options={})=>{const path=new URL(url,w.location.href).pathname;requests.push({path,...options});if(path.startsWith('/api/'))return api?api(path,options):Response.json({shops:[],defaultShopId:null,admin:false,roles:{}});return fetchImpl?fetchImpl(path,options):Response.json(session)};
@@ -315,4 +315,25 @@ test('Danh sách bản nháp máy chủ hiển thị trạng thái và nút Gử
     assert.deepEqual(statuses,[{path:'/storage/drafts/cloud-a/status',body:{status:'pending_review'}}]);
     assert.deepEqual(r.errors,[]);
   }finally{r.close()}
+});
+
+
+test('OAuth accounts landing waits for selected shop before fetching channels and history',async()=>{
+ const shops=deferred();
+ const r=runtime({hash:'#accounts',api:async(path)=>{
+  if(path==='/api/shops')return shops.promise;
+  if(path==='/api/social/accounts')return Response.json({accounts:[]});
+  if(path==='/api/social/jobs')return Response.json({jobs:[]});
+  return Response.json({facebook:{enabled:false}});
+ }});
+ try{
+  r.w.localStorage.setItem('pdk_shop:'+scope,'s_bbbbbbbbbb');
+  await settle();
+  assert.equal(r.requests.filter(x=>x.path.startsWith('/api/social/')).length,0);
+  shops.resolve(Response.json(shopsBody()));
+  await settle();await settle();
+  const social=r.requests.filter(x=>x.path.startsWith('/api/social/'));
+  assert.equal(social.length,3);
+  for(const req of social)assert.equal(req.headers['X-ShopPost-Shop'],'s_bbbbbbbbbb');
+ }finally{r.close();}
 });

@@ -10,6 +10,7 @@ export async function ensureSocialSchema(db){
  if(initialized.has(db))return initialized.get(db);
  const pending=(async()=>{
   await db.batch(SOCIAL_SCHEMA.slice(2).map(s=>db.prepare(s)));await ensureChannelStore(db);
+  await db.prepare("CREATE TABLE IF NOT EXISTS meta_shop_generations (shop_id TEXT PRIMARY KEY, generation INTEGER NOT NULL DEFAULT 0)").run();
   const hasURL=async()=> (await db.prepare('PRAGMA table_info(publish_jobs)').all()).results.some(c=>c.name==='result_url');
   if(!await hasURL())try{await db.prepare('ALTER TABLE publish_jobs ADD COLUMN result_url TEXT').run();}catch(e){if(!await hasURL())throw e;}
   await db.prepare('CREATE INDEX IF NOT EXISTS publish_jobs_due ON publish_jobs(status,next_attempt_at)').run();
@@ -73,7 +74,10 @@ export async function handleSocial(req,env,who,json){
    const target=new URL(req.url);target.pathname='/channels/zalo';
    return handleChannels(new Request(target,{method:'DELETE',headers:req.headers}),env,who,json);
   }
-  const r=await db.prepare("UPDATE channels SET status='revoked',token='',token_iv='',updated_at=? WHERE id=? AND shop_id=? AND (?='all' OR provider=?)").bind(now(),resource,shop,provider,provider).run();
+  const statements=[];
+  if(account.provider==='facebook'||account.provider==='instagram')statements.push(db.prepare('INSERT INTO meta_shop_generations(shop_id,generation) VALUES(?,1) ON CONFLICT(shop_id) DO UPDATE SET generation=generation+1').bind(shop));
+  statements.push(db.prepare("UPDATE channels SET status='revoked',token='',token_iv='',updated_at=? WHERE id=? AND shop_id=? AND (?='all' OR provider=?)").bind(now(),resource,shop,provider,provider));
+  const results=await db.batch(statements),r=results.at(-1);
   if(r.meta.changes!==1)return fail(json,404,'not_found');
   await db.prepare("UPDATE publish_jobs SET status='failed',error_code='account_revoked',updated_at=? WHERE shop_id=? AND account_id=? AND status IN ('pending','retryable')").bind(now(),shop,resource).run();
   await audit(db,{shopId:shop,actor:who.owner,action:'channels.disconnect',target:resource});return json({ok:true});

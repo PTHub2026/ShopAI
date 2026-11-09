@@ -22,6 +22,7 @@ await mkdir(new URL('dist/', root), { recursive: true });
 await writeFile(new URL('dist/app.js', root), app);
 await copyFile(new URL('src/worker.js', root), new URL('dist/worker.js', root));
 await copyFile(new URL('src/drafts.js', root), new URL('dist/drafts.js', root));
+await copyFile(new URL('src/channels.js', root), new URL('dist/channels.js', root));
 await copyFile(new URL('src/auth.js', root), new URL('dist/auth.js', root));
 await copyFile(new URL('src/shops.js', root), new URL('dist/shops.js', root));
 await copyFile(new URL('src/permissions.js', root), new URL('dist/permissions.js', root));

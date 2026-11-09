@@ -6,13 +6,14 @@ const source=readFileSync(new URL('../../index.html',import.meta.url),'utf8');
 const scope='a'.repeat(64);
 const session={userScope:scope,capabilities:{ai:true,drafts:true,publishing:false,scheduling:false,inbox:false}};
 const envelope=(id='cloud-a',content='Đã lưu từ thiết bị khác',revision=1)=>({draft:{id,type:'post',content,channels:[],status:'draft',media:[],assets:[],custom:{}},revision,updatedAt:1000});
-function runtime({managed=true,fetchImpl,stored={}}={}) {
+// api: mock cho /api/* (shop, thành viên, lời mời); mặc định trả tài khoản chưa có shop để các mock bản nháp cũ không bị lẫn yêu cầu khởi động.
+function runtime({managed=true,fetchImpl,stored={},api,invite=''}={}) {
   const requests=[],errors=[];
-  const html=managed?source.replace('<head>','<head><meta name="shopai-ai-endpoint" content="/ai"><meta name="shopai-user-scope" content="'+scope+'">'):source;
+  const html=managed?source.replace('<head>','<head><meta name="shopai-ai-endpoint" content="/ai"><meta name="shopai-user-scope" content="'+scope+'">'+(invite?'<meta name="shoppost-invite" content="'+invite+'">':'')):source;
   const dom=new JSDOM(html,{url:'https://app.example/',runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:new VirtualConsole(),beforeParse(w){
     w.scrollTo=()=>{};w.AbortSignal=AbortSignal;w.TextEncoder=TextEncoder;
     for(const [k,v] of Object.entries(stored))w.localStorage.setItem(k,JSON.stringify(v));
-    w.fetch=async(url,options={})=>{const path=new URL(url,w.location.href).pathname;requests.push({path,...options});return fetchImpl?fetchImpl(path,options):Response.json(session)};
+    w.fetch=async(url,options={})=>{const path=new URL(url,w.location.href).pathname;requests.push({path,...options});if(path.startsWith('/api/'))return api?api(path,options):Response.json({shops:[],defaultShopId:null,admin:false,roles:{}});return fetchImpl?fetchImpl(path,options):Response.json(session)};
     w.addEventListener('error',e=>errors.push(e.error));
   }});
   const w=dom.window;
@@ -193,6 +194,17 @@ test('Closing a pending draft read preserves empty and dirty editors',async()=>{
   }
 });
 
+test('Nhập JSON loại bỏ bản ghi có id độc hại và tham chiếu id không hợp lệ',()=>{
+  const r=runtime({managed:false});try{
+    const malicious={v:3,posts:[{id:"a') ;alert(1)//",type:'post'},{id:'good_1',type:'post',channels:["x');//",'c_ok'],assets:['id xấu','a_ok']}],channels:[{id:'c_ok'},{id:'<img src=x>'}],groups:[{id:'g1',channels:['c_ok','evil"']}]};
+    const out=JSON.parse(r.read('(()=>{const o=sanitizeImport('+JSON.stringify(malicious)+');return JSON.stringify({postIds:o.posts.map(p=>p.id),ch:o.posts[0]?o.posts[0].channels:null,assets:o.posts[0]?o.posts[0].assets:null,chIds:o.channels.map(c=>c.id),gch:o.groups[0].channels})})()'));
+    assert.deepEqual(out.postIds,['good_1']);
+    assert.deepEqual(out.ch,['c_ok']);
+    assert.deepEqual(out.assets,['a_ok']);
+    assert.deepEqual(out.chIds,['c_ok']);
+    assert.deepEqual(out.gch,['c_ok']);
+  }finally{r.close()}
+});
 test('Leaving and returning invalidates draft reads and old confirmation callbacks',async()=>{
   for(const confirm of [false,true]){
     const pending=deferred();
@@ -206,4 +218,128 @@ test('Leaving and returning invalidates draft reads and old confirmation callbac
       assert.equal(r.read('D.content'),confirm?'Giữ nguyên bản nháp':'');assert.equal(r.read('!!D.cloud'),false);
     }finally{r.close()}
   }
+});
+
+// ===== Shop, thành viên & phân quyền trên giao diện =====
+const shopOf=(id,name,role,permissions,extra={})=>({id,name,role,roleLabel:{owner:'Chủ shop',manager:'Quản lý shop',content:'Nhân viên nội dung',support:'Nhân viên CSKH',viewer:'Chỉ xem'}[role],canPublish:role==='owner',permissions,status:'active',memberCount:1,...extra});
+const OWNER_PERMS=['shop.view','shop.update','shop.delete','shop.transfer','members.view','members.invite','members.update_role','members.remove','drafts.view','drafts.create','drafts.edit_own','drafts.edit_any','drafts.submit','drafts.approve','drafts.publish','drafts.delete','ai.use'];
+const shopsBody=(current='s_aaaaaaaaaa')=>({shops:[shopOf('s_aaaaaaaaaa','Shop của tôi','owner',OWNER_PERMS),shopOf('s_bbbbbbbbbb','Shop phụ','viewer',['shop.view','members.view','drafts.view','reports.view'])],defaultShopId:current,admin:false,roles:{owner:'Chủ shop',manager:'Quản lý shop',content:'Nhân viên nội dung',support:'Nhân viên CSKH',viewer:'Chỉ xem'}});
+const settleMore=async(n=4)=>{for(let i=0;i<n;i++)await settle()};
+
+test('Bộ chọn shop hiển thị shop hiện hành và vai trò; đổi shop gửi header X-ShopPost-Shop và khóa lưu với vai trò Chỉ xem',async()=>{
+  const r=runtime({api:async path=>path==='/api/shops'?Response.json(shopsBody()):path==='/api/shops/s_bbbbbbbbbb/members'?Response.json({members:[{userId:'email:a@b.vn',name:'',provider:'email',role:'owner',roleLabel:'Chủ shop',canPublish:true,createdAt:1,you:false}]}):Response.json({error:'Không tìm thấy endpoint.'},{status:404})});
+  try{
+    await settleMore();assert.deepEqual(r.errors,[]);
+    const box=r.w.document.querySelector('#shop_box');assert.equal(box.hidden,false);
+    assert.equal(r.w.document.querySelector('#shop_sel').value,'s_aaaaaaaaaa');assert.match(box.textContent,/Chủ shop/);
+    assert.equal(r.w.document.querySelector('#mshop').options.length,2);
+    assert.ok([...r.w.document.querySelectorAll('#nav a')].some(a=>a.textContent.includes('Thành viên & phân quyền')));
+    assert.ok(![...r.w.document.querySelectorAll('#nav a')].some(a=>a.textContent.includes('Quản trị nền tảng')));
+    assert.equal(r.w.document.querySelector('#cloud_save').disabled,false);
+    edit(r,'Nháp trong shop chính');await r.w.cloudSaveDraft();
+    const put=r.requests.find(x=>x.method==='PUT');assert.ok(put);assert.equal(put.headers['X-ShopPost-Shop'],'s_aaaaaaaaaa');
+    r.w.shopSwitch('s_bbbbbbbbbb');await settleMore();
+    assert.equal(r.w.localStorage.getItem('pdk_shop:'+scope),'s_bbbbbbbbbb');
+    assert.match(r.w.document.querySelector('#shop_box').textContent,/Chỉ xem/);
+    assert.equal(r.w.document.querySelector('#cloud_save').disabled,true);assert.match(r.w.document.querySelector('#view').textContent,/chỉ được xem/);
+    r.w.go('members');await settleMore();
+    const view=r.w.document.querySelector('#view').textContent;
+    assert.match(view,/Thành viên của shop “Shop phụ”/);assert.match(view,/email:a@b.vn/);assert.match(view,/Quản trị nền tảng/);
+    assert.equal(r.w.document.querySelector('#inv_btn'),null);assert.equal(r.w.document.querySelector('#tr_to'),null);
+    assert.equal(r.w.document.querySelector('#shop_sel').value,'s_bbbbbbbbbb');
+  }finally{r.close()}
+});
+
+test('Trang thành viên của chủ shop: mời, link mời, thu hồi, đổi vai trò; lỗi reauth_required hướng dẫn đăng nhập lại',async()=>{
+  const calls=[];
+  const r=runtime({api:async(path,options)=>{calls.push({path,method:options.method||'GET',body:options.body?JSON.parse(options.body):null});
+    if(path==='/api/shops')return Response.json(shopsBody());
+    if(path==='/api/shops/s_aaaaaaaaaa/members')return Response.json({members:[{userId:'email:me@b.vn',name:'Tôi',provider:'email',role:'owner',roleLabel:'Chủ shop',canPublish:true,createdAt:1,you:true},{userId:'fb:2',name:'Bạn B',provider:'fb',role:'content',roleLabel:'Nhân viên nội dung',canPublish:false,createdAt:2,you:false}]});
+    if(path==='/api/shops/s_aaaaaaaaaa/invites'&&options.method==='POST')return Response.json({invite:{id:'inv_12345678',email:'x@y.vn',role:'viewer',roleLabel:'Chỉ xem',expiresAt:9},link:'https://app.example/invite/'+'t'.repeat(43),emailed:false},{status:201});
+    if(path==='/api/shops/s_aaaaaaaaaa/invites')return Response.json({invites:[{id:'inv_12345678',email:'x@y.vn',role:'viewer',roleLabel:'Chỉ xem',expiresAt:9,createdBy:'email:me@b.vn',createdAt:1}]});
+    if(path==='/api/shops/s_aaaaaaaaaa/invites/inv_12345678'&&options.method==='DELETE')return Response.json({ok:true});
+    if(path==='/api/shops/s_aaaaaaaaaa/members/fb%3A2'&&options.method==='PATCH')return Response.json({ok:true});
+    if(path==='/api/shops/s_aaaaaaaaaa/transfer')return Response.json({error:'Thao tác nhạy cảm cần đăng nhập lại trong 10 phút gần nhất.',code:'reauth_required'},{status:403});
+    return Response.json({error:'Không tìm thấy endpoint.'},{status:404});
+  }});
+  try{
+    r.w.QA_RUNNING=false;await settleMore();r.w.go('members');await settleMore();
+    const doc=r.w.document,view=()=>doc.querySelector('#view').textContent;
+    assert.match(view(),/Bạn B/);assert.match(view(),/x@y.vn/);assert.ok(doc.querySelector('#inv_btn'));assert.ok(doc.querySelector('#tr_to'));
+    assert.equal(doc.querySelector('#tr_to').options.length,1);assert.equal(doc.querySelector('#tr_to').value,'fb:2');
+    doc.querySelector('#inv_email').value='x@y.vn';doc.querySelector('#inv_role').value='viewer';await r.w.inviteCreate();await settleMore();
+    const created=calls.find(c=>c.method==='POST'&&c.path.endsWith('/invites'));assert.deepEqual(created.body,{email:'x@y.vn',role:'viewer'});
+    assert.equal(doc.querySelector('#inv_link').value,'https://app.example/invite/'+'t'.repeat(43));
+    await r.w.memberRole('fb:2','manager');assert.deepEqual(calls.find(c=>c.method==='PATCH').body,{role:'manager'});
+    r.w.ask=(msg,yes)=>yes();r.w.inviteRevoke('inv_12345678');await settleMore();assert.ok(calls.some(c=>c.method==='DELETE'&&c.path.endsWith('/invites/inv_12345678')));
+    r.w.shopTransfer();await settleMore();
+    assert.ok(calls.some(c=>c.path.endsWith('/transfer')&&c.body.to==='fb:2'));
+    assert.ok(doc.querySelector('#modal').classList.contains('on'));assert.match(doc.querySelector('#mbox').textContent,/đăng xuất rồi đăng nhập lại/);
+    assert.deepEqual(r.errors,[]);
+  }finally{r.close()}
+});
+
+test('Lời mời trong meta được hỏi và chấp nhận; shop mới trở thành shop hiện hành',async()=>{
+  const token='k'.repeat(43);const calls=[];
+  const r=runtime({invite:token,api:async(path,options)=>{calls.push({path,method:options.method||'GET'});
+    if(path==='/api/shops')return Response.json(shopsBody());
+    if(path==='/api/invites/'+token)return Response.json({invite:{shop:{id:'s_cccccccccc',name:'Shop được mời'},role:'viewer',roleLabel:'Chỉ xem',email:null,expiresAt:9,state:'pending'}});
+    if(path==='/api/invites/'+token+'/accept')return Response.json({joined:true,alreadyMember:false,shop:shopOf('s_cccccccccc','Shop được mời','viewer',['shop.view','drafts.view'])});
+    return Response.json({error:'Không tìm thấy endpoint.'},{status:404});
+  }});
+  try{
+    await settleMore();const doc=r.w.document;
+    assert.ok(doc.querySelector('#modal').classList.contains('on'));assert.match(doc.querySelector('#mbox').textContent,/Shop được mời/);assert.match(doc.querySelector('#mbox').textContent,/Chỉ xem/);
+    [...doc.querySelectorAll('#mbox button')].find(b=>b.textContent==='Tham gia').click();await settleMore();
+    assert.ok(calls.some(c=>c.path.endsWith('/accept')&&c.method==='POST'));
+    assert.equal(doc.querySelector('#shop_sel').value,'s_cccccccccc');assert.equal(doc.querySelector('#shop_sel').options.length,3);
+    assert.deepEqual(r.errors,[]);
+  }finally{r.close()}
+});
+
+test('Danh sách bản nháp máy chủ hiển thị trạng thái và nút Gửi duyệt/Duyệt theo vai trò; đổi trạng thái gọi đúng endpoint',async()=>{
+  const statuses=[];
+  const content=shopOf('s_aaaaaaaaaa','Shop của tôi','content',['shop.view','members.view','drafts.view','drafts.create','drafts.edit_own','drafts.submit','ai.use']);
+  const r=runtime({api:async()=>Response.json({shops:[content],defaultShopId:content.id,admin:false,roles:{}}),fetchImpl:async(path,options)=>{
+    if(path==='/session')return Response.json(session);
+    if(path.endsWith('/status')){statuses.push({path,body:JSON.parse(options.body)});return Response.json({...envelope(),status:'pending_review',revision:2})}
+    return Response.json({drafts:[{...envelope('cloud-a','Bài chờ gửi'),status:'draft'},{...envelope('cloud-b','Bài đã gửi'),status:'pending_review'}],nextCursor:null});
+  }});
+  try{
+    await settleMore();await r.w.cloudListDrafts();
+    const text=r.w.document.querySelector('#mbox').textContent;
+    assert.match(text,/Bản nháp/);assert.match(text,/Chờ duyệt/);
+    const buttons=[...r.w.document.querySelectorAll('#mbox button')].map(b=>b.textContent);
+    assert.ok(buttons.includes('Gửi duyệt'));assert.ok(!buttons.includes('Duyệt'));assert.ok(!buttons.includes('Xóa'));
+    await r.w.cloudSetStatus('cloud-a','pending_review');await settleMore();
+    assert.deepEqual(statuses,[{path:'/storage/drafts/cloud-a/status',body:{status:'pending_review'}}]);
+    assert.deepEqual(r.errors,[]);
+  }finally{r.close()}
+});
+
+test('live job update preserves typed channel content and updates only history and matching schedule',async()=>{
+ const r=runtime();try{await settle();r.read(`SHOP.ready=true;SHOP.id='shop-a';S.posts=[{id:'local',schedId:'job-a',status:'scheduled',channels:[],metrics:{}}];document.querySelector('#view').innerHTML='<textarea id="tg_text">Nội dung đang soạn</textarea><div id="live_job_history"></div>';`);
+ assert.equal(typeof r.w.applyPublishJobs,'function');
+ r.w.applyPublishJobs([{id:'job-a',kind:'photo',status:'sent',attempts:1,remoteMessageId:'remote-a',url:'https://example.com/post'}],'shop-a');
+ assert.equal(r.w.document.querySelector('#tg_text').value,'Nội dung đang soạn');assert.equal(r.read('S.posts[0].status'),'published');
+ r.w.applyPublishJobs([{id:'job-a',kind:'photo',status:'failed',attempts:1}],'shop-b');
+ assert.equal(r.read('S.posts[0].status'),'published');
+ }finally{r.close();}
+});
+
+test('Zalo publishing preserves the idempotency header and caller cancellation signal',async()=>{
+ const r=runtime({fetchImpl:async(path)=>path==='/channels/zalo/publish'?Response.json({ok:true,job:{id:'pj_one',status:'sent'}}):Response.json(session)});
+ try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';D.publishKey='stable-zalo-key-123'");
+ await r.w.zaloPublishDraft('Content','',['https://example.com/cover.jpg']);
+ const req=r.requests.find(x=>x.path==='/channels/zalo/publish');assert.equal(req.headers['Idempotency-Key'],'stable-zalo-key-123');
+ const controller=new AbortController();await r.w.cloudRequest('/session',{signal:controller.signal});controller.abort();
+ assert.equal(r.requests.filter(x=>x.path==='/session').at(-1).signal.aborted,true);
+ }finally{r.close();}
+});
+test('immediate Zalo rate-limit responses retain the common job for later successful reconciliation',async()=>{
+ const r=runtime({fetchImpl:async(path)=>path==='/channels/zalo/publish'?Response.json({job:{id:'pj_retry',status:'retryable',kind:'photo',attempts:1},retryAfter:30},{status:429}):Response.json(session)});
+ try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';S.channels=[{id:'real_zalo',pf:'zalo',real:true,provider:'zalo',connected:true}];D.content='Queued content';D.channels=['real_zalo'];D.media=[{type:'image/jpeg',thumb:'data:image/jpeg;base64,/9j/AA==',name:'cover',size:4}]");
+ await r.w.submitPostReal(['real_zalo']);assert.equal(r.read('S.posts[0].schedId'),'pj_retry');assert.equal(r.read('S.posts[0].status'),'scheduled');
+ r.w.applyPublishJobs([{id:'pj_retry',status:'sent',kind:'photo',attempts:2}],'shop');assert.equal(r.read('S.posts[0].status'),'published');
+ }finally{r.close();}
 });

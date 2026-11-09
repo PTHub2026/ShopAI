@@ -1,6 +1,6 @@
-# ShopAI
+# Shoppost
 
-Ứng dụng nội dung ShopAI × ShopTrack, dùng Cloudflare Workers, Workers AI và D1. Bản HTML offline là demo. Bản server có xác thực Access, AI và thao tác lưu/mở bản nháp văn bản; các tích hợp đăng bài, lịch đăng và gửi tin đa kênh thật còn chưa triển khai.
+Ứng dụng nội dung Shoppost × ShopTrack, dùng Cloudflare Workers, Workers AI và D1. Bản HTML offline là demo. Bản server có xác thực Access, AI và thao tác lưu/mở bản nháp văn bản; các tích hợp đăng bài, lịch đăng và gửi tin đa kênh thật còn chưa triển khai.
 
 ## Phát triển và kiểm chứng
 

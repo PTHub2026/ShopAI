@@ -492,6 +492,7 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
       if (path === '/auth/register/start') {
         const email = normalizeEmail(body.email);
         if (!email) return json({ error: 'Địa chỉ email không hợp lệ.' }, 400);
+        if (!emailDomainAllowed(env, email)) return json({ error: emailDomainMessage(env) }, 403);
         const pwErr = passwordError(body.password);
         if (pwErr) return json({ error: pwErr }, 400);
         try {
@@ -505,6 +506,7 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
       if (path === '/auth/register/verify') {
         const email = normalizeEmail(body.email);
         if (!email) return json({ error: 'Địa chỉ email không hợp lệ.' }, 400);
+        if (!emailDomainAllowed(env, email)) return json({ error: emailDomainMessage(env) }, 403);
         const pwErr = passwordError(body.password);
         if (pwErr) return json({ error: pwErr }, 400);
         const code = body.code;

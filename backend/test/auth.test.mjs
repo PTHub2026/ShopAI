@@ -37,7 +37,7 @@ function env(overrides = {}) {
     ACCESS_TEAM_DOMAIN: 'test-team.cloudflareaccess.com', ACCESS_AUD: 'test-audience', ALLOWED_ORIGINS: 'https://pthub2026.github.io',
     AI: { run: async () => ({ response: 'Nội dung AI' }) }, AI_RATE_LIMITER: { limit: async () => ({ success: true }) }, DB: database(),
     FACEBOOK_APP_ID: FB_ID, ZALO_APP_ID: ZALO_ID, ZALO_APP_SECRET: ZALO_SECRET, RESEND_API_KEY: RESEND_KEY, EMAIL_FROM: 'ShopPost <no-reply@shoppost.net>',
-    EMAIL_LOGIN_DOMAINS: 'pthub.vn,shoptrack.vn,shoppost.net,example.com,b.vn',
+    EMAIL_LOGIN_DOMAINS: 'pthub.vn,shoptrack.vn,shoppost.net,example.com,b.vn,vidu.vn,y.vn',
     FRONTEND_HTML: '<html><head></head><body>Ứng dụng ShopPost</body></html>', LOGIN_HTML, ...overrides
   };
 }
@@ -395,6 +395,23 @@ test('Luồng mã một lần qua email chỉ dành cho @pthub.vn và @shoptrack
   const custom = env({ EMAIL_LOGIN_DOMAINS: ' @vidu.vn , pthub.vn ' });
   assert.equal((await post(custom, '/auth/email/start', { email: 'a@vidu.vn' })).status, 200);
   assert.equal((await post(custom, '/auth/email/start', { email: 'a@shoptrack.vn' })).status, 403);
+}));
+
+test('Đăng ký bằng mật khẩu cũng chỉ dành cho @pthub.vn và @shoptrack.vn (chặn tự tạo tài khoản ngoài miền)', async () => withFetch(async () => Response.json({ id: 'ok' }), async () => {
+  const e = env({ EMAIL_LOGIN_DOMAINS: undefined });
+  // Tên miền ngoài danh sách bị từ chối ở cả bước gửi mã lẫn bước xác minh của luồng đăng ký.
+  for (const path of ['/auth/register/start', '/auth/register/verify']) {
+    const body = path.endsWith('verify')
+      ? { email: 'nguoila@gmail.com', code: '123456', password: '********' }
+      : { email: 'nguoila@gmail.com', password: '********' };
+    const r = await post(e, path, body);
+    assert.equal(r.status, 403);
+    assert.match((await r.json()).error, /@pthub\.vn và @shoptrack\.vn/);
+  }
+  // Email bị từ chối không hề được tạo mã đăng ký trong kho.
+  assert.equal(row(e.DB, 'SELECT code_hash FROM auth_otp_codes WHERE email = ?', 'nguoila@gmail.com'), null);
+  // Tên miền được phép đi qua được guard miền (không trả 403; dừng ở bước gửi mã tiếp theo).
+  assert.notEqual((await post(e, '/auth/register/start', { email: 'nhanvien@pthub.vn', password: '********' })).status, 403);
 }));
 
 // ---- Cloudflare Email Service (binding env.EMAIL) ----

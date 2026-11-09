@@ -38,7 +38,7 @@ function env(overrides = {}) {
   return {
     ACCESS_TEAM_DOMAIN: 'test-team.cloudflareaccess.com', ACCESS_AUD: 'test-audience', PLATFORM_ADMIN_EMAILS: 'ct@pthub.vn',
     AI: { run: async () => ({ response: 'Nội dung AI' }) }, AI_RATE_LIMITER: { limit: async () => ({ success: true }) }, DB: database(),
-    FRONTEND_HTML: '<html><head></head><body>Ứng dụng ShopPost</body></html>', LOGIN_HTML: '<html><head></head><body>Đăng nhập ShopPost</body></html>', ...overrides
+    FRONTEND_HTML: '<html><head></head><body>Ứng dụng Shoppost</body></html>', LOGIN_HTML: '<html><head></head><body>Đăng nhập Shoppost</body></html>', ...overrides
   };
 }
 // Phiên đăng nhập được chèn thẳng vào auth_sessions (đúng cách Worker tra cứu: SHA-256 của token trong cookie).
@@ -345,14 +345,14 @@ test('Lời mời: hết hạn/thu hồi/đã dùng bị từ chối, dùng mộ
   assert.equal((await call(e, '/api/invites/' + tokenOf(ok) + '/accept', { method: 'POST', body: {} })).status, 401, 'chấp nhận cần đăng nhập');
   // Mở link mời khi chưa đăng nhập: trang đăng nhập + cookie nhớ mã mời; đã đăng nhập: giao diện có meta shoppost-invite.
   const anon = await call(e, '/invite/' + tokenOf(ok));
-  assert.equal(anon.status, 200); assert.match(await anon.text(), /Đăng nhập ShopPost/);
+  assert.equal(anon.status, 200); assert.match(await anon.text(), /Đăng nhập Shoppost/);
   assert.match(anon.headers.getSetCookie().join('\n'), /__Host-shopai_invite=[A-Za-z0-9_-]{43}; Max-Age=3600; Path=\/; HttpOnly; Secure; SameSite=Lax/);
   const page = await call(e, '/invite/' + tokenOf(ok), { headers: guest });
   assert.equal(page.status, 200); assert.ok((await page.text()).includes('<meta name="shoppost-invite" content="' + tokenOf(ok) + '">'));
   assert.equal((await call(e, '/invite/ngan')).status, 404);
   // Có email + đã cấu hình gửi thư: gửi thư tiếng Việt qua cùng adapter, không lộ token trong nhật ký.
   const sent = [];
-  const withEmail = env({ EMAIL: { send: async message => { sent.push(message); } }, EMAIL_FROM: 'ShopPost <no-reply@shoppost.net>', DB: e.DB });
+  const withEmail = env({ EMAIL: { send: async message => { sent.push(message); } }, EMAIL_FROM: 'Shoppost <no-reply@shoppost.net>', DB: e.DB });
   const mailed = await json(await call(withEmail, '/api/shops/' + shopId + '/invites', { method: 'POST', headers: owner, body: { role: 'viewer', email: 'Ban@Example.com' } }));
   assert.equal(mailed.status, 201, JSON.stringify(mailed.body)); assert.equal(mailed.body.emailed, true); assert.equal(mailed.body.invite.email, 'ban@example.com');
   assert.equal(sent.length, 1);

@@ -25,5 +25,7 @@ await copyFile(new URL('src/drafts.js', root), new URL('dist/drafts.js', root));
 await copyFile(new URL('src/auth.js', root), new URL('dist/auth.js', root));
 await copyFile(new URL('src/shops.js', root), new URL('dist/shops.js', root));
 await copyFile(new URL('src/permissions.js', root), new URL('dist/permissions.js', root));
+await copyFile(new URL('src/social.js', root), new URL('dist/social.js', root));
+await copyFile(new URL('src/meta.js', root), new URL('dist/meta.js', root));
 console.log('Đã đóng gói giao diện từ repository cùng backend; không cần tải HTML bên ngoài lúc chạy.');
 

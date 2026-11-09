@@ -1,3 +1,4 @@
+import { handleSocial } from './social.js';
 import { drafts } from './drafts.js';
 import { handleAuth, loginResponse, normalizeEmail, sessionFromRequest } from './auth.js';
 import { INVITE_PATH, handleApi, resolveShop } from './shops.js';
@@ -91,6 +92,7 @@ export default {
       if (!who.owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
       const expectedScope = request.headers.get('X-ShopAI-User-Scope');
       if (expectedScope && expectedScope !== await scopeFor(who.owner)) return json({ code: 'ACCOUNT_CHANGED', error: 'Tài khoản đã thay đổi. Tải lại trang trước khi tiếp tục.' }, 403);
+      if (path.startsWith('/api/social/')) return handleSocial(request, env, who, json);
       return handleApi(request, env, who, json);
     }
     if (path === '/session') {

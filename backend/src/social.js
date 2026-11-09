@@ -12,6 +12,8 @@ export async function ensureSocialSchema(db){
   await db.batch(SOCIAL_SCHEMA.slice(2).map(s=>db.prepare(s)));await ensureChannelStore(db);
   const hasURL=async()=> (await db.prepare('PRAGMA table_info(publish_jobs)').all()).results.some(c=>c.name==='result_url');
   if(!await hasURL())try{await db.prepare('ALTER TABLE publish_jobs ADD COLUMN result_url TEXT').run();}catch(e){if(!await hasURL())throw e;}
+  const hasContainer=async()=> (await db.prepare('PRAGMA table_info(publish_jobs)').all()).results.some(c=>c.name==='instagram_container_id');
+  if(!await hasContainer())try{await db.prepare('ALTER TABLE publish_jobs ADD COLUMN instagram_container_id TEXT').run();}catch(e){if(!await hasContainer())throw e;}
   await db.prepare('CREATE INDEX IF NOT EXISTS publish_jobs_due ON publish_jobs(status,next_attempt_at)').run();
  })();initialized.set(db,pending);try{await pending;}catch(e){initialized.delete(db);throw e;}
 }

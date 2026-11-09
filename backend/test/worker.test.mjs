@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 const worker = (await import(new URL('../src/worker.js', import.meta.url))).default;
+const { runDueScheduledPosts } = await import(new URL('../src/channels.js', import.meta.url));
 const { subtle } = webcrypto;
 const pair = await subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
 const jwk = { ...await subtle.exportKey('jwk', pair.publicKey), kid: 'test-key', use: 'sig', alg: 'RS256' };
@@ -9,7 +10,7 @@ const issuer = 'https://test-team.cloudflareaccess.com';
 const origin = 'https://pthub2026.github.io';
 const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
 async function token(changes = {}, head = {}) {
-  const data = encode({ alg: 'RS256', kid: 'test-key', ...head }) + '.' + encode({ iss: issuer, aud: ['test-audience'], exp: Math.floor(Date.now() / 1000) + 3600, ...changes });
+  const data = encode({ alg: 'RS256', kid: 'test-key', ...head }) + '.' + encode({ iss: issuer, sub: 'user-a', aud: ['test-audience'], exp: Math.floor(Date.now() / 1000) + 3600, ...changes });
   return data + '.' + Buffer.from(await subtle.sign('RSASSA-PKCS1-v1_5', pair.privateKey, Buffer.from(data))).toString('base64url');
 }
 const valid = await token();
@@ -59,7 +60,7 @@ test('Bốn tác vụ thành công và prompt đúng tác vụ', async () => run
     let captured;
     const response = await worker.fetch(request({ body: { task, text: 'Dữ kiện thực tế' } }), env({ AI: { run: async (model, payload) => { captured = payload; return { response: ' Kết quả thử nghiệm ' }; } } }));
     assert.equal(response.status, 200); assert.deepEqual(await response.json(), { text: 'Kết quả thử nghiệm' });
-    assert.equal(JSON.parse(captured.messages[1].content).task, task); assert.equal(captured.max_tokens, 1200);
+    assert.equal(JSON.parse(captured.messages[1].content).task, task); assert.equal(captured.max_completion_tokens, 1200);
     assert.equal(response.headers.get('Cache-Control'), 'no-store');
   }
 }));
@@ -104,7 +105,8 @@ test('Giao diện yêu cầu JWT, hỗ trợ HEAD, và chèn endpoint cùng orig
   const make=(path,method='GET',jwt=valid)=>new Request('https://backend.example'+path,{method,headers:jwt?{'Cf-Access-Jwt-Assertion':jwt}:{}});
   const expired=await token({exp:0});
   for(const path of ['/','/index.html']){
-    for(const jwt of [null,'invalid',expired])assert.equal((await worker.fetch(make(path,'GET',jwt),e)).status,401);
+    // JWT thiếu/sai/hết hạn và không có phiên: trả trang đăng nhập (200) thay vì giao diện ứng dụng.
+    for(const jwt of [null,'invalid',expired]){const login=await worker.fetch(make(path,'GET',jwt),e);assert.equal(login.status,200);assert.doesNotMatch(await login.text(),/shopai-user-scope|shopai-ai-endpoint/)}
     const response=await worker.fetch(make(path),e);
     assert.equal(response.status,200);assert.match(await response.text(),/name="shopai-ai-endpoint" content="\/ai"/);
     const head=await worker.fetch(make(path,'HEAD'),e);
@@ -116,3 +118,103 @@ test('Giao diện yêu cầu JWT, hỗ trợ HEAD, và chèn endpoint cùng orig
   const sameOrigin=await worker.fetch(request({headers:{Origin:'https://backend.example'}}),env({...e,ALLOWED_ORIGINS:''}));
   assert.equal(sameOrigin.status,200);assert.equal(aiCalls,1);assert.equal(limitCalls,1);
 }));
+
+
+test('Session capabilities require a verified subject and separate local account scopes', async()=>run(async()=>{
+  const first=await worker.fetch(request({path:'/session',method:'GET'}),env({DB:{}}));
+  assert.equal(first.status,200);
+  const session=await first.json();
+  assert.match(session.userScope,/^[a-f0-9]{64}$/);
+  assert.deepEqual(session.capabilities,{ai:true,drafts:true,publishing:true,scheduling:true,inbox:false});
+  const second=await (await worker.fetch(request({path:'/session',method:'GET',jwt:await token({sub:'user-b'})}),env())).json();
+  assert.notEqual(second.userScope,session.userScope);assert.equal(second.capabilities.drafts,false);
+  const page=await worker.fetch(request({path:'/',method:'GET'}),env({FRONTEND_HTML:'<head></head><body></body>'}));
+  assert.ok((await page.text()).includes('name="shopai-user-scope" content="'+session.userScope+'"'));
+  for(const sub of ['',undefined,42]){
+    assert.equal((await worker.fetch(request({path:'/session',method:'GET',jwt:await token({sub})}),env())).status,403);
+    assert.equal((await worker.fetch(request({path:'/',method:'GET',jwt:await token({sub})}),env({FRONTEND_HTML:'<head></head>'}))).status,403);
+  }
+  assert.equal((await worker.fetch(request({path:'/session',method:'GET',jwt:null}),env())).status,401);
+}));
+
+test('Storage refuses an editor belonging to a different Access account',async()=>run(async()=>{
+  const response=await worker.fetch(request({path:'/storage/drafts',method:'GET',headers:{Origin:'https://backend.example','X-ShopAI-User-Scope':'b'.repeat(64)}}),env({DB:{}}));
+  assert.equal(response.status,403);assert.equal((await response.json()).code,'ACCOUNT_CHANGED');
+  assert.equal((await worker.fetch(request({path:'/storage/drafts',method:'GET',jwt:null,headers:{Origin:'https://backend.example'}}),env({DB:{}}))).status,401);
+}));
+test('Bản nháp chỉ phục vụ cùng origin: mọi origin khác bị từ chối ngay cả khi nằm trong CORS',async()=>run(async()=>{
+  // Origin github.io nằm trong ALLOWED_ORIGINS nhưng khác origin của backend → phải 403 trước cả khi xác thực.
+  for(const method of ['GET','PUT','DELETE']){
+    const response=await worker.fetch(request({path:'/storage/drafts/d_abc',method,body:method==='PUT'?{draft:{},revision:0}:undefined}),env({DB:{}}));
+    assert.equal(response.status,403);
+    const body=await response.json();
+    assert.equal(body.code,undefined);
+    assert.match(body.error,/cùng origin/);
+  }
+}));
+test('Kênh chỉ phục vụ cùng origin và cần đăng nhập + cơ sở dữ liệu',async()=>run(async()=>{
+  // Origin github.io khác origin backend → 403 trước khi xác thực.
+  const cross=await worker.fetch(request({path:'/channels',method:'GET'}),env({DB:{}}));
+  assert.equal(cross.status,403);assert.match((await cross.json()).error,/cùng origin/);
+  // Cùng origin, không có JWT → 401.
+  assert.equal((await worker.fetch(request({path:'/channels',method:'GET',jwt:null,headers:{Origin:'https://backend.example'}}),env({DB:{}}))).status,401);
+  // Cùng origin, có JWT nhưng chưa gắn DB → 503.
+  const noDb=await worker.fetch(request({path:'/channels',method:'GET',headers:{Origin:'https://backend.example'}}),env());
+  assert.equal(noDb.status,503);assert.match((await noDb.json()).error,/cơ sở dữ liệu|cấu hình/);
+}));
+test('Callback OA Zalo: chỉ GET và cần cơ sở dữ liệu, không áp dụng chặn cùng origin',async()=>run(async()=>{
+  // POST không được hỗ trợ.
+  const post=await worker.fetch(request({path:'/auth/zalo/callback',method:'POST',headers:{Origin:'https://backend.example'}}),env({DB:{}}));
+  assert.equal(post.status,405);
+  // GET không có DB → 503 (không bị 403 dù không gửi Origin — đây là điều hướng cấp trang).
+  const noDb=await worker.fetch(new Request('https://backend.example/auth/zalo/callback?code=x&state=y',{method:'GET',headers:{'Cf-Access-Jwt-Assertion':valid}}),env());
+  assert.equal(noDb.status,503);
+}));
+test('Các header bảo mật xuất hiện trên phản hồi JSON và trang HTML',async()=>run(async()=>{
+  const e=env({FRONTEND_HTML:'<html><head></head><body>ShopAI</body></html>'});
+  const jsonResp=await worker.fetch(request({path:'/health',method:'GET'}),e);
+  for(const resp of [jsonResp,await worker.fetch(new Request('https://backend.example/',{method:'GET',headers:{'Cf-Access-Jwt-Assertion':valid}}),e)]){
+    assert.equal(resp.headers.get('Strict-Transport-Security'),'max-age=15552000; includeSubDomains');
+    assert.equal(resp.headers.get('X-Frame-Options'),'DENY');
+    assert.equal(resp.headers.get('Permissions-Policy'),'geolocation=(), microphone=(), camera=()');
+  }
+}));
+test('Renewing a JWT does not reset the user AI rate-limit key',async()=>run(async()=>{
+  const keys=[];const e=env({AI_RATE_LIMITER:{limit:async({key})=>{keys.push(key);return {success:true}}}});
+  await worker.fetch(request(),e);
+  await worker.fetch(request({jwt:await token({exp:Math.floor(Date.now()/1000)+7200})}),e);
+  assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);
+}));
+test('Current Workers AI chat-completion output is normalized without leaking reasoning', async () => run(async () => {
+  let used;
+  const response=await worker.fetch(request(),env({AI:{run:async(model,payload)=>{used={model,payload};return {choices:[{message:{content:' Nội dung mới ',reasoning_content:'private reasoning'},finish_reason:'stop'}]};}}}));
+  assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{text:'Nội dung mới'});
+  assert.equal(used.model,'@cf/google/gemma-4-26b-a4b-it');
+  assert.equal(used.payload.max_completion_tokens,1200);
+  assert.deepEqual(used.payload.chat_template_kwargs,{enable_thinking:false});
+}));
+test('Reasoning-only, tool-only and truncated outputs never become successful copy', async () => run(async () => {
+  for(const result of [{choices:[{message:{content:null,reasoning_content:'hidden'},finish_reason:'stop'}]},{choices:[{message:{content:'partial'},finish_reason:'length'}]}]){
+    assert.equal((await worker.fetch(request(),env({AI:{run:async()=>result}}))).status,502);
+  }
+}));
+test('Cron marks a legacy scheduled post failed when its channel is missing',async()=>{
+ const {sqliteDB}=await import('./sqlite-fixture.mjs');const db=sqliteDB();
+ try{await runDueScheduledPosts({DB:db});
+ db.sqlite.exec("INSERT INTO shops(id,name,owner,status,created_at,updated_at) VALUES('shop1','Test','owner','active',0,0)");
+ db.sqlite.exec("INSERT INTO scheduled_posts(id,shop_id,provider,content,images,run_at,status) VALUES('missing-channel','shop1','zalo','Test','[]',0,'scheduled')");
+ assert.equal((await runDueScheduledPosts({DB:db})).processed,1);
+ const job=db.sqlite.prepare('SELECT status,error_code FROM publish_jobs').get();assert.equal(job.status,'failed');assert.equal(job.error_code,'account_revoked');
+ assert.equal(db.sqlite.prepare('SELECT status FROM scheduled_posts').get().status,'failed');
+ }finally{db.sqlite.close();}
+});
+test('Cron is idle without a database or without due jobs',async()=>{
+ assert.deepEqual(await runDueScheduledPosts({}),{processed:0});
+ const {sqliteDB}=await import('./sqlite-fixture.mjs');const db=sqliteDB();try{assert.deepEqual(await runDueScheduledPosts({DB:db}),{processed:0});}finally{db.sqlite.close();}
+});
+test('scheduled handler forwards work through waitUntil only when database exists',async()=>{
+ let calls=0;await worker.scheduled({},{},{waitUntil:()=>calls++});assert.equal(calls,0);
+ const {sqliteDB}=await import('./sqlite-fixture.mjs');const db=sqliteDB();const pending=[];
+ try{await worker.scheduled({},{DB:db},{waitUntil:p=>pending.push(p)});assert.equal(pending.length,1);await Promise.all(pending);}finally{db.sqlite.close();}
+});

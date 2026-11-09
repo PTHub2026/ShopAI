@@ -8,6 +8,7 @@
   "workers_dev": true,
   "preview_urls": true,
   "keep_vars": true,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
   "version_metadata": {
     "binding": "CF_VERSION_METADATA"
   },
@@ -30,9 +31,12 @@
     "ALLOWED_ORIGINS": "https://pthub2026.github.io,https://shopai-backend.ct-3f8.workers.dev",
     "AI_MODEL": "@cf/google/gemma-4-26b-a4b-it",
     "ZALO_APP_ID": "3847703053447967855",
-    "EMAIL_FROM": "ShopPost <no-reply@shoppost.net>",
+    "PUBLIC_ORIGIN": "https://shoppost.net",
+    "EMAIL_FROM": "Shoppost <no-reply@shoppost.net>",
     "PLATFORM_ADMIN_EMAILS": "ct@pthub.vn",
-    "EMAIL_LOGIN_DOMAINS": "pthub.vn,shoptrack.vn"
+    "EMAIL_LOGIN_DOMAINS": "pthub.vn,shoptrack.vn",
+    "META_APP_ID": "1690219679401963",
+    "META_REDIRECT_URI": "https://shoppost.net/api/social/meta/callback"
   },
   "send_email": [
     {

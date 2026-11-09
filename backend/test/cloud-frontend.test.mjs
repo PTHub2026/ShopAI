@@ -316,3 +316,30 @@ test('Danh sách bản nháp máy chủ hiển thị trạng thái và nút Gử
     assert.deepEqual(r.errors,[]);
   }finally{r.close()}
 });
+
+test('live job update preserves typed channel content and updates only history and matching schedule',async()=>{
+ const r=runtime();try{await settle();r.read(`SHOP.ready=true;SHOP.id='shop-a';S.posts=[{id:'local',schedId:'job-a',status:'scheduled',channels:[],metrics:{}}];document.querySelector('#view').innerHTML='<textarea id="tg_text">Nội dung đang soạn</textarea><div id="live_job_history"></div>';`);
+ assert.equal(typeof r.w.applyPublishJobs,'function');
+ r.w.applyPublishJobs([{id:'job-a',kind:'photo',status:'sent',attempts:1,remoteMessageId:'remote-a',url:'https://example.com/post'}],'shop-a');
+ assert.equal(r.w.document.querySelector('#tg_text').value,'Nội dung đang soạn');assert.equal(r.read('S.posts[0].status'),'published');
+ r.w.applyPublishJobs([{id:'job-a',kind:'photo',status:'failed',attempts:1}],'shop-b');
+ assert.equal(r.read('S.posts[0].status'),'published');
+ }finally{r.close();}
+});
+
+test('Zalo publishing preserves the idempotency header and caller cancellation signal',async()=>{
+ const r=runtime({fetchImpl:async(path)=>path==='/channels/zalo/publish'?Response.json({ok:true,job:{id:'pj_one',status:'sent'}}):Response.json(session)});
+ try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';D.publishKey='stable-zalo-key-123'");
+ await r.w.zaloPublishDraft('Content','',['https://example.com/cover.jpg']);
+ const req=r.requests.find(x=>x.path==='/channels/zalo/publish');assert.equal(req.headers['Idempotency-Key'],'stable-zalo-key-123');
+ const controller=new AbortController();await r.w.cloudRequest('/session',{signal:controller.signal});controller.abort();
+ assert.equal(r.requests.filter(x=>x.path==='/session').at(-1).signal.aborted,true);
+ }finally{r.close();}
+});
+test('immediate Zalo rate-limit responses retain the common job for later successful reconciliation',async()=>{
+ const r=runtime({fetchImpl:async(path)=>path==='/channels/zalo/publish'?Response.json({job:{id:'pj_retry',status:'retryable',kind:'photo',attempts:1},retryAfter:30},{status:429}):Response.json(session)});
+ try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';S.channels=[{id:'real_zalo',pf:'zalo',real:true,provider:'zalo',connected:true}];D.content='Queued content';D.channels=['real_zalo'];D.media=[{type:'image/jpeg',thumb:'data:image/jpeg;base64,/9j/AA==',name:'cover',size:4}]");
+ await r.w.submitPostReal(['real_zalo']);assert.equal(r.read('S.posts[0].schedId'),'pj_retry');assert.equal(r.read('S.posts[0].status'),'scheduled');
+ r.w.applyPublishJobs([{id:'pj_retry',status:'sent',kind:'photo',attempts:2}],'shop');assert.equal(r.read('S.posts[0].status'),'published');
+ }finally{r.close();}
+});

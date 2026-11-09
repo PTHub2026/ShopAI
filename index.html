@@ -57,9 +57,59 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;bord
 .shopbox{display:flex;gap:6px;align-items:center;margin:8px 0 0}.shopbox select{flex:1;min-width:0}.chip{display:inline-block;font-size:10px;padding:2px 7px;border-radius:99px;background:#e8f0fe;color:#1a4fb3;white-space:nowrap}.chip.warn{background:#fff7e6;color:#9a5b00}.chip.ok{background:#e6f6ea;color:#1e7a3a}
 main,.content,#view{min-width:0}.card{max-width:100%}.grid>*,.two>*{min-width:0}
 @media(max-width:900px){aside{display:none}main{margin-left:0}.g2,.g3{grid-template-columns:1fr}.two{grid-template-columns:1fr!important}.inbox{grid-template-columns:1fr;grid-template-rows:auto auto;height:auto;min-height:0}.clist{max-height:280px;border-right:0;border-bottom:1px solid var(--bd)}.chat{height:70vh;min-height:420px}.mnav{display:block}.mshop.on{display:block}.content{padding:14px}}
+/* ===== Thanh bên Phương án B + thu gọn ===== */
+aside{transition:width .18s ease,padding .18s ease}
+.logorow{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+aside .logo{margin-bottom:0;flex:1;min-width:0;overflow:hidden}
+aside .logo i{background:linear-gradient(135deg,#6d28d9,#2563eb);font-size:16px}
+.logotext{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sbtoggle{flex:none;width:28px;height:28px;border:1px solid var(--bd);background:#fff;border-radius:8px;cursor:pointer;color:#475569;font-size:15px;line-height:1;display:grid;place-items:center}
+.sbtoggle:hover{background:#f0f0f0}
+aside #proj_sel{width:100%;border:1px solid var(--bd);border-radius:99px;padding:7px 12px;background:#fff;font-size:12px;color:#334155;margin-bottom:8px}
+aside #shop_box{display:block;margin:0 0 10px}
+aside .profile{background:linear-gradient(135deg,#1e1b4b,#3730a3);border-radius:14px;padding:12px;color:#fff}
+aside .profile .prow{display:flex;align-items:center;gap:10px}
+aside .profile .av{flex:none;width:38px;height:38px;border-radius:10px;background:rgba(255,255,255,.18);display:grid;place-items:center;font-weight:700;font-size:16px;text-transform:uppercase}
+aside .profile .txt{min-width:0}
+aside .profile .nm{font-weight:700;font-size:14px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+aside .profile .sub{font-size:11px;color:#c7d2fe;margin-top:1px}
+aside .ownerbadge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;border-radius:99px;padding:3px 9px;margin-top:9px;background:linear-gradient(135deg,#fbbf24,#f59e0b);color:#422006}
+aside .ownerbadge svg{width:12px;height:12px}
+aside .ownerbadge.alt{background:#eef2ff;color:#4338ca}
+aside .shoprow{display:flex;gap:6px;align-items:center;margin-top:9px}
+aside .shoprow select{flex:1;min-width:0;border:none;border-radius:8px;padding:6px 8px;font-size:12px;background:rgba(255,255,255,.14);color:#fff}
+aside .shoprow select option{color:#111}
+aside .shoprow .mk{flex:none;width:30px;height:30px;border:none;border-radius:8px;background:rgba(255,255,255,.18);color:#fff;font-size:16px;cursor:pointer}
+aside .navcard{background:#fff;border:1px solid var(--bd);border-radius:14px;padding:6px;margin-bottom:10px}
+aside .navcard .grp{margin:6px 8px 4px}
+aside .nav a{gap:10px;padding:7px 8px;margin:1px 0;border-radius:10px;color:#334155}
+aside .nav a .lbl{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+aside .nav a.on{background:#eef2ff;color:#1e293b;font-weight:600}
+aside .nav a.child{padding-left:18px}
+aside .nav a.child .tile{width:22px;height:22px;border-radius:7px}
+aside .tile{flex:none;width:28px;height:28px;border-radius:8px;display:grid;place-items:center}
+aside .tile svg{width:16px;height:16px}
+aside .c-purple{background:#f3e8ff;color:#7e22ce}
+aside .c-blue{background:#dbeafe;color:#2563eb}
+aside .c-amber{background:#fef3c7;color:#d97706}
+aside .c-green{background:#dcfce7;color:#16a34a}
+aside .c-rose{background:#ffe4e6;color:#e11d48}
+aside .c-slate{background:#e2e8f0;color:#475569}
+aside .nav a .badge{background:#eef2ff;color:#4f46e5}
+.app.sb-collapsed aside{width:68px;padding:12px 8px}
+.app.sb-collapsed main{margin-left:68px}
+.app.sb-collapsed .logorow{justify-content:center;flex-wrap:wrap;gap:6px}
+.app.sb-collapsed .logotext,.app.sb-collapsed aside #proj_sel,.app.sb-collapsed aside .grp,.app.sb-collapsed aside .nav a .lbl,.app.sb-collapsed aside .nav a .badge,.app.sb-collapsed aside .profile .txt,.app.sb-collapsed aside .ownerbadge,.app.sb-collapsed aside .shoprow{display:none}
+.app.sb-collapsed aside .profile{padding:6px;background:transparent}
+.app.sb-collapsed aside .profile .prow{justify-content:center}
+.app.sb-collapsed aside .navcard{padding:4px}
+.app.sb-collapsed aside .nav a{justify-content:center;padding:7px 0}
+.app.sb-collapsed aside .nav a.child{padding-left:0}
+.app.sb-collapsed .sbtoggle{transform:rotate(180deg)}
+@media(max-width:900px){.app.sb-collapsed aside{display:none}.app.sb-collapsed main{margin-left:0}}
 </style></head><body>
 <div class="app">
-<aside><div class="logo"><i>S</i>ShopPost</div>
+<aside><div class="logorow"><div class="logo"><i>S</i><span class="logotext">ShopPost</span></div><button class="sbtoggle" onclick="toggleSidebar()" title="Thu gọn / mở rộng thanh bên" aria-label="Thu gọn thanh bên">«</button></div>
 <select id="proj_sel" onchange="projOnChange(this.value)" title="Dự án – nhóm dữ liệu làm việc riêng trong trình duyệt này" aria-label="Dự án"><option>Dự án: Mặc định</option></select><div id="shop_box" class="shopbox" hidden></div><nav class="nav" id="nav"></nav></aside>
 <main><header><div class="row"><select class="mnav" id="mnav" onchange="go(this.value)"></select><select class="mshop" id="mshop" onchange="shopSwitch(this.value)" title="Shop đang làm việc" aria-label="Shop đang làm việc"></select><b id="title"></b></div><div class="row"><span class="small muted" id="clock"></span><button class="btn sm" id="fbquick" title="Gửi góp ý / báo lỗi cho trang đang xem" aria-label="Góp ý nhanh" onclick="fbQuick()">💬 Góp ý</button><span class="pf" style="background:#030213">U</span></div></header>
 <div class="content" id="view"></div></main></div>
@@ -67,7 +117,11 @@ main,.content,#view{min-width:0}.card{max-width:100%}.grid>*,.two>*{min-width:0}
 <script>
 /* ================= CORE ================= */
 const PF={facebook:{n:'Facebook',c:'#1877f2',a:'f'},tiktok:{n:'TikTok',c:'#111111',a:'T'},youtube:{n:'YouTube',c:'#ff0000',a:'▶'},instagram:{n:'Instagram',c:'#e1306c',a:'IG'},zalo:{n:'Zalo OA',c:'#0068ff',a:'Z'},telegram:{n:'Telegram',c:'#27a7e7',a:'TG'},x:{n:'X',c:'#000000',a:'X'},linkedin:{n:'LinkedIn',c:'#0a66c2',a:'in'},threads:{n:'Threads',c:'#333333',a:'@'}};
-const MENU=[['TẠO MỚI',[['create','✏️','Bài viết'],['video','🎬','Video ngắn'],['ai','✨','AI tạo nội dung']]],['KHO',[['library','🗂️','Kho tài nguyên']]],['BÀI ĐĂNG',[['posts','📄','Danh sách'],['calendar','📅','Lịch đăng'],['analytics','📊','Phân tích']]],['TƯƠNG TÁC',[['inbox','💬','Hộp thư hợp nhất'],['response','⏱️','Chỉ số phản hồi'],['bot','🤖','Chatbot kịch bản']]],['CẤU HÌNH',[['accounts','🔗','Kênh'],['groups','👥','Nhóm kênh'],['hashtags','#️⃣','Hashtag'],['settings','⚙️','Cài đặt'],['members','🛡️','Thành viên & phân quyền']]],['KHÁC',[['feedback','💬','Góp ý']]]];
+const MENU=[['NỘI DUNG',[['create','✏️','Bài viết'],['video','🎬','Video ngắn'],['ai','✨','AI tạo nội dung']]],['KHO',[['library','🗂️','Kho tài nguyên']]],['ĐĂNG BÀI',[['posts','📄','Danh sách'],['calendar','📅','Lịch đăng'],['analytics','📊','Phân tích']]],['TƯƠNG TÁC',[['inbox','💬','Hộp thư hợp nhất'],['response','⏱️','Chỉ số phản hồi'],['bot','🤖','Chatbot kịch bản']]],['THIẾT LẬP',[['accounts','🔗','Kênh'],['groups','👥','Nhóm kênh'],['hashtags','#️⃣','Hashtag'],['settings','⚙️','Cài đặt'],['members','🛡️','Thành viên & phân quyền']]],['KHÁC',[['feedback','💬','Góp ý']]]];
+const ICONS={create:'<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',video:'<rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 9 5-3v12l-5-3"/>',ai:'<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18"/>',library:'<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/>',posts:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/>',calendar:'<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>',analytics:'<path d="M3 3v18h18M8 17v-5M13 17V7M18 17v-8"/>',inbox:'<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/>',response:'<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/>',bot:'<rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4M8 4h8M9 14h.01M15 14h.01"/>',accounts:'<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/>',groups:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>',hashtags:'<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82 2 2 0 1 1-2.83 2.83 1.65 1.65 0 0 0-2.82 1.17 2 2 0 1 1-4 0A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33 2 2 0 1 1-2.83-2.83A1.65 1.65 0 0 0 4.6 15a2 2 0 1 1 0-4"/>',members:'<path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6Z"/><path d="m9 12 2 2 4-4"/>',feedback:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/>',admin:'<circle cx="12" cy="12" r="10"/><path d="m16 8-6 2-2 6 6-2Z"/>'};
+const GRP_COLOR={'NỘI DUNG':'c-purple','KHO':'c-amber','ĐĂNG BÀI':'c-blue','TƯƠNG TÁC':'c-green','THIẾT LẬP':'c-slate','KHÁC':'c-rose'};
+const svgIcon=p=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p||''}</svg>`;
+function toggleSidebar(){const a=document.querySelector('.app');if(!a)return;a.classList.toggle('sb-collapsed');try{LS.setItem('pdk_sb_collapsed',a.classList.contains('sb-collapsed')?'1':'0')}catch(e){}}
 function managedApp(){return !!document.querySelector('meta[name="shopai-ai-endpoint"]')?.content}
 function addLogoutButton(){const pf=document.querySelector('header .pf');if(!pf||document.getElementById('logout_btn'))return;const b=document.createElement('button');b.type='button';b.className='btn sm';b.id='logout_btn';b.title='Đăng xuất khỏi ShopPost';b.textContent='Đăng xuất';b.onclick=async()=>{b.disabled=true;let next='/';try{const r=await fetch('/auth/logout',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:'{}'});const j=r.ok?await r.json():null;if(j&&j.next==='/cdn-cgi/access/logout')next=j.next}catch{}location.href=next};pf.before(b)}
 const APP_SCOPE=(()=>{const v=document.querySelector('meta[name="shopai-user-scope"]')?.content||'';return /^[a-f0-9]{64}$/.test(v)?v:''})();
@@ -254,8 +308,8 @@ return {score:Math.round(checks.filter(c=>c[0]).length/checks.length*100),checks
 /* ================= ROUTER ================= */
 const V={};let route='create';
 function navRender(){const unread=S.convos.filter(c=>c.unread).length;const NEW=['feedback','groups','video','ai','library','inbox','response','bot'];
-$('#nav').innerHTML=MENU.map(([g,items])=>`<div class="grp">${g}</div>`+items.map(([k,ic,l])=>`<a href="#${k}" class="${route===k?'on':''}"><span>${ic}</span>${l}${k==='inbox'&&unread?`<span class="badge">${unread}</span>`:(NEW.includes(k)?'<span class="badge" style="background:#009588">MỚI</span>':'')}</a>`).join('')).join('');
-$('#mnav').innerHTML=MENU.flatMap(g=>g[1]).map(([k,ic,l])=>`<option value="${k}" ${route===k?'selected':''}>${ic} ${l}</option>`).join('')}
+$('#nav').innerHTML=MENU.map(([g,items])=>`<div class="navcard"><div class="grp">${g}</div>`+items.map(([k,ic,l])=>`<a href="#${k}" class="${route===k?'on':''}${k==='members'?' child':''}" title="${l}"><span class="tile ${GRP_COLOR[g]||'c-slate'}">${svgIcon(ICONS[k])}</span><span class="lbl">${l}</span>${k==='inbox'&&unread?`<span class="badge">${unread}</span>`:(NEW.includes(k)?'<span class="badge">MỚI</span>':'')}</a>`).join('')+`</div>`).join('');
+$('#mnav').innerHTML=MENU.flatMap(g=>g[1]).map(([k,ic,l])=>`<option value="${k}" ${route===k?'selected':''}>${l}</option>`).join('')}
 function render(r){viewGeneration++;if(typeof r==='string')route=r;if(!V[route])route='create';navRender();const it=MENU.flatMap(g=>g[1]).find(m=>m[0]===route);$('#title').textContent=it?it[2]:(route==='qa'?'Kiểm thử tự động':'');V[route]();if(managedApp()&&SHOP.ready)$('#view').insertAdjacentHTML('afterbegin','<div class="card small" role="note">Shop: <b>'+esc(SHOP.name)+'</b> · vai trò <b>'+esc(SHOP.roleLabel)+'</b>.</div>');window.scrollTo(0,0)}
 function go(r){render(r);try{if(location.hash.slice(1)!==r)history.replaceState(null,'','#'+r)}catch(e){}}
 window.onhashchange=()=>{const k=location.hash.slice(1);if(k&&k!==route&&V[k])render(k)};
@@ -336,7 +390,8 @@ function shopUse(s){SHOP.id=s.id;SHOP.name=s.name;SHOP.role=s.role;SHOP.roleLabe
 function shopRefresh(){SHOP.members=[];SHOP.invites=[];SHOP.lastInvite=null;CLOUD.items=[];CLOUD.nextCursor=null;shopMenu();renderShopBox();render(route)}
 function shopMenu(){const cfg=MENU.find(g=>g[0]==='KHÁC');if(!cfg)return;const has=cfg[1].some(m=>m[0]==='admin');if(SHOP.admin&&!has)cfg[1].push(['admin','🧭','Quản trị nền tảng']);if(!SHOP.admin&&has)cfg[1]=cfg[1].filter(m=>m[0]!=='admin');navRender()}
 function renderShopBox(){const box=$('#shop_box'),m=$('#mshop');if(!box)return;if(!managedApp()){box.hidden=true;return}box.hidden=false;const opts=SHOP.shops.map(s=>`<option value="${esc(s.id)}" ${s.id===SHOP.id?'selected':''}>${esc(s.name)}</option>`).join('');
-box.innerHTML=SHOP.ready?`<select id="shop_sel" onchange="shopSwitch(this.value)" title="Shop đang làm việc" aria-label="Shop đang làm việc">${opts}</select><span class="chip" title="Vai trò của bạn trong shop này">${esc(SHOP.roleLabel)}</span><button class="btn sm" onclick="shopCreate()" title="Tạo shop mới" aria-label="Tạo shop mới">＋</button>`:`<span class="small muted">${esc(SHOP.error||'Đang tải shop...')}</span>`;
+const nm=esc(SHOP.name||'Shop'),av=esc(((SHOP.name||'S').trim().charAt(0))||'S'),chCount=(S.channels||[]).filter(c=>c.connected).length,isOwner=SHOP.role==='owner',crown='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 7l4 4 5-6 5 6 4-4v10H3Z"/></svg>';
+box.innerHTML=SHOP.ready?`<div class="profile"><div class="prow"><span class="av">${av}</span><div class="txt"><div class="nm">${nm}</div><div class="sub">${chCount} kênh đang kết nối</div></div></div><span class="ownerbadge${isOwner?'':' alt'}" title="Vai trò của bạn trong shop này">${isOwner?crown:''}${esc(SHOP.roleLabel)}</span><div class="shoprow"><select id="shop_sel" onchange="shopSwitch(this.value)" title="Shop đang làm việc" aria-label="Shop đang làm việc">${opts}</select><button class="mk" onclick="shopCreate()" title="Tạo shop mới" aria-label="Tạo shop mới">＋</button></div></div>`:`<span class="small muted">${esc(SHOP.error||'Đang tải shop...')}</span>`;
 if(m){m.classList.toggle('on',SHOP.ready&&SHOP.shops.length>0);m.innerHTML=opts}}
 function shopSwitch(id){const s=SHOP.shops.find(x=>x.id===id);if(!s||s.id===SHOP.id)return;shopUse(s);shopRefresh();toast('Đang làm việc trong shop “'+s.name+'”')}
 function shopFail(e,fallback){if(e&&e.code==='reauth_required')return reauthModal(e.message);toast((e&&e.message)||fallback||'Thao tác chưa hoàn tất. Vui lòng thử lại.')}
@@ -1010,6 +1065,7 @@ ${groups.map(g=>`<div class="card"><h3>${esc(g)} <span class="tag">${r.filter(x=
 
 /* ================= SCHEDULER & BOOT ================= */
 function tick(){let ch=false;if(!managedApp()||window.QA_RUNNING)S.posts.forEach(p=>{if(p.status==='scheduled'&&p.time<=Date.now()){if(p.channels.map(chById).some(c=>!c||!c.connected)){p.status='failed';p.error='Kênh đã ngắt kết nối'}else publish(p);ch=true}});if(ch){save();toast('Đã xử lý bài đến giờ đăng');if(route==='posts'||route==='calendar')render()}$('#clock').textContent=new Date().toLocaleString('vi-VN',{weekday:'short',hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'})}
+try{if(LS.getItem('pdk_sb_collapsed')==='1')document.querySelector('.app')?.classList.add('sb-collapsed')}catch(e){}
 setInterval(tick,15000);tick();renderProjects();if(managedApp()){addLogoutButton();shopInit().catch(()=>{})}render(location.hash.slice(1)||'create');bootStorage().then(()=>{if(LS._mem&&!IDB.db){const b=document.createElement('div');b.id='storewarn';b.setAttribute('role','alert');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:60;background:#fff7e6;border-top:1px solid #f5c26b;padding:8px 14px;font-size:13px;display:flex;gap:10px;align-items:center;justify-content:space-between';b.innerHTML='<span>⚠️ Trình duyệt đang <b>chặn lưu trữ</b> trong khung nhúng này: dữ liệu và nháp sẽ <b>mất khi tải lại trang</b>. Để lưu lâu dài, tải file <code>shoppost.html</code> về máy rồi mở bằng Chrome (hoặc đưa lên hosting riêng).</span><button class="btn sm" onclick="this.parentNode.remove()">Đã hiểu</button>';document.body.appendChild(b)}});
 </script></body></html>
 

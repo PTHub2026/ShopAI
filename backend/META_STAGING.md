@@ -9,11 +9,12 @@
 - `GET /api/social/meta/callback` xác thực cùng người dùng + shop dựa trên state hash SHA-256, TTL 600 giây và xóa state nguyên tử trước khi đổi code. Sau đó lấy Page tokens, thêm từng Facebook Page và Instagram Professional liên kết Page.
 - Token mã hóa AES-256-GCM tại D1; `GET /api/social/accounts` chỉ trả tên, provider, targetId, status.
 - Đăng text/ảnh Facebook Page; đăng ảnh Instagram qua tạo media container rồi publish.
+- Migration `0014_instagram_container.sql` thêm `publish_jobs.instagram_container_id`. Áp migration trước khi chạy backend mới. Job lưu container trước khi kiểm tra trạng thái. Retry dùng lại container đó. Mất phản hồi sau publish vẫn giữ `unknown` và chặn retry.
 - Dùng chung `POST /api/social/jobs`, lịch sử và idempotency của Telegram. Khi kết quả gửi chưa rõ, không tự gửi lại để tránh đăng trùng.
 
 ## Cấu hình staging Cloudflare
 
-1. Tạo D1 staging riêng; áp migrations 0001–0010 theo tên tệp trong nhánh hợp nhất (0007 được để trống) (chỉ phần chưa có) qua Wrangler với môi trường staging phù hợp. Đảm bảo không dùng D1 production.
+1. Tạo D1 staging riêng; áp migrations 0001–0014 theo tên tệp trong nhánh hợp nhất (0007 được để trống) (chỉ phần chưa có) qua Wrangler với môi trường staging phù hợp. Đảm bảo không dùng D1 production.
 2. `wrangler secret put SOCIAL_TOKEN_KEY`: base64 của 32 byte ngẫu nhiên (không commit, không đưa secret vào URL/log). Cần khóa ổn định qua các lần deploy.
 3. Dùng `FACEBOOK_APP_ID` và `FACEBOOK_APP_SECRET` **nếu Meta App hiện có được quyền Pages + Instagram**; nếu không, cấu hình `META_APP_ID` và `META_APP_SECRET` tách riêng. Secret chỉ đặt trong Cloudflare Secrets.
 4. Cấu hình `META_REDIRECT_URI=https://<staging-host>/api/social/meta/callback`. Thêm URI này *chính xác* vào Valid OAuth Redirect URIs trong Meta App Dashboard. Có thể dùng `META_GRAPH_VERSION=v26.0` để pin version sau khi kiểm chứng.

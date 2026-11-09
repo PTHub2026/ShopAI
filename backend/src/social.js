@@ -1,4 +1,4 @@
-import {resolveShop,audit} from './shops.js';
+import {resolveShop,audit,writeLimit} from './shops.js';
 import {handleMeta,publishMeta,metaDenied,metaConfigured} from './meta.js';
 const now=()=>Math.floor(Date.now()/1000);
 export const SOCIAL_SCHEMA=["CREATE TABLE IF NOT EXISTS social_accounts (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, provider TEXT NOT NULL CHECK(provider IN ('telegram','facebook','instagram')), display_name TEXT NOT NULL, target_id TEXT NOT NULL, token_ciphertext TEXT NOT NULL, token_iv TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked','error')), connected_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(shop_id,provider,target_id));","CREATE INDEX IF NOT EXISTS social_accounts_shop ON social_accounts(shop_id,status);","CREATE TABLE IF NOT EXISTS publish_jobs (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, account_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('text','photo')), payload TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','sending','sent','retryable','unknown','failed')), attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0, remote_message_id TEXT, error_code TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(shop_id,idempotency_key));","CREATE INDEX IF NOT EXISTS publish_jobs_shop ON publish_jobs(shop_id,created_at DESC);"];
@@ -21,6 +21,11 @@ const jobView=j=>({id:j.id,accountId:j.account_id,status:j.status,kind:j.kind,at
 const fail=(json,status,code)=>json({error:code,code},status);
 export async function handleSocial(req,env,who,json){
  if(!env.DB)return fail(json,503,'db_missing');
+ if(req.method!=='GET'&&req.method!=='HEAD'){
+  if(req.headers.get('Origin')!==new URL(req.url).origin)return fail(json,403,'forbidden');
+  const limited=await writeLimit(env,who.owner);
+  if(limited)return json({error:limited.error},limited.status,limited.status===429?{'Retry-After':'60'}:{});
+ }
  try{decodeKey(env);}catch{return fail(json,503,'social_key_missing');}
  const [,,,section,resource,action]=new URL(req.url).pathname.split('/');
  if(section==='providers'&&!resource&&req.method==='GET'){
@@ -68,17 +73,17 @@ export async function handleSocial(req,env,who,json){
   await db.prepare("INSERT OR IGNORE INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,'pending',?,?,?)").bind('pj_'+crypto.randomUUID(),shop,a.id,idem,data.kind,payload,who.owner,t,t).run();
   const j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND idempotency_key=?').bind(shop,idem).first();
   if(j.account_id!==a.id||j.kind!==data.kind||j.payload!==payload)return fail(json,409,'idempotency_conflict');
-  return deliver(j,db,env,shop,json);
+  return deliver(j,db,env,shop,json,who.owner);
  }
  if(section==='jobs'&&resource&&action==='retry'&&req.method==='POST'){
   if(!ctx.can('channels.operate')&&!ctx.can('drafts.publish'))return fail(json,403,'forbidden');
   if(ctx.shop.status!=='active')return fail(json,403,'shop_suspended');
   const j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND id=?').bind(shop,resource).first();
-  if(!j)return fail(json,404,'not_found');return deliver(j,db,env,shop,json);
+  if(!j)return fail(json,404,'not_found');return deliver(j,db,env,shop,json,who.owner);
  }
  return fail(json,404,'not_found');
 }
-async function deliver(j,db,env,shop,json){
+async function deliver(j,db,env,shop,json,actor){
  if(j.status==='retryable'&&j.next_attempt_at>now())return json({job:jobView(j),retryAfter:j.next_attempt_at-now()},429);
  if(!['pending','retryable'].includes(j.status))return json({job:jobView(j)},j.status==='sent'?200:409);
  const c=await db.prepare("UPDATE publish_jobs SET status='sending',attempts=attempts+1,updated_at=? WHERE shop_id=? AND id=? AND status IN ('pending','retryable') AND next_attempt_at<=?").bind(now(),shop,j.id,now()).run();
@@ -95,6 +100,6 @@ async function deliver(j,db,env,shop,json){
   status='sent';error=null;
  }catch(e){const retryAt=now()+Math.ceil(e.retryAfter);if(e.status===429&&Number.isFinite(e.retryAfter)&&e.retryAfter>0&&Number.isSafeInteger(retryAt)){status='retryable';error='rate_limited';nextAttempt=retryAt; }else if(e.status===401||e.status===403||metaDenied(e)){status='failed';error='provider_denied';await db.prepare("UPDATE social_accounts SET status='error' WHERE id=? AND shop_id=?").bind(a.id,shop).run();}}
  await db.prepare('UPDATE publish_jobs SET status=?,remote_message_id=?,error_code=?,updated_at=?,next_attempt_at=? WHERE id=? AND shop_id=?').bind(status,remote,error,now(),nextAttempt,j.id,shop).run();
- await audit(db,{shopId:shop,actor:j.created_by,action:'social.publish',target:j.id,detail:{status,error}});
+ await audit(db,{shopId:shop,actor,action:'social.publish',target:j.id,detail:{status,error}});
  return json({job:{...jobView(j),status,attempts:j.attempts+1,remoteMessageId:remote,errorCode:error}},status==='sent'?200:status==='retryable'?429:502);
 }

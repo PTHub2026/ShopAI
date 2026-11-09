@@ -13,7 +13,7 @@ function fixture(){
  for(const file of ['0001_drafts.sql','0002_auth.sql'])sqlite.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'));
  const prepare=(sql,p=[])=>({bind:(...args)=>prepare(sql,args),async first(){return sqlite.prepare(sql).get(...p)||null;},async all(){return {results:sqlite.prepare(sql).all(...p)};},async run(){return {meta:{changes:Number(sqlite.prepare(sql).run(...p).changes)}};},exec(){return {meta:{changes:Number(sqlite.prepare(sql).run(...p).changes)}};}});
  const db={sqlite,prepare:sql=>prepare(sql),async batch(stmts){sqlite.exec('BEGIN');try{const out=stmts.map(s=>s.exec());sqlite.exec('COMMIT');return out;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
- const env={DB:db,ACCESS_TEAM_DOMAIN:'test-team.cloudflareaccess.com',ACCESS_AUD:'test',AI:{},AI_RATE_LIMITER:{},SOCIAL_TOKEN_KEY:Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64')};
+ const env={DB:db,ACCESS_TEAM_DOMAIN:'test-team.cloudflareaccess.com',ACCESS_AUD:'test',AI:{},AI_RATE_LIMITER:{limit:async()=>({success:true})},SOCIAL_TOKEN_KEY:Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64')};
  function login(owner){
   const token=Buffer.from(owner+':'+crypto.randomUUID()).toString('base64url').slice(0,43).padEnd(43,'A');
   db.sqlite.prepare('INSERT OR IGNORE INTO auth_identities(owner,provider,created_at,last_login_at) VALUES(?,?,?,?)').run(owner,'email',now(),now());
@@ -105,4 +105,35 @@ test('Telegram malformed success remains unknown and cannot be retried',async()=
   assert.equal((await f.request(owner,'/api/social/jobs/'+result.data.job.id+'/retry',{method:'POST'})).status,409);
   assert.equal(calls,1);
  });}finally{f.db.sqlite.close();}
+});
+
+test('Retry audit records the current manager and preserves the job creator',async()=>{
+ const f=fixture(),owner=f.login('email:creator@example.com'),manager=f.login('email:manager@example.com');
+ try{await fakeTelegram(()=>Response.json({ok:true,result:{message_id:71}}),async()=>{
+  await connect(f.request,owner);
+  const shop=(await f.request(owner,'/session')).data.shop.id;
+  f.db.sqlite.prepare('INSERT INTO shop_members(shop_id,user_id,role,can_publish,created_at) VALUES(?,?,?,?,?)').run(shop,'email:manager@example.com','manager',1,now());
+  const account=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
+  const result=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'audit-current-actor-123',body:{accountId:account.id,kind:'text',text:'Audit'}});
+  const id=result.data.job.id;
+  f.db.sqlite.prepare("UPDATE publish_jobs SET status='retryable',next_attempt_at=0 WHERE id=?").run(id);
+  assert.equal((await f.request(manager,'/api/social/jobs/'+id+'/retry',{method:'POST',shop})).status,200);
+  assert.deepEqual(f.db.sqlite.prepare("SELECT actor FROM audit_log WHERE action='social.publish' AND target=? ORDER BY id").all(id).map(r=>r.actor),['email:creator@example.com','email:manager@example.com']);
+  assert.equal(f.db.sqlite.prepare('SELECT created_by FROM publish_jobs WHERE id=?').get(id).created_by,'email:creator@example.com');
+ });}finally{f.db.sqlite.close();}
+});
+test('Social writes share the API limiter and stop before provider calls or state changes',async()=>{
+ const f=fixture(),owner=f.login('email:limited@example.com');
+ try{
+  await f.request(owner,'/session');
+  f.env.AI_RATE_LIMITER={limit:async()=>({success:false})};
+  for(const path of ['/api/social/accounts','/api/social/jobs','/api/social/meta/start']){
+   const r=await f.request(owner,path,{method:'POST',body:{token:botToken,chatId:'@testchannel'}});
+   assert.equal(r.status,429,path);
+  }
+  assert.equal((await f.request(owner,'/api/social/accounts')).status,200);
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) AS n FROM social_accounts').get().n,0);
+  f.env.AI_RATE_LIMITER={limit:async()=>{throw Error('unavailable');}};
+  assert.equal((await f.request(owner,'/api/social/accounts',{method:'DELETE'})).status,503);
+ }finally{f.db.sqlite.close();}
 });

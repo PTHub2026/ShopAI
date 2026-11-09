@@ -1,4 +1,4 @@
-// Đăng nhập bằng phiên riêng của ShopPost (Zalo, Facebook, TikTok, số điện thoại OTP, email OTP), chạy song song với Cloudflare Access.
+// Đăng nhập bằng phiên riêng của ShopPost (TikTok, số điện thoại OTP, email OTP, email + mật khẩu), chạy song song với Cloudflare Access.
 // Tên cookie/bảng giữ tiền tố "shopai" vì là định danh kỹ thuật: đổi sẽ làm mất phiên và dữ liệu đang có.
 const enc = new TextEncoder();
 export const SESSION_COOKIE = '__Host-shopai_session';
@@ -10,10 +10,6 @@ const OTP_TTL = 600, OTP_MAX_ATTEMPTS = 5, OTP_RESEND_AFTER = 60, OTP_MAX_PER_HO
 const PBKDF2_ITERS = 100000, PASSWORD_MIN = 8, PASSWORD_MAX = 200;
 // Mã xác minh đăng ký và mã đặt lại mật khẩu dùng chung bảng auth_otp_codes nhưng khác "khóa" (prefix) để không đè mã đăng nhập.
 const PWREG_PREFIX = 'pwreg:', PWRESET_PREFIX = 'pwreset:';
-const FB_API = 'https://graph.facebook.com/v21.0';
-const ZALO_AUTHORIZE = 'https://oauth.zaloapp.com/v4/permission';
-const ZALO_TOKEN = 'https://oauth.zaloapp.com/v4/access_token';
-const ZALO_PROFILE = 'https://graph.zalo.me/v2.0/me?fields=id,name,picture';
 const RESEND_API = 'https://api.resend.com/emails';
 const TIKTOK_AUTHORIZE = 'https://www.tiktok.com/v2/auth/authorize/';
 const TIKTOK_TOKEN = 'https://open.tiktokapis.com/v2/oauth/token/';
@@ -34,7 +30,7 @@ export const AUTH_SCHEMA = [
   'CREATE TABLE IF NOT EXISTS auth_oauth_states (state TEXT PRIMARY KEY, provider TEXT NOT NULL, verifier TEXT NOT NULL, expires_at INTEGER NOT NULL)'
 ];
 // Mật khẩu (PBKDF2) tách riêng thành migration 0004 để không phá kiểm thử so khớp AUTH_SCHEMA ↔ 0002_auth.sql.
-// Khóa theo owner (định danh phiên: email:<email>, fb:<id>, …); cột email duy nhất để đăng nhập/đặt lại bằng email.
+// Khóa theo owner (định danh phiên: email:<email>, tiktok:<id>, …); cột email duy nhất để đăng nhập/đặt lại bằng email.
 // Giữ đồng bộ với backend/migrations/0004_passwords.sql (kiểm thử so khớp hai nơi).
 export const PASSWORD_SCHEMA = [
   'CREATE TABLE IF NOT EXISTS auth_passwords (owner TEXT PRIMARY KEY, email TEXT NOT NULL, provider TEXT NOT NULL, display_name TEXT, password_hash TEXT NOT NULL, updated_at INTEGER NOT NULL)',
@@ -250,23 +246,18 @@ const dummyHash = () => (dummyHashPromise ||= hashPassword(randomToken(24)));
 
 export function providers(env) {
   const db = Boolean(env.DB);
-  const facebookId = clean(env.FACEBOOK_APP_ID), zaloId = clean(env.ZALO_APP_ID);
   const team = clean(env.ACCESS_TEAM_DOMAIN);
-  const facebook = db && /^\d{5,20}$/.test(facebookId);
-  const zalo = db && /^\d{5,25}$/.test(zaloId) && Boolean(clean(env.ZALO_APP_SECRET));
   const email = db && emailConfigured(env);
   const tiktok = db && /^[A-Za-z0-9_-]{4,64}$/.test(clean(env.TIKTOK_CLIENT_KEY)) && Boolean(clean(env.TIKTOK_CLIENT_SECRET));
   const phone = db && Boolean(smsProvider(env));
   return {
-    facebook: facebook ? { enabled: true, appId: facebookId } : { enabled: false },
-    zalo: { enabled: zalo },
     tiktok: { enabled: tiktok },
     phone: { enabled: phone },
     email: { enabled: email },
     // Đăng nhập/đăng ký bằng mật khẩu cần DB và email (để xác minh đăng ký và gửi mã đặt lại).
     password: { enabled: email },
     access: /^[a-z0-9-]+\.cloudflareaccess\.com$/i.test(team) ? { url: 'https://' + team } : null,
-    ready: facebook || zalo || tiktok || phone || email
+    ready: tiktok || phone || email
   };
 }
 
@@ -312,8 +303,7 @@ export function loginResponse(env, method) {
     'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'strict-origin-when-cross-origin',
     'Strict-Transport-Security': 'max-age=15552000; includeSubDomains', 'X-Frame-Options': 'DENY',
     'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
-    // Chỉ trang đăng nhập được nạp Facebook SDK; CSP của trang ứng dụng chính không thay đổi.
-    'Content-Security-Policy': `default-src 'self'; script-src 'self' 'nonce-${nonce}' https://connect.facebook.net; connect-src 'self' https://graph.facebook.com https://*.facebook.com; frame-src https://*.facebook.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'`
+    'Content-Security-Policy': `default-src 'self'; script-src 'self' 'nonce-${nonce}'; connect-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'`
   } });
 }
 
@@ -432,8 +422,8 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
     return new Response(null, { status: 302, headers: h });
   };
   const routes = {
-    '/auth/providers': 'GET', '/auth/zalo/start': 'GET', '/auth/zalo/callback': 'GET', '/auth/tiktok/start': 'GET', '/auth/tiktok/callback': 'GET',
-    '/auth/facebook': 'POST', '/auth/phone/start': 'POST', '/auth/phone/verify': 'POST', '/auth/email/start': 'POST', '/auth/email/verify': 'POST', '/auth/logout': 'POST',
+    '/auth/providers': 'GET', '/auth/tiktok/start': 'GET', '/auth/tiktok/callback': 'GET',
+    '/auth/phone/start': 'POST', '/auth/phone/verify': 'POST', '/auth/email/start': 'POST', '/auth/email/verify': 'POST', '/auth/logout': 'POST',
     '/auth/register/start': 'POST', '/auth/register/verify': 'POST', '/auth/password/login': 'POST', '/auth/password/forgot': 'POST', '/auth/password/reset': 'POST', '/auth/password/set': 'POST'
   };
   if (!routes[path]) return json({ error: 'Không tìm thấy endpoint.' }, 404);
@@ -462,22 +452,6 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
     } catch { return json({ error: 'Dịch vụ giới hạn tần suất tạm thời không khả dụng.' }, 503); }
     let body;
     try { body = await readJson(request); } catch { return json({ error: 'Dữ liệu gửi lên không hợp lệ.' }, 400); }
-
-    if (path === '/auth/facebook') {
-      if (!available.facebook.enabled) return json({ error: 'Đăng nhập Facebook chưa được kích hoạt.' }, 503);
-      const token = body.accessToken;
-      if (typeof token !== 'string' || token.length < 20 || token.length > 4096 || !/^[A-Za-z0-9._|%-]+$/.test(token)) return json({ error: 'Mã truy cập Facebook không hợp lệ.' }, 400);
-      try {
-        const app = await fetchJson(FB_API + '/app?access_token=' + encodeURIComponent(token));
-        if (!app.ok || !app.data || String(app.data.id) !== available.facebook.appId) return json({ error: 'Phiên Facebook không thuộc ứng dụng ShopPost. Vui lòng đăng nhập lại.' }, 401);
-        const me = await fetchJson(FB_API + '/me?fields=id,name&access_token=' + encodeURIComponent(token));
-        const id = me.data && String(me.data.id);
-        if (!me.ok || !/^\d{1,32}$/.test(id || '')) return json({ error: 'Không đọc được hồ sơ Facebook.' }, 401);
-        const name = displayName(me.data.name);
-        const cookie = await createSession(env, 'fb:' + id, 'facebook', name);
-        return respond({ ok: true, provider: 'facebook', name }, 200, [cookie]);
-      } catch { return json({ error: 'Không kết nối được Facebook lúc này. Vui lòng thử lại.' }, 502); }
-    }
 
     // ===== Đăng nhập / đăng ký bằng email + mật khẩu (PBKDF2) =====
     const PW_PATHS = ['/auth/register/start', '/auth/register/verify', '/auth/password/login', '/auth/password/forgot', '/auth/password/reset', '/auth/password/set'];
@@ -672,8 +646,8 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
     } catch { return json({ error: 'Không thể xác minh mã lúc này.' }, 503); }
   }
 
-  // OAuth điều hướng toàn trang, không cần Origin: Zalo OAuth v4 + PKCE và TikTok Login Kit + PKCE.
-  const provider = path.split('/')[2]; // 'zalo' | 'tiktok'
+  // OAuth điều hướng toàn trang, không cần Origin: TikTok Login Kit + PKCE.
+  const provider = path.split('/')[2]; // 'tiktok'
   const callbackUrl = url.origin + '/auth/' + provider + '/callback';
   if (path.endsWith('/start')) {
     if (!available[provider].enabled) return redirect(`/?loi=${provider}_chua_cau_hinh`);
@@ -684,35 +658,23 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
         env.DB.prepare('DELETE FROM auth_oauth_states WHERE expires_at <= ?').bind(t),
         env.DB.prepare('INSERT INTO auth_oauth_states (state, provider, verifier, expires_at) VALUES (?, ?, ?, ?)').bind(state, provider, verifier, t + STATE_TTL)
       ]);
-      const target = provider === 'zalo'
-        ? ZALO_AUTHORIZE + '?' + new URLSearchParams({ app_id: clean(env.ZALO_APP_ID), redirect_uri: callbackUrl, code_challenge: await pkceChallenge(verifier), state })
-        : TIKTOK_AUTHORIZE + '?' + new URLSearchParams({ client_key: clean(env.TIKTOK_CLIENT_KEY), scope: 'user.info.basic', response_type: 'code', redirect_uri: callbackUrl, state, code_challenge: await tiktokChallenge(verifier), code_challenge_method: 'S256' });
+      const target = TIKTOK_AUTHORIZE + '?' + new URLSearchParams({ client_key: clean(env.TIKTOK_CLIENT_KEY), scope: 'user.info.basic', response_type: 'code', redirect_uri: callbackUrl, state, code_challenge: await tiktokChallenge(verifier), code_challenge_method: 'S256' });
       return redirect(target, [setCookie(STATE_COOKIE, state, STATE_TTL)]);
     } catch { return redirect(`/?loi=${provider}_tam_loi`); }
   }
-  // /auth/zalo/callback hoặc /auth/tiktok/callback
+  // /auth/tiktok/callback
   const clearState = setCookie(STATE_COOKIE, '', 0);
   const fail = code => redirect(`/?loi=${provider}_${code}`, [clearState]);
   if (!available[provider].enabled) return fail('chua_cau_hinh');
   const state = url.searchParams.get('state') || '';
-  const code = url.searchParams.get('code') || (provider === 'zalo' ? url.searchParams.get('oauth_code') : '') || '';
+  const code = url.searchParams.get('code') || '';
   if (!/^[A-Za-z0-9_-]{16,64}$/.test(state) || !sameText(readCookie(request, STATE_COOKIE) || '', state)) return fail('state');
   try {
     await ensureSchema(env.DB);
     const row = await env.DB.prepare('SELECT verifier, expires_at FROM auth_oauth_states WHERE state = ? AND provider = ?').bind(state, provider).first();
     const consumed = row ? await env.DB.prepare('DELETE FROM auth_oauth_states WHERE state = ?').bind(state).run() : null;
     if (!row || !consumed?.meta?.changes || Number(row.expires_at) <= now()) return fail('het_han');
-    if (!code || code.length > 2048 || (provider === 'tiktok' && url.searchParams.has('error'))) return fail('tu_choi');
-    if (provider === 'zalo') {
-      const token = await fetchJson(ZALO_TOKEN, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', secret_key: clean(env.ZALO_APP_SECRET) }, body: new URLSearchParams({ app_id: clean(env.ZALO_APP_ID), code, code_verifier: row.verifier, grant_type: 'authorization_code' }).toString() });
-      const accessToken = token.data && token.data.access_token;
-      if (!token.ok || typeof accessToken !== 'string' || !accessToken) return fail('token');
-      const profile = await fetchJson(ZALO_PROFILE, { headers: { access_token: accessToken } });
-      const id = profile.data && String(profile.data.id);
-      if (!profile.ok || !profile.data || (profile.data.error && Number(profile.data.error) !== 0) || !/^\d{1,32}$/.test(id || '')) return fail('ho_so');
-      const cookie = await createSession(env, 'zalo:' + id, 'zalo', displayName(profile.data.name));
-      return redirect('/', [cookie, clearState]);
-    }
+    if (!code || code.length > 2048 || url.searchParams.has('error')) return fail('tu_choi');
     // TikTok: đổi code lấy access token (kèm code_verifier), rồi đọc open_id/display_name.
     const token = await fetchJson(TIKTOK_TOKEN, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_key: clean(env.TIKTOK_CLIENT_KEY), client_secret: clean(env.TIKTOK_CLIENT_SECRET), code, grant_type: 'authorization_code', redirect_uri: callbackUrl, code_verifier: row.verifier }).toString() });
     const accessToken = token.data && token.data.access_token;

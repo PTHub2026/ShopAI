@@ -7,7 +7,7 @@ const worker = (await import(new URL('../src/worker.js', import.meta.url))).defa
 const { AUTH_SCHEMA, PASSWORD_SCHEMA, SESSION_COOKIE, hashPassword, verifyPassword, passwordError, normalizeEmail, normalizePhone, parseEmailFrom, pkceChallenge, pkceVerifier, sameText, sendEmail, tiktokChallenge } = await import(new URL('../src/auth.js', import.meta.url));
 
 const BASE = 'https://shoppost.example';
-const FB_ID = '123456789012', ZALO_ID = '1234567890123456789', ZALO_SECRET = 'zalo-secret-khong-duoc-lo', RESEND_KEY = 're_khoa_bi_mat_thu_nghiem';
+const RESEND_KEY = 're_khoa_bi_mat_thu_nghiem';
 const issuer = 'https://test-team.cloudflareaccess.com';
 const sha = text => createHash('sha256').update(text).digest('hex');
 const now = () => Math.floor(Date.now() / 1000);
@@ -36,7 +36,7 @@ function env(overrides = {}) {
   return {
     ACCESS_TEAM_DOMAIN: 'test-team.cloudflareaccess.com', ACCESS_AUD: 'test-audience', ALLOWED_ORIGINS: 'https://pthub2026.github.io',
     AI: { run: async () => ({ response: 'Nội dung AI' }) }, AI_RATE_LIMITER: { limit: async () => ({ success: true }) }, DB: database(),
-    FACEBOOK_APP_ID: FB_ID, ZALO_APP_ID: ZALO_ID, ZALO_APP_SECRET: ZALO_SECRET, RESEND_API_KEY: RESEND_KEY, EMAIL_FROM: 'ShopPost <no-reply@shoppost.net>',
+    RESEND_API_KEY: RESEND_KEY, EMAIL_FROM: 'ShopPost <no-reply@shoppost.net>',
     EMAIL_LOGIN_DOMAINS: 'pthub.vn,shoptrack.vn,shoppost.net,example.com,b.vn,vidu.vn,y.vn',
     FRONTEND_HTML: '<html><head></head><body>Ứng dụng ShopPost</body></html>', LOGIN_HTML, ...overrides
   };
@@ -68,12 +68,35 @@ async function withFetch(handler, callback) {
   };
   try { return await callback(calls); } finally { globalThis.fetch = realFetch; }
 }
-const facebook = (appId = FB_ID, me = { id: '10001', name: 'Nguyễn <b>Văn</b> A' }) => async url => {
-  if (url.startsWith('https://graph.facebook.com/v21.0/app?access_token=')) return Response.json({ id: appId, name: 'ShopPost' });
-  if (url.startsWith('https://graph.facebook.com/v21.0/me?fields=id,name&access_token=')) return Response.json(me);
-  throw new Error('URL Facebook lạ: ' + url);
-};
-const FB_TOKEN = 'EAAB' + 'x'.repeat(60);
+// Tạo phiên đăng nhập bằng email OTP để kiểm thử các hành vi chung (ưu tiên Access, hết hạn, đặt mật khẩu).
+// Chỉ chặn tạm lời gọi Resend rồi ủy quyền phần còn lại cho fetch hiện hành (ghép được với withFetch bên ngoài).
+async function loginEmail(e, email = 'nguoidung@vidu.vn') {
+  let code = null;
+  const prev = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === 'https://api.resend.com/emails') { code = JSON.parse(init.body).text.match(/\b(\d{6})\b/)[1]; return Response.json({ id: 'ok' }); }
+    return prev(input, init);
+  };
+  try {
+    await post(e, '/auth/email/start', { email });
+    return await post(e, '/auth/email/verify', { email, code });
+  } finally { globalThis.fetch = prev; }
+}
+// Tạo phiên đăng nhập TikTok (nhà cung cấp "social" duy nhất còn lại) qua đúng luồng OAuth callback.
+async function loginTikTok(e, open_id = 'tt-social-1', display_name = 'Người TikTok') {
+  const start = await get(e, '/auth/tiktok/start');
+  const state = new URL(start.headers.get('Location')).searchParams.get('state');
+  const prev = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.startsWith('https://open.tiktokapis.com/v2/oauth/token/')) return Response.json({ access_token: 'act.x', open_id });
+    if (url.startsWith('https://open.tiktokapis.com/v2/user/info/')) return Response.json({ data: { user: { open_id, display_name } }, error: { code: 'ok' } });
+    return prev(input, init);
+  };
+  try { return await get(e, `/auth/tiktok/callback?code=ma-tt&state=${state}`, { Cookie: `__Host-shopai_oauth=${state}` }); }
+  finally { globalThis.fetch = prev; }
+}
 
 test('Hàm tiện ích: PKCE theo RFC 7636, so sánh hằng thời gian, chuẩn hóa email', async () => {
   assert.equal(await pkceChallenge('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'), 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
@@ -95,19 +118,16 @@ test('Migration 0002_auth.sql khớp đúng schema runtime', () => {
 });
 
 test('/auth/providers phản ánh đúng cấu hình và không lộ secret', async () => {
-  const off = await (await get(env({ FACEBOOK_APP_ID: undefined, ZALO_APP_SECRET: undefined, RESEND_API_KEY: undefined, EMAIL_FROM: undefined }), '/auth/providers')).json();
-  assert.deepEqual(off, { facebook: { enabled: false }, zalo: { enabled: false }, tiktok: { enabled: false }, phone: { enabled: false }, email: { enabled: false }, password: { enabled: false }, access: { url: issuer }, ready: false });
+  const off = await (await get(env({ RESEND_API_KEY: undefined, EMAIL_FROM: undefined }), '/auth/providers')).json();
+  assert.deepEqual(off, { tiktok: { enabled: false }, phone: { enabled: false }, email: { enabled: false }, password: { enabled: false }, access: { url: issuer }, ready: false });
   const response = await get(env(), '/auth/providers');
   assert.equal(response.status, 200); assert.equal(response.headers.get('Cache-Control'), 'no-store');
   const text = await response.text();
-  assert.deepEqual(JSON.parse(text), { facebook: { enabled: true, appId: FB_ID }, zalo: { enabled: true }, tiktok: { enabled: false }, phone: { enabled: false }, email: { enabled: true }, password: { enabled: true }, access: { url: issuer }, ready: true });
-  for (const secret of [ZALO_SECRET, RESEND_KEY]) assert.equal(text.includes(secret), false);
-  // App ID không phải dãy số (ví dụ dán nhầm App Secret 32 ký tự hex) thì không bật Facebook.
-  assert.equal((await (await get(env({ FACEBOOK_APP_ID: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' }), '/auth/providers')).json()).facebook.enabled, false);
-  assert.equal((await (await get(env({ ZALO_APP_SECRET: ' ' }), '/auth/providers')).json()).zalo.enabled, false);
+  assert.deepEqual(JSON.parse(text), { tiktok: { enabled: false }, phone: { enabled: false }, email: { enabled: true }, password: { enabled: true }, access: { url: issuer }, ready: true });
+  assert.equal(text.includes(RESEND_KEY), false);
   assert.equal((await (await get(env({ EMAIL_FROM: 'sai\r\nBcc: x@y.vn' }), '/auth/providers')).json()).email.enabled, false);
   const noDb = await (await get(env({ DB: undefined }), '/auth/providers')).json();
-  assert.equal(noDb.ready, false); assert.equal(noDb.facebook.enabled || noDb.zalo.enabled || noDb.email.enabled, false);
+  assert.equal(noDb.ready, false); assert.equal(noDb.tiktok.enabled || noDb.phone.enabled || noDb.email.enabled, false);
   assert.equal((await post(env(), '/auth/providers')).status, 405);
   assert.equal((await get(env(), '/auth/khong-co')).status, 404);
 });
@@ -120,7 +140,7 @@ test('Chưa đăng nhập: / trả trang đăng nhập với CSP nonce riêng, k
     const html = await response.text(), csp = response.headers.get('Content-Security-Policy');
     assert.match(html, /Đăng nhập ShopPost/); assert.doesNotMatch(html, /shopai-user-scope|Ứng dụng ShopPost|__CSP_NONCE__/);
     const nonce = html.match(/nonce="([A-Za-z0-9_-]{22})"/)[1];
-    assert.ok(csp.includes(`'nonce-${nonce}'`)); assert.ok(csp.includes('https://connect.facebook.net')); assert.ok(csp.includes("frame-ancestors 'none'"));
+    assert.ok(csp.includes(`'nonce-${nonce}'`)); assert.ok(!csp.includes('facebook')); assert.ok(csp.includes("frame-ancestors 'none'"));
     assert.equal(response.headers.get('Cache-Control'), 'no-store'); assert.equal(response.headers.get('X-Frame-Options'), 'DENY');
   }
   const head = await get(e, '/index.html', {}, 'HEAD');
@@ -130,73 +150,25 @@ test('Chưa đăng nhập: / trả trang đăng nhập với CSP nonce riêng, k
   assert.equal((await post(e, '/ai', { task: 'improve', text: 'x' })).status, 401);
 });
 
-test('Access JWT vẫn hoạt động như cũ (owner = sub) và được ưu tiên hơn phiên', async () => withFetch(facebook(), async () => {
+test('Access JWT vẫn hoạt động như cũ (owner = sub) và được ưu tiên hơn phiên', async () => withFetch(null, async () => {
   const e = env();
   const app = await get(e, '/', { 'Cf-Access-Jwt-Assertion': JWT });
   assert.equal(app.status, 200);
   assert.match(await app.text(), new RegExp(`name="shopai-user-scope" content="${sha('user-a')}"`));
   const session = await (await get(e, '/session', { 'Cf-Access-Jwt-Assertion': JWT })).json();
   assert.equal(session.userScope, sha('user-a')); assert.equal(session.auth, 'access'); assert.equal(session.account, null);
-  const login = await post(e, '/auth/facebook', { accessToken: FB_TOKEN });
+  const login = await loginEmail(e);
   const both = await (await get(e, '/session', { 'Cf-Access-Jwt-Assertion': JWT, ...withSession(sessionToken(login)) })).json();
   assert.equal(both.userScope, sha('user-a'));
   const logout = await post(e, '/auth/logout', {}, { 'Cf-Access-Jwt-Assertion': JWT });
   assert.deepEqual(await logout.json(), { ok: true, next: '/cdn-cgi/access/logout' });
 }));
 
-test('Facebook: đúng app id tạo phiên an toàn; phiên dùng được cho giao diện, /session và bản nháp', async () => withFetch(facebook(), async calls => {
-  const e = env();
-  const response = await post(e, '/auth/facebook', { accessToken: FB_TOKEN });
-  assert.equal(response.status, 200);
-  const body = await response.json();
-  assert.equal(body.ok, true); assert.equal(body.provider, 'facebook'); assert.equal(body.name, 'Nguyễn bVăn/b A');
-  const cookie = cookieNamed(response, SESSION_COOKIE);
-  for (const part of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/', 'Max-Age=2592000']) assert.ok(cookie.includes(part), part);
-  const token = sessionToken(response);
-  assert.match(token, /^[A-Za-z0-9_-]{43}$/);
-  const saved = row(e.DB, 'SELECT * FROM auth_sessions');
-  assert.equal(saved.token_hash, sha(token)); assert.equal(saved.owner, 'fb:10001'); assert.equal(saved.provider, 'facebook');
-  assert.ok(Math.abs(saved.expires_at - (now() + 2592000)) < 5);
-  assert.equal(JSON.stringify(rows(e.DB, 'SELECT * FROM auth_sessions')).includes(token), false);
-  assert.equal(row(e.DB, 'SELECT owner FROM auth_identities').owner, 'fb:10001');
-  assert.equal(calls.length, 2); assert.ok(calls[0].url.endsWith(encodeURIComponent(FB_TOKEN)));
-  const session = await (await get(e, '/session', withSession(token))).json();
-  assert.equal(session.auth, 'session'); assert.equal(session.userScope, sha('fb:10001'));
-  assert.deepEqual(session.account, { provider: 'facebook', name: 'Nguyễn bVăn/b A' });
-  const app = await get(e, '/', withSession(token));
-  assert.match(await app.text(), new RegExp(`content="${sha('fb:10001')}"`));
-  const draftsList = await get(e, '/storage/drafts', withSession(token));
-  assert.equal(draftsList.status, 200); assert.deepEqual((await draftsList.json()).drafts, []);
-}));
-
-test('Facebook: sai app id, lỗi Graph, token sai định dạng, thiếu cấu hình hoặc lỗi mạng đều bị từ chối', async () => {
-  for (const handler of [facebook('999999999'), async () => Response.json({ error: { message: 'Invalid OAuth access token' } }, { status: 400 })]) {
-    await withFetch(handler, async () => {
-      const e = env();
-      const response = await post(e, '/auth/facebook', { accessToken: FB_TOKEN });
-      assert.equal(response.status, 401); assert.equal(cookieNamed(response, SESSION_COOKIE), null);
-      assert.equal(rows(e.DB, "SELECT name FROM sqlite_master WHERE name = 'auth_sessions'").length ? rows(e.DB, 'SELECT * FROM auth_sessions').length : 0, 0);
-    });
-  }
-  await withFetch(facebook(FB_ID, { id: 'khong-phai-so', name: 'X' }), async () => assert.equal((await post(env(), '/auth/facebook', { accessToken: FB_TOKEN })).status, 401));
-  await withFetch(async () => { throw new Error('mạng lỗi chi tiết nội bộ'); }, async () => {
-    const response = await post(env(), '/auth/facebook', { accessToken: FB_TOKEN });
-    assert.equal(response.status, 502); assert.equal((await response.text()).includes('chi tiết nội bộ'), false);
-  });
-  await withFetch(null, async calls => {
-    for (const accessToken of [undefined, 'ngan', 'x'.repeat(5000), 'token có khoảng trắng và dấu'.padEnd(30, 'x'), { a: 1 }]) assert.equal((await post(env(), '/auth/facebook', { accessToken })).status, 400);
-    assert.equal((await post(env(), '/auth/facebook', '{"accessToken":', {})).status, 400);
-    assert.equal((await post(env(), '/auth/facebook', { accessToken: FB_TOKEN }, { 'Content-Type': 'text/plain' })).status, 400);
-    assert.equal((await post(env({ FACEBOOK_APP_ID: undefined }), '/auth/facebook', { accessToken: FB_TOKEN })).status, 503);
-    assert.equal(calls.length, 0);
-  });
-});
-
 test('Chống CSRF và giới hạn tần suất cho POST đăng nhập', async () => withFetch(null, async calls => {
   const e = env();
-  const noOrigin = await worker.fetch(new Request(BASE + '/auth/facebook', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accessToken: FB_TOKEN }) }), e);
+  const noOrigin = await worker.fetch(new Request(BASE + '/auth/email/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'a@b.vn' }) }), e);
   assert.equal(noOrigin.status, 403);
-  assert.equal((await post(e, '/auth/facebook', { accessToken: FB_TOKEN }, { Origin: 'https://evil.example' })).status, 403);
+  assert.equal((await post(e, '/auth/email/start', { email: 'a@b.vn' }, { Origin: 'https://evil.example' })).status, 403);
   // Origin nằm trong danh sách CORS vẫn không được đăng nhập/đăng xuất thay người dùng.
   assert.equal((await post(e, '/auth/email/start', { email: 'a@b.vn' }, { Origin: 'https://pthub2026.github.io' })).status, 403);
   assert.equal((await post(e, '/auth/logout', {}, { Origin: 'https://pthub2026.github.io' })).status, 403);
@@ -208,16 +180,16 @@ test('Chống CSRF và giới hạn tần suất cho POST đăng nhập', async 
   assert.equal(calls.length, 0);
 }));
 
-test('Phiên hết hạn bị xóa và quay về trang đăng nhập; đăng xuất xóa phiên và cookie', async () => withFetch(facebook(), async () => {
+test('Phiên hết hạn bị xóa và quay về trang đăng nhập; đăng xuất xóa phiên và cookie', async () => withFetch(null, async () => {
   const e = env();
-  const expired = sessionToken(await post(e, '/auth/facebook', { accessToken: FB_TOKEN }));
+  const expired = sessionToken(await loginEmail(e, 'het-han@vidu.vn'));
   e.DB.sqlite.prepare('UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ?').run(now() - 1, sha(expired));
   const login = await get(e, '/', withSession(expired));
   assert.match(await login.text(), /Đăng nhập ShopPost/);
   assert.equal(row(e.DB, 'SELECT * FROM auth_sessions WHERE token_hash = ?', sha(expired)), null);
   assert.equal((await get(e, '/session', withSession(expired))).status, 401);
 
-  const token = sessionToken(await post(e, '/auth/facebook', { accessToken: FB_TOKEN }));
+  const token = sessionToken(await loginEmail(e, 'con-han@vidu.vn'));
   assert.equal((await get(e, '/session', withSession(token))).status, 200);
   const noOrigin = await worker.fetch(new Request(BASE + '/auth/logout', { method: 'POST', headers: withSession(token) }), e);
   assert.equal(noOrigin.status, 403); assert.equal((await get(e, '/session', withSession(token))).status, 200);
@@ -229,86 +201,6 @@ test('Phiên hết hạn bị xóa và quay về trang đăng nhập; đăng xu�
   assert.equal((await get(e, '/session', withSession(token))).status, 401);
   assert.equal((await get(e, '/auth/logout')).status, 405);
 }));
-
-test('Zalo: state + PKCE, callback đổi mã đúng cách và tạo phiên zalo:<id>', async () => {
-  const e = env();
-  const start = await get(e, '/auth/zalo/start');
-  assert.equal(start.status, 302);
-  const target = new URL(start.headers.get('Location'));
-  assert.equal(target.origin + target.pathname, 'https://oauth.zaloapp.com/v4/permission');
-  assert.equal(target.searchParams.get('app_id'), ZALO_ID);
-  assert.equal(target.searchParams.get('redirect_uri'), BASE + '/auth/zalo/callback');
-  const state = target.searchParams.get('state');
-  assert.match(state, /^[A-Za-z0-9_-]{32}$/);
-  const saved = row(e.DB, 'SELECT * FROM auth_oauth_states WHERE state = ?', state);
-  assert.match(saved.verifier, /^[A-Za-z0-9]{43}$/);
-  assert.equal(target.searchParams.get('code_challenge'), createHash('sha256').update(saved.verifier).digest('base64url'));
-  assert.equal(start.headers.get('Location').includes(saved.verifier), false);
-  const stateCookie = cookieNamed(start, '__Host-shopai_oauth');
-  assert.match(stateCookie, new RegExp(`^__Host-shopai_oauth=${state}; Max-Age=600; Path=/; HttpOnly; Secure; SameSite=Lax$`));
-
-  await withFetch(async (url, init) => {
-    if (url === 'https://oauth.zaloapp.com/v4/access_token') {
-      assert.equal(init.method, 'POST'); assert.equal(init.headers.secret_key, ZALO_SECRET);
-      const form = new URLSearchParams(init.body);
-      assert.equal(form.get('code'), 'ma-zalo-123'); assert.equal(form.get('code_verifier'), saved.verifier);
-      assert.equal(form.get('app_id'), ZALO_ID); assert.equal(form.get('grant_type'), 'authorization_code');
-      return Response.json({ access_token: 'zalo-access-token', expires_in: '3600' });
-    }
-    if (url.startsWith('https://graph.zalo.me/v2.0/me')) {
-      assert.equal(init.headers.access_token, 'zalo-access-token');
-      return Response.json({ id: '5551234', name: 'Trần Thị B', error: 0, message: 'Success' });
-    }
-    throw new Error('URL Zalo lạ: ' + url);
-  }, async calls => {
-    const callback = await get(e, `/auth/zalo/callback?code=ma-zalo-123&state=${state}`, { Cookie: `__Host-shopai_oauth=${state}` });
-    assert.equal(callback.status, 302); assert.equal(callback.headers.get('Location'), '/');
-    assert.match(cookieNamed(callback, '__Host-shopai_oauth'), /Max-Age=0/);
-    const token = sessionToken(callback);
-    assert.equal(row(e.DB, 'SELECT owner FROM auth_sessions WHERE token_hash = ?', sha(token)).owner, 'zalo:5551234');
-    assert.equal(row(e.DB, 'SELECT * FROM auth_oauth_states WHERE state = ?', state), null);
-    const session = await (await get(e, '/session', withSession(token))).json();
-    assert.deepEqual(session.account, { provider: 'zalo', name: 'Trần Thị B' });
-    assert.equal(calls.length, 2);
-    // State chỉ dùng được một lần.
-    const replay = await get(e, `/auth/zalo/callback?code=ma-zalo-123&state=${state}`, { Cookie: `__Host-shopai_oauth=${state}` });
-    assert.equal(replay.headers.get('Location'), '/?loi=zalo_het_han'); assert.equal(calls.length, 2);
-  });
-});
-
-test('Zalo: state sai/hết hạn, người dùng từ chối, lỗi token/hồ sơ và thiếu cấu hình', async () => {
-  const begin = async e => new URL((await get(e, '/auth/zalo/start')).headers.get('Location')).searchParams.get('state');
-  const loi = response => response.headers.get('Location');
-  await withFetch(null, async calls => {
-    const e = env();
-    const state = await begin(e);
-    assert.equal(loi(await get(e, `/auth/zalo/callback?code=x&state=${state}`)), '/?loi=zalo_state');
-    assert.equal(loi(await get(e, `/auth/zalo/callback?code=x&state=${state}`, { Cookie: '__Host-shopai_oauth=' + 'b'.repeat(32) })), '/?loi=zalo_state');
-    assert.equal(loi(await get(e, '/auth/zalo/callback?code=x&state=<script>', { Cookie: '__Host-shopai_oauth=<script>' })), '/?loi=zalo_state');
-    const old = await begin(e);
-    e.DB.sqlite.prepare('UPDATE auth_oauth_states SET expires_at = ? WHERE state = ?').run(now() - 1, old);
-    assert.equal(loi(await get(e, `/auth/zalo/callback?code=x&state=${old}`, { Cookie: '__Host-shopai_oauth=' + old })), '/?loi=zalo_het_han');
-    const denied = await begin(e);
-    assert.equal(loi(await get(e, `/auth/zalo/callback?error=access_denied&state=${denied}`, { Cookie: '__Host-shopai_oauth=' + denied })), '/?loi=zalo_tu_choi');
-    assert.equal(calls.length, 0);
-    const off = env({ ZALO_APP_SECRET: undefined });
-    assert.equal(loi(await get(off, '/auth/zalo/start')), '/?loi=zalo_chua_cau_hinh');
-    assert.equal(loi(await get(off, `/auth/zalo/callback?code=x&state=${state}`, { Cookie: '__Host-shopai_oauth=' + state })), '/?loi=zalo_chua_cau_hinh');
-  });
-  for (const [handler, expected] of [
-    [async () => Response.json({ error: -14014, error_name: 'Invalid code' }), '/?loi=zalo_token'],
-    [async url => url.includes('access_token') ? Response.json({ access_token: 't' }) : Response.json({ error: 452, message: 'Access token invalid' }), '/?loi=zalo_ho_so'],
-    [async () => { throw new Error('hết thời gian'); }, '/?loi=zalo_tam_loi']
-  ]) {
-    await withFetch(handler, async () => {
-      const e = env();
-      const state = await begin(e);
-      // Zalo có thể trả mã qua tham số oauth_code.
-      const response = await get(e, `/auth/zalo/callback?oauth_code=x&state=${state}`, { Cookie: '__Host-shopai_oauth=' + state });
-      assert.equal(loi(response), expected); assert.equal(cookieNamed(response, SESSION_COOKIE), null);
-    });
-  }
-});
 
 test('Email OTP: gửi mã, chặn gửi lại quá nhanh, sai mã, đúng mã một lần', async () => {
   const sent = [];
@@ -504,7 +396,7 @@ test('Thiếu cấu hình email: /auth/providers tắt email, trang đăng nhậ
     return visible;
   };
   const { binding, calls } = emailBinding();
-  const configured = env({ EMAIL: binding, RESEND_API_KEY: undefined, FACEBOOK_APP_ID: undefined, ZALO_APP_SECRET: undefined });
+  const configured = env({ EMAIL: binding, RESEND_API_KEY: undefined });
   assert.equal(await emailEnabled(configured), true); assert.equal(await loginShowsEmail(configured), true);
   for (const overrides of [
     { EMAIL: binding, EMAIL_FROM: undefined, RESEND_API_KEY: undefined },
@@ -514,7 +406,7 @@ test('Thiếu cấu hình email: /auth/providers tắt email, trang đăng nhậ
     { EMAIL: undefined, RESEND_API_KEY: undefined },
     { EMAIL: binding, DB: undefined }
   ]) {
-    const e = env({ FACEBOOK_APP_ID: undefined, ZALO_APP_SECRET: undefined, ...overrides });
+    const e = env({ ...overrides });
     assert.equal(await emailEnabled(e), false, JSON.stringify(Object.keys(overrides)));
     assert.equal(await loginShowsEmail(e), false);
     if (e.DB) assert.equal((await post(e, '/auth/email/start', { email: 'a@b.vn' })).status, 503);
@@ -565,9 +457,9 @@ test('/auth/providers: TikTok và số điện thoại chỉ bật khi đủ c�
   assert.equal((await p({ ...TWILIO, TWILIO_ACCOUNT_SID: 'sai-dinh-dang' })).phone.enabled, false);
   assert.equal((await p({ ...TWILIO, TWILIO_AUTH_TOKEN: undefined })).phone.enabled, false);
   assert.equal((await p({ ...TWILIO, TWILIO_VERIFY_SERVICE_SID: 'MG' + 'b2'.repeat(16) })).phone.enabled, false);
-  const onlyPhone = await p({ FACEBOOK_APP_ID: undefined, ZALO_APP_SECRET: undefined, RESEND_API_KEY: undefined, ...ESMS });
+  const onlyPhone = await p({ RESEND_API_KEY: undefined, ...ESMS });
   assert.equal(onlyPhone.ready, true); assert.equal(onlyPhone.email.enabled, false);
-  assert.equal((await p({ FACEBOOK_APP_ID: undefined, ZALO_APP_SECRET: undefined, RESEND_API_KEY: undefined, TIKTOK_CLIENT_KEY: TIKTOK_KEY, TIKTOK_CLIENT_SECRET: TIKTOK_SECRET })).ready, true);
+  assert.equal((await p({ RESEND_API_KEY: undefined, TIKTOK_CLIENT_KEY: TIKTOK_KEY, TIKTOK_CLIENT_SECRET: TIKTOK_SECRET })).ready, true);
 });
 
 test('TikTok: state + PKCE (hex), callback đổi mã đúng cách và tạo phiên tiktok:<open_id>', async () => {
@@ -619,7 +511,7 @@ test('TikTok: state + PKCE (hex), callback đổi mã đúng cách và tạo phi
   });
 });
 
-test('TikTok: state sai, state của Zalo, người dùng từ chối, lỗi token/hồ sơ/mạng và thiếu cấu hình', async () => {
+test('TikTok: state sai, người dùng từ chối, lỗi token/hồ sơ/mạng và thiếu cấu hình', async () => {
   const begin = async (e, provider = 'tiktok') => new URL((await get(e, `/auth/${provider}/start`)).headers.get('Location')).searchParams.get('state');
   const loi = response => response.headers.get('Location');
   const cookie = state => ({ Cookie: '__Host-shopai_oauth=' + state });
@@ -630,10 +522,6 @@ test('TikTok: state sai, state của Zalo, người dùng từ chối, lỗi tok
     assert.equal(loi(await get(e, `/auth/tiktok/callback?code=x&state=${state}`, cookie('c'.repeat(32)))), '/?loi=tiktok_state');
     assert.equal(loi(await get(e, '/auth/tiktok/callback?code=x&state=<script>', cookie('<script>'))), '/?loi=tiktok_state');
     assert.equal(loi(await get(e, `/auth/tiktok/callback?code=x&state=${'d'.repeat(32)}`, cookie('d'.repeat(32)))), '/?loi=tiktok_het_han');
-    // State tạo cho Zalo không dùng được cho TikTok và không bị tiêu thụ.
-    const zaloState = await begin(e, 'zalo');
-    assert.equal(loi(await get(e, `/auth/tiktok/callback?code=x&state=${zaloState}`, cookie(zaloState))), '/?loi=tiktok_het_han');
-    assert.equal(row(e.DB, 'SELECT provider FROM auth_oauth_states WHERE state = ?', zaloState).provider, 'zalo');
     const old = await begin(e);
     e.DB.sqlite.prepare('UPDATE auth_oauth_states SET expires_at = ? WHERE state = ?').run(now() - 1, old);
     assert.equal(loi(await get(e, `/auth/tiktok/callback?code=x&state=${old}`, cookie(old))), '/?loi=tiktok_het_han');
@@ -642,7 +530,7 @@ test('TikTok: state sai, state của Zalo, người dùng từ chối, lỗi tok
     assert.equal(row(e.DB, 'SELECT * FROM auth_oauth_states WHERE state = ?', denied), null);
     const withError = await begin(e);
     assert.equal(loi(await get(e, `/auth/tiktok/callback?code=x&error=access_denied&state=${withError}`, cookie(withError))), '/?loi=tiktok_tu_choi');
-    // Tham số oauth_code chỉ dành cho Zalo.
+    // Tham số oauth_code không được chấp nhận (TikTok chỉ dùng tham số code).
     const oauthCode = await begin(e);
     assert.equal(loi(await get(e, `/auth/tiktok/callback?oauth_code=x&state=${oauthCode}`, cookie(oauthCode))), '/?loi=tiktok_tu_choi');
     assert.equal(calls.length, 0);
@@ -939,36 +827,36 @@ test('Đặt/đổi mật khẩu khi đã đăng nhập: cần phiên, đổi c�
     const e = env();
     assert.equal((await post(e, '/auth/password/set', { password: 'mat-khau-moi-dai' })).status, 401); // chưa đăng nhập
   });
-  await withFetch(facebook(), async () => {
-    const e = env();
-    const fb = await post(e, '/auth/facebook', { accessToken: FB_TOKEN });
-    assert.equal(fb.status, 200);
-    const token = sessionToken(fb);
+  await withFetch(null, async () => {
+    const e = tiktokEnv();
+    const social = await loginTikTok(e);
+    assert.equal(social.status, 302);
+    const token = sessionToken(social);
     assert.equal((await post(e, '/auth/password/set', { password: 'mat-khau-dai-moi' }, withSession(token))).status, 400); // social thiếu email
-    assert.equal((await post(e, '/auth/password/set', { password: 'ngan', email: 'fb@vidu.vn' }, withSession(token))).status, 400); // mật khẩu yếu
-    const set1 = await post(e, '/auth/password/set', { password: 'mat-khau-dai-moi', email: ' FB@ViDu.vn ' }, withSession(token));
-    assert.equal(set1.status, 200); assert.deepEqual(await set1.json(), { ok: true, email: 'fb@vidu.vn' });
-    const pwrow = row(e.DB, 'SELECT * FROM auth_passwords WHERE email = ?', 'fb@vidu.vn');
-    assert.equal(pwrow.provider, 'facebook'); assert.ok(await verifyPassword('mat-khau-dai-moi', pwrow.password_hash));
+    assert.equal((await post(e, '/auth/password/set', { password: 'ngan', email: 'tt@vidu.vn' }, withSession(token))).status, 400); // mật khẩu yếu
+    const set1 = await post(e, '/auth/password/set', { password: 'mat-khau-dai-moi', email: ' TT@ViDu.vn ' }, withSession(token));
+    assert.equal(set1.status, 200); assert.deepEqual(await set1.json(), { ok: true, email: 'tt@vidu.vn' });
+    const pwrow = row(e.DB, 'SELECT * FROM auth_passwords WHERE email = ?', 'tt@vidu.vn');
+    assert.equal(pwrow.provider, 'tiktok'); assert.ok(await verifyPassword('mat-khau-dai-moi', pwrow.password_hash));
     assert.equal((await post(e, '/auth/password/set', { password: 'mat-khau-dai-hon' }, withSession(token))).status, 403); // đã có hash → cần mật khẩu cũ
     assert.equal((await post(e, '/auth/password/set', { password: 'mat-khau-dai-hon', currentPassword: 'sai-cu' }, withSession(token))).status, 403);
     const set2 = await post(e, '/auth/password/set', { password: 'mat-khau-dai-hon', currentPassword: 'mat-khau-dai-moi' }, withSession(token));
     assert.equal(set2.status, 200);
-    assert.ok(await verifyPassword('mat-khau-dai-hon', row(e.DB, 'SELECT password_hash FROM auth_passwords WHERE email = ?', 'fb@vidu.vn').password_hash));
-    const login = await post(e, '/auth/password/login', { email: 'fb@vidu.vn', password: 'mat-khau-dai-hon' });
-    assert.equal(login.status, 200); assert.equal((await login.json()).provider, 'facebook'); // social đăng nhập được bằng mật khẩu
+    assert.ok(await verifyPassword('mat-khau-dai-hon', row(e.DB, 'SELECT password_hash FROM auth_passwords WHERE email = ?', 'tt@vidu.vn').password_hash));
+    const login = await post(e, '/auth/password/login', { email: 'tt@vidu.vn', password: 'mat-khau-dai-hon' });
+    assert.equal(login.status, 200); assert.equal((await login.json()).provider, 'tiktok'); // social đăng nhập được bằng mật khẩu
   });
   // Email đã thuộc tài khoản khác → 409.
   let last;
   const resend = async (url, init) => { last = JSON.parse(init.body).text.match(/\b(\d{6})\b/)[1]; return Response.json({ id: 'ok' }); };
-  const e = env();
+  const e = tiktokEnv();
   await withFetch(resend, async () => {
     await post(e, '/auth/register/start', { email: 'co-san@vidu.vn', password: 'mat-khau-dai-aa' });
     await post(e, '/auth/register/verify', { email: 'co-san@vidu.vn', code: last, password: 'mat-khau-dai-aa' });
   });
-  await withFetch(facebook(), async () => {
-    const fb = await post(e, '/auth/facebook', { accessToken: FB_TOKEN });
-    const token = sessionToken(fb);
+  await withFetch(null, async () => {
+    const social = await loginTikTok(e, 'tt-social-2');
+    const token = sessionToken(social);
     const dup = await post(e, '/auth/password/set', { password: 'mat-khau-dai-bb', email: 'co-san@vidu.vn' }, withSession(token));
     assert.equal(dup.status, 409);
   });

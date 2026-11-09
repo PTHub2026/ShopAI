@@ -34,7 +34,9 @@
     "PUBLIC_ORIGIN": "https://shoppost.net",
     "EMAIL_FROM": "Shoppost <no-reply@shoppost.net>",
     "PLATFORM_ADMIN_EMAILS": "ct@pthub.vn",
-    "EMAIL_LOGIN_DOMAINS": "pthub.vn,shoptrack.vn"
+    "EMAIL_LOGIN_DOMAINS": "pthub.vn,shoptrack.vn",
+    "META_APP_ID": "1690219679401963",
+    "META_REDIRECT_URI": "https://shoppost.net/api/social/meta/callback"
   },
   "send_email": [
     {

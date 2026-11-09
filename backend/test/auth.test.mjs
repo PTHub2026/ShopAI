@@ -37,6 +37,7 @@ function env(overrides = {}) {
     ACCESS_TEAM_DOMAIN: 'test-team.cloudflareaccess.com', ACCESS_AUD: 'test-audience', ALLOWED_ORIGINS: 'https://pthub2026.github.io',
     AI: { run: async () => ({ response: 'Nội dung AI' }) }, AI_RATE_LIMITER: { limit: async () => ({ success: true }) }, DB: database(),
     FACEBOOK_APP_ID: FB_ID, ZALO_APP_ID: ZALO_ID, ZALO_APP_SECRET: ZALO_SECRET, RESEND_API_KEY: RESEND_KEY, EMAIL_FROM: 'ShopPost <no-reply@shoppost.net>',
+    EMAIL_LOGIN_DOMAINS: 'pthub.vn,shoptrack.vn,shoppost.net,example.com,b.vn',
     FRONTEND_HTML: '<html><head></head><body>Ứng dụng ShopPost</body></html>', LOGIN_HTML, ...overrides
   };
 }
@@ -374,6 +375,27 @@ test('Email OTP: mã hết hạn, sai quá 5 lần, gửi quá 5 mã/giờ và l
     assert.equal(row(e.DB, 'SELECT code_hash FROM auth_otp_codes WHERE email = ?', 'loi@shoppost.net').code_hash, '');
   });
 });
+
+test('Luồng mã một lần qua email chỉ dành cho @pthub.vn và @shoptrack.vn (mặc định khi không cấu hình EMAIL_LOGIN_DOMAINS)', async () => withFetch(async () => Response.json({ id: 'ok' }), async () => {
+  const e = env({ EMAIL_LOGIN_DOMAINS: undefined });
+  // Tên miền ngoài danh sách bị từ chối ở cả bước gửi mã lẫn bước xác minh (chặn tự tạo tài khoản).
+  for (const path of ['/auth/email/start', '/auth/email/verify']) {
+    const body = path.endsWith('verify') ? { email: 'nguoila@gmail.com', code: '123456' } : { email: 'nguoila@gmail.com' };
+    const r = await post(e, path, body);
+    assert.equal(r.status, 403);
+    assert.match((await r.json()).error, /@pthub\.vn và @shoptrack\.vn/);
+  }
+  // Tên miền được phép gửi mã thành công (chữ hoa/thường không ảnh hưởng vì email đã chuẩn hoá).
+  for (const email of ['nhanvien@pthub.vn', 'DaoTao@ShopTrack.vn']) {
+    assert.equal((await post(e, '/auth/email/start', { email })).status, 200);
+  }
+  // Email bị từ chối không hề được tạo mã trong kho (bảng chỉ tồn tại sau khi có email hợp lệ).
+  assert.equal(row(e.DB, 'SELECT code_hash FROM auth_otp_codes WHERE email = ?', 'nguoila@gmail.com'), null);
+  // Cấu hình tuỳ biến EMAIL_LOGIN_DOMAINS được tôn trọng (bỏ khoảng trắng và tiền tố @).
+  const custom = env({ EMAIL_LOGIN_DOMAINS: ' @vidu.vn , pthub.vn ' });
+  assert.equal((await post(custom, '/auth/email/start', { email: 'a@vidu.vn' })).status, 200);
+  assert.equal((await post(custom, '/auth/email/start', { email: 'a@shoptrack.vn' })).status, 403);
+}));
 
 // ---- Cloudflare Email Service (binding env.EMAIL) ----
 function emailBinding(behavior) {

@@ -115,6 +115,24 @@ export function normalizeEmail(value) {
   if (!email || email.length > 254) return null;
   return /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(email) ? email : null;
 }
+// Luồng đăng nhập bằng mã một lần qua email (không mật khẩu, tự tạo tài khoản) chỉ dành cho các tên miền này.
+// Cấu hình qua env.EMAIL_LOGIN_DOMAINS (các tên miền ngăn cách bằng dấu phẩy); mặc định @pthub.vn và @shoptrack.vn.
+const DEFAULT_EMAIL_LOGIN_DOMAINS = ['pthub.vn', 'shoptrack.vn'];
+export function emailLoginDomains(env) {
+  const raw = clean(env && env.EMAIL_LOGIN_DOMAINS);
+  if (!raw) return DEFAULT_EMAIL_LOGIN_DOMAINS;
+  const list = raw.split(',').map(s => s.trim().toLowerCase().replace(/^@/, '')).filter(Boolean);
+  return list.length ? list : DEFAULT_EMAIL_LOGIN_DOMAINS;
+}
+// email đã chuẩn hoá (chữ thường) có thuộc một trong các tên miền được phép hay không.
+export function emailDomainAllowed(env, email) {
+  if (typeof email !== 'string') return false;
+  const at = email.lastIndexOf('@');
+  if (at < 0) return false;
+  return emailLoginDomains(env).includes(email.slice(at + 1));
+}
+// Thông điệp từ chối khi email không thuộc tên miền cho phép.
+const emailDomainMessage = env => `Đăng nhập bằng email chỉ dành cho địa chỉ ${emailLoginDomains(env).map(d => '@' + d).join(' và ')}.`;
 // EMAIL_FROM dạng "ShopPost <no-reply@shoppost.net>" hoặc "no-reply@shoppost.net" → { email, name? }; sai định dạng → null.
 export function parseEmailFrom(value) {
   const v = clean(value);
@@ -587,6 +605,8 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
     if (!viaPhone && !available.email.enabled) return json({ error: 'Đăng nhập bằng email chưa được kích hoạt.' }, 503);
     const email = viaPhone ? normalizePhone(body.phone) : normalizeEmail(body.email); // đích nhận mã: email hoặc số E.164
     if (!email) return json({ error: viaPhone ? PHONE_INVALID : 'Địa chỉ email không hợp lệ.' }, 400);
+    // Luồng mã một lần qua email chỉ dành cho tên miền cho phép; chặn ngay cả khi gửi mã lẫn khi xác minh (tự tạo tài khoản).
+    if (!viaPhone && !emailDomainAllowed(env, email)) return json({ error: emailDomainMessage(env) }, 403);
     try { await ensureSchema(env.DB); } catch { return json({ error: 'Kho phiên đăng nhập tạm thời không khả dụng.' }, 503); }
     const t = now();
     if (path.endsWith('/start')) {

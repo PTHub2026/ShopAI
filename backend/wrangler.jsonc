@@ -31,7 +31,8 @@
     "AI_MODEL": "@cf/google/gemma-4-26b-a4b-it",
     "ZALO_APP_ID": "3847703053447967855",
     "EMAIL_FROM": "ShopPost <no-reply@shoppost.net>",
-    "PLATFORM_ADMIN_EMAILS": "ct@pthub.vn"
+    "PLATFORM_ADMIN_EMAILS": "ct@pthub.vn",
+    "EMAIL_LOGIN_DOMAINS": "pthub.vn,shoptrack.vn"
   },
   "send_email": [
     {

@@ -143,3 +143,14 @@ test('job long-poll returns a shop-scoped cursor and detects changes without exp
   assert.equal((await f.request(other,'/channels/all/jobs/events?wait=0',{shop})).status,404);
  });
 });
+
+test('publish-now operates the existing scheduled job and cannot duplicate it',async()=>{
+ const f=fixture(),owner=f.login('email:run-existing@example.com');let sent=0;
+ await fakeTelegram(()=>{sent++;return Response.json({ok:true,result:{message_id:77}});},async()=>{
+  await connect(f.request,owner);const a=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
+  const q=await f.request(owner,'/channels/telegram/schedule',{method:'POST',idem:'run-existing-job-123',body:{accountId:a.id,kind:'text',text:'Run now',runAt:now()+3600}});
+  const path='/channels/all/jobs/'+q.data.job.id+'/run';
+  assert.equal((await f.request(owner,path,{method:'POST'})).data.job.status,'sent');
+  assert.equal((await f.request(owner,path,{method:'POST'})).data.job.status,'sent');assert.equal(sent,1);
+ });
+});

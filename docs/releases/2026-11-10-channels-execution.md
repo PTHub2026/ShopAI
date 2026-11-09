@@ -29,3 +29,12 @@ Ruling: preserve existing 5-minute trigger; fix deployed handler rather than cre
 
 Ruling: keep old API aliases and encrypted credential formats during migration to preserve existing OAuth integrations; all active reads/writes use the canonical store.
 Ruling: select the requested long-poll alternative; backend waits up to 20 seconds, frontend stops when hidden or shop changes.
+
+## Follow-up production verification and automatic review
+- PR #25 merged as 5ef0977a07a89516e3e81a395962a3dadbd57581. Cloudflare build ready; live /health matches this release, version 548fb439-899c-4aa4-9dda-1d640330f483. Authenticated channels UI loads with no console errors; real long-poll requests return OK. Anonymous channel and job-event GETs return 401.
+- Automatic review found three additional issues, each reproduced RED then fixed: cloudRequest discarded idempotency headers; immediate retryable posts lost the job ID; an OAuth callback already exchanging tokens could restore a disconnected channel.
+- Preserve custom headers and combine cancellation with timeout. Persist Zalo draft keys, retain common job IDs for immediate outcomes, and run/retry tracked posts through their existing job. Unknown outcomes stay visible for reconciliation.
+- Add durable disconnect generation bound into the signed connect cookie. Atomic conditional credential INSERT checks generation, so a callback paused during unlink cannot restore credentials afterward.
+- Actual Cloudflare settings showed no Cron trigger despite the repository declaration. Added every-five-minute trigger in the dashboard. Persisted logging was disabled after deployment; enable observability in Wrangler configuration to retain it on releases.
+- Follow-up validation: **147 tests pass**, Wrangler dry-run build succeeds. Includes tests for lost idempotency header, immediate rate-limit reconciliation, in-flight callback unlink, and running an existing scheduled job only once.
+- Automatic approval review blocked a proposed unauthenticated DELETE production smoke test because it targets a destructive endpoint. Did not retry it. Used read-only authenticated UI/anonymous GET checks; unlink behavior is verified against SQLite in automated tests.

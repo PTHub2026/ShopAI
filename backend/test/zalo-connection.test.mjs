@@ -235,3 +235,14 @@ test('unified account disconnect for Zalo also removes credential and invalidate
  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM channel_oauth_states').get().n,0);
  }finally{f.sqlite.close();}
 });
+
+test('disconnect invalidates a callback already awaiting token exchange',async()=>{
+ const f=fixture(),owner=f.login('email:disconnect-inflight@example.com');await mocked(graph,()=>begin(f,owner).then(s=>callback(f,s)));
+ const next=await begin(f,owner);let release,entered;const waiting=new Promise(r=>entered=r);
+ try{await mocked(async url=>{if(String(url).includes('access_token')){entered();await new Promise(r=>release=r);}return graph(url);},async()=>{
+ const pending=callback(f,next);await waiting;
+ assert.equal((await f.req(owner,'/channels/zalo','DELETE')).status,200);release();
+ assert.match((await pending).headers.get('Location'),/connect_error/);
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM channels').get().n,0);
+ });}finally{f.sqlite.close();}
+});

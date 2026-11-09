@@ -88,6 +88,7 @@ async function deliver(j,db,env,shop,json){
  try{const token=await decryptToken(env,a.token_ciphertext,a.token_iv),p=JSON.parse(j.payload);
   if(a.provider==='telegram'){
    const result=j.kind==='text'?await callTelegram(token,'sendMessage',{chat_id:a.target_id,text:p.text}):await callTelegram(token,'sendPhoto',{chat_id:a.target_id,photo:p.photoUrl,caption:p.text});
+   if(!Number.isSafeInteger(result?.message_id)||result.message_id<=0)throw Error('TELEGRAM_MISSING_MESSAGE_ID');
    remote=String(result.message_id);
   }else { remote=await publishMeta(env,a,j); }
   status='sent';error=null;

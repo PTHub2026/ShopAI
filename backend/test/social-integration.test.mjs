@@ -90,3 +90,16 @@ test('Telegram 429 is retryable; unknown outcomes never retry automatically',asy
  });
  f.db.sqlite.close();
 });
+
+test('Telegram malformed success remains unknown and cannot be retried',async()=>{
+ const f=fixture(),owner=f.login('email:malformed@example.com');let calls=0;
+ try{await fakeTelegram(()=>{calls++;return Response.json({ok:true,result:{}});},async()=>{
+  await connect(f.request,owner);
+  const account=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
+  const result=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'malformed-result-123',body:{accountId:account.id,kind:'text',text:'Test'}});
+  assert.equal(result.status,502);assert.equal(result.data.job.status,'unknown');
+  assert.equal(result.data.job.remoteMessageId,null);
+  assert.equal((await f.request(owner,'/api/social/jobs/'+result.data.job.id+'/retry',{method:'POST'})).status,409);
+  assert.equal(calls,1);
+ });}finally{f.db.sqlite.close();}
+});

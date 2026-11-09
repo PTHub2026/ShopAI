@@ -76,3 +76,44 @@ test('Meta OAuth: one-use state, same actor, scoped accounts, encrypted Page tok
   assert.deepEqual(calls.map(p=>p.split('/').at(-1)),['access_token','access_token','permissions','accounts','accounts']);
  }finally{globalThis.fetch=previous;f.sqlite.close();}
 });
+
+test('Meta OAuth callback cannot restore an account disconnected while provider calls are pending',async()=>{
+ const f=fixture(),owner=f.login('email:owner@example.com'),previous=globalThis.fetch;
+ let pauseExchange=false,enteredResolve,releaseResolve;
+ const entered=new Promise(resolve=>{enteredResolve=resolve;}),release=new Promise(resolve=>{releaseResolve=resolve;});
+ globalThis.fetch=async input=>{
+  const u=new URL(String(input));
+  if(u.pathname.endsWith('/oauth/access_token')){
+   if(u.searchParams.has('code')){
+    if(pauseExchange){pauseExchange=false;enteredResolve();await release;}
+    return Response.json({access_token:'short-lived'});
+   }
+   if(u.searchParams.get('grant_type')==='fb_exchange_token')return Response.json({access_token:'long-lived'});
+  }
+  if(u.pathname.endsWith('/me/permissions'))return Response.json({data:['pages_show_list','pages_manage_posts'].map(permission=>({permission,status:'granted'}))});
+  if(u.pathname.endsWith('/me/accounts'))return Response.json({data:[{id:'111111',name:'Test Page',access_token:'PAGE_SECRET'}]});
+  throw Error('Unexpected Graph call');
+ };
+ const start=async()=>{
+  const response=await f.req(owner,'/api/social/meta/start','POST');
+  return new URL((await response.json()).authorizationUrl).searchParams.get('state');
+ };
+ const callback=state=>'/api/social/meta/callback?state='+encodeURIComponent(state)+'&code=FAKE_CODE_FOR_TEST';
+ try{
+  assert.equal((await f.req(owner,callback(await start()))).status,303);
+  const account=f.sqlite.prepare("SELECT id FROM social_accounts WHERE provider='facebook' AND target_id='111111'").get();
+  const pendingState=await start();
+  pauseExchange=true;
+  const pendingCallback=f.req(owner,callback(pendingState));
+  await entered;
+  assert.equal((await f.req(owner,'/api/social/accounts/'+account.id,'DELETE')).status,200);
+  releaseResolve();
+  const result=await pendingCallback;
+  assert.equal(result.status,409);
+  assert.equal((await result.json()).code,'meta_connection_revoked');
+  const revoked=f.sqlite.prepare('SELECT status,token_ciphertext,token_iv FROM social_accounts WHERE id=?').get(account.id);
+  assert.equal(revoked.status,'revoked');
+  assert.equal(revoked.token_ciphertext,'');
+  assert.equal(revoked.token_iv,'');
+ }finally{globalThis.fetch=previous;f.sqlite.close();}
+});

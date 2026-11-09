@@ -1,7 +1,7 @@
 import {resolveShop,audit,writeLimit} from './shops.js';
 import {handleMeta,publishMeta,metaDenied,metaConfigured} from './meta.js';
 const now=()=>Math.floor(Date.now()/1000);
-export const SOCIAL_SCHEMA=["CREATE TABLE IF NOT EXISTS social_accounts (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, provider TEXT NOT NULL CHECK(provider IN ('telegram','facebook','instagram')), display_name TEXT NOT NULL, target_id TEXT NOT NULL, token_ciphertext TEXT NOT NULL, token_iv TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked','error')), connected_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(shop_id,provider,target_id));","CREATE INDEX IF NOT EXISTS social_accounts_shop ON social_accounts(shop_id,status);","CREATE TABLE IF NOT EXISTS publish_jobs (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, account_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('text','photo')), payload TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','sending','sent','retryable','unknown','failed')), attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0, remote_message_id TEXT, error_code TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(shop_id,idempotency_key));","CREATE INDEX IF NOT EXISTS publish_jobs_shop ON publish_jobs(shop_id,created_at DESC);"];
+export const SOCIAL_SCHEMA=["CREATE TABLE IF NOT EXISTS social_accounts (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, provider TEXT NOT NULL CHECK(provider IN ('telegram','facebook','instagram')), display_name TEXT NOT NULL, target_id TEXT NOT NULL, token_ciphertext TEXT NOT NULL, token_iv TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked','error')), connected_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(shop_id,provider,target_id));","CREATE INDEX IF NOT EXISTS social_accounts_shop ON social_accounts(shop_id,status);","CREATE TABLE IF NOT EXISTS meta_shop_generations (shop_id TEXT PRIMARY KEY, generation INTEGER NOT NULL DEFAULT 0);","CREATE TABLE IF NOT EXISTS publish_jobs (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, account_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('text','photo')), payload TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','sending','sent','retryable','unknown','failed')), attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0, remote_message_id TEXT, error_code TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(shop_id,idempotency_key));","CREATE INDEX IF NOT EXISTS publish_jobs_shop ON publish_jobs(shop_id,created_at DESC);"];
 const initialized=new WeakSet();
 export async function ensureSocialSchema(db){if(initialized.has(db))return;await db.batch(SOCIAL_SCHEMA.map(s=>db.prepare(s)));initialized.add(db);}
 function decodeKey(env){if(typeof env.SOCIAL_TOKEN_KEY!=='string')throw Error('KEY_MISSING');let x=Uint8Array.from(atob(env.SOCIAL_TOKEN_KEY),c=>c.charCodeAt(0));if(x.length!==32)throw Error('KEY_INVALID');return x;}
@@ -54,7 +54,12 @@ export async function handleSocial(req,env,who,json){
  }
  if(section==='accounts'&&resource&&!action&&req.method==='DELETE'){
   if(!ctx.can('channels.configure_token'))return fail(json,403,'forbidden');
-  const r=await db.prepare("UPDATE social_accounts SET status='revoked',token_ciphertext='',token_iv='',updated_at=? WHERE id=? AND shop_id=?").bind(now(),resource,shop).run();
+  const account=await db.prepare('SELECT provider FROM social_accounts WHERE id=? AND shop_id=?').bind(resource,shop).first();
+  if(!account)return fail(json,404,'not_found');
+  const statements=[];
+  if(account.provider==='facebook'||account.provider==='instagram')statements.push(db.prepare('INSERT INTO meta_shop_generations(shop_id,generation) VALUES(?,1) ON CONFLICT(shop_id) DO UPDATE SET generation=generation+1').bind(shop));
+  statements.push(db.prepare("UPDATE social_accounts SET status='revoked',token_ciphertext='',token_iv='',updated_at=? WHERE id=? AND shop_id=?").bind(now(),resource,shop));
+  const [r]=await db.batch(statements);
   if(r.meta.changes!==1)return fail(json,404,'not_found');return json({ok:true});
  }
  if(section==='jobs'&&!resource&&req.method==='GET'){

@@ -39,8 +39,8 @@ test('Zalo connection is single-use, encrypts tokens, and creates no login sessi
  try{await mocked(graph,async()=>{
   const count=f.sqlite.prepare('SELECT count(*) n FROM auth_sessions').get().n;
   assert.equal((await callback(f,start)).headers.get('Location'),base+'/?connected=zalo#accounts');
-  const row=f.sqlite.prepare('SELECT * FROM shop_channels').get();
-  assert.notEqual(row.access_token,access);assert.notEqual(row.refresh_token,refresh);
+  const row=f.sqlite.prepare('SELECT * FROM channels').get();
+  assert.notEqual(row.token,access);assert.notEqual(row.refresh_token,refresh);
   const second=await callback(f,start);assert.match(second.headers.get('Location'),/connect_error=/);
   assert.equal(f.sqlite.prepare('SELECT count(*) n FROM auth_sessions').get().n,count);
  });}finally{f.sqlite.close();}
@@ -49,7 +49,7 @@ test('Zalo never connects when OA information cannot be verified',async()=>{
  const f=fixture(),owner=f.login('email:owner@example.com'),start=await begin(f,owner);
  try{await mocked(async url=>String(url).includes('access_token')?graph(url):Response.json({error:-201,message:'denied'},{status:403}),async()=>{
   const r=await callback(f,start);assert.match(r.headers.get('Location'),/connect_error=/);
-  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM shop_channels').get().n,0);
+  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM channels').get().n,0);
  });}finally{f.sqlite.close();}
 });
 test('Zalo callback rejects another actor and expired state',async()=>{
@@ -64,8 +64,8 @@ test('Zalo callback rejects another actor and expired state',async()=>{
 test('Zalo refresh is serialized and stored rotated tokens are reusable without refreshing again',async()=>{
  const f=fixture(),owner=f.login('email:owner@example.com'),start=await begin(f,owner);let refreshCalls=0;
  try{await mocked(graph,()=>callback(f,start));
- f.sqlite.exec('UPDATE shop_channels SET expires_at=1');
- const channel=f.sqlite.prepare('SELECT * FROM shop_channels').get();
+ f.sqlite.exec('UPDATE channels SET expires_at=1');
+ const channel=f.sqlite.prepare('SELECT * FROM channels').get();
  const {publishZaloArticle}=await import('../src/channels.js');
  await mocked(async(url,init)=>{
   if(String(url).includes('access_token')){refreshCalls++;await new Promise(r=>setTimeout(r,20));return Response.json({access_token:'rotated-access',refresh_token:'rotated-refresh',expires_in:90000});}
@@ -74,7 +74,7 @@ test('Zalo refresh is serialized and stored rotated tokens are reusable without 
  },async()=>{
   const result=await Promise.allSettled([publishZaloArticle(f.env,f.env.DB,channel,{content:'One',images:['https://example.com/cover.png']}),publishZaloArticle(f.env,f.env.DB,channel,{content:'Two',images:['https://example.com/cover.png']})]);
   assert.equal(refreshCalls,1);assert.equal(result.filter(r=>r.status==='fulfilled').length,1);
-  const updated=f.sqlite.prepare('SELECT * FROM shop_channels').get();assert.notEqual(updated.refresh_token,'rotated-refresh');
+  const updated=f.sqlite.prepare('SELECT * FROM channels').get();assert.notEqual(updated.refresh_token,'rotated-refresh');
   assert.equal((await publishZaloArticle(f.env,f.env.DB,updated,{content:'Next',images:['https://example.com/cover.png']})).ok,true);assert.equal(refreshCalls,1);
  });}finally{f.sqlite.close();}
 });
@@ -86,22 +86,22 @@ test('channel diagnostics expose only configuration presence and exact callback,
 });
 test('failed token rotation stops publishing and requires reconnect without retrying a used refresh token',async()=>{
  const f=fixture(),owner=f.login('email:owner@example.com'),start=await begin(f,owner);
- try{await mocked(graph,()=>callback(f,start));f.sqlite.exec('UPDATE shop_channels SET expires_at=1');
+ try{await mocked(graph,()=>callback(f,start));f.sqlite.exec('UPDATE channels SET expires_at=1');
  const {publishZaloArticle}=await import('../src/channels.js');let requests=0;
  await mocked(async()=>{requests++;throw Error('response lost');},async()=>{
-  await assert.rejects(publishZaloArticle(f.env,f.env.DB,f.sqlite.prepare('SELECT * FROM shop_channels').get(),{content:'Test',images:['https://example.com/cover.png']}),/kết nối lại/);
-  const row=f.sqlite.prepare('SELECT * FROM shop_channels').get();assert.equal(row.status,'reauth_required');assert.equal(row.refresh_token,null);
+  await assert.rejects(publishZaloArticle(f.env,f.env.DB,f.sqlite.prepare('SELECT * FROM channels').get(),{content:'Test',images:['https://example.com/cover.png']}),/kết nối lại/);
+  const row=f.sqlite.prepare('SELECT * FROM channels').get();assert.equal(row.status,'reauth_required');assert.equal(row.refresh_token,null);
   await assert.rejects(publishZaloArticle(f.env,f.env.DB,row,{content:'Test',images:['https://example.com/cover.png']}),/kết nối lại/);assert.equal(requests,1);
  });}finally{f.sqlite.close();}
 });
 test('legacy plaintext tokens are encrypted before use and cannot be moved to another shop',async()=>{
  const f=fixture(),owner=f.login('email:owner@example.com'),start=await begin(f,owner);
  try{await mocked(graph,()=>callback(f,start));
- f.sqlite.prepare('UPDATE shop_channels SET access_token=?,refresh_token=?').run(access,refresh);
+ f.sqlite.prepare('UPDATE channels SET token=?,refresh_token=?').run(access,refresh);
  const {publishZaloArticle}=await import('../src/channels.js');
  await mocked(async(url,init)=>{assert.equal(init.headers.access_token,access);if(String(url).endsWith('/getoa'))return Response.json({error:0,data:{oa_id:'123456789'}});return String(url).endsWith('/create')?Response.json({error:0,data:{token:'article'}}):Response.json({error:0,data:{id:'post'}});},async()=>{
-  assert.equal((await publishZaloArticle(f.env,f.env.DB,f.sqlite.prepare('SELECT * FROM shop_channels').get(),{content:'Test',images:['https://example.com/cover.png']})).ok,true);
-  const stored=f.sqlite.prepare('SELECT * FROM shop_channels').get();assert.ok(stored.access_token.startsWith('enc1.'));assert.ok(stored.refresh_token.startsWith('enc1.'));
+  assert.equal((await publishZaloArticle(f.env,f.env.DB,f.sqlite.prepare('SELECT * FROM channels').get(),{content:'Test',images:['https://example.com/cover.png']})).ok,true);
+  const stored=f.sqlite.prepare('SELECT * FROM channels').get();assert.ok(stored.token.startsWith('enc1.'));assert.ok(stored.refresh_token.startsWith('enc1.'));
   await assert.rejects(publishZaloArticle(f.env,f.env.DB,{...stored,shop_id:'other-shop'},{content:'Test',images:['https://example.com/cover.png']}));
  });}finally{f.sqlite.close();}
 });
@@ -121,7 +121,7 @@ test('Zalo articles follow the official v2 API, serve public cover media and req
   if(String(url).endsWith('/create')){const payload=JSON.parse(init.body);mediaUrl=payload.cover.photo_url;assert.equal(payload.cover.status,'show');return Response.json({error:0,data:{token:'article'}});}
   return Response.json({error:0,data:{}});
  },async()=>{
-  await assert.rejects(publishZaloArticle({...f.env,PUBLIC_ORIGIN:base},f.env.DB,f.sqlite.prepare('SELECT * FROM shop_channels').get(),{content:'Test',images:[png]}),/xác nhận|mã bài/);
+  await assert.rejects(publishZaloArticle({...f.env,PUBLIC_ORIGIN:base},f.env.DB,f.sqlite.prepare('SELECT * FROM channels').get(),{content:'Test',images:[png]}),/xác nhận|mã bài/);
   const r=await worker.fetch(new Request(mediaUrl),f.env);assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),'image/png');assert.ok((await r.arrayBuffer()).byteLength>0);
   assert.equal((await worker.fetch(new Request(base+'/media/zalo/not-a-valid-id'),f.env)).status,404);
  });}finally{f.sqlite.close();}
@@ -135,8 +135,8 @@ test('Zalo articles without required cover fail locally before contacting Zalo',
 test('reconnecting an OA supersedes an in-flight refresh without overwriting tokens',async()=>{
  const f=fixture(),owner=f.login('email:owner@example.com');
  await mocked(graph,()=>begin(f,owner).then(s=>callback(f,s)));
- f.sqlite.exec('UPDATE shop_channels SET expires_at=1');
- const old=f.sqlite.prepare('SELECT * FROM shop_channels').get();
+ f.sqlite.exec('UPDATE channels SET expires_at=1');
+ const old=f.sqlite.prepare('SELECT * FROM channels').get();
  const start=await begin(f,owner);
  const {publishZaloArticle}=await import('../src/channels.js');
  let unblock, entered;
@@ -158,19 +158,80 @@ test('reconnecting an OA supersedes an in-flight refresh without overwriting tok
   const rejected=assert.rejects(publishing,/thay đổi|kết nối lại/);
   await pending;
   assert.match((await callback(f,start)).headers.get('Location'),/connected=zalo/);
-  const newTokens=f.sqlite.prepare('SELECT * FROM shop_channels').get();
+  const newTokens=f.sqlite.prepare('SELECT * FROM channels').get();
   unblock();await rejected;
-  const row=f.sqlite.prepare('SELECT * FROM shop_channels').get();
+  const row=f.sqlite.prepare('SELECT * FROM channels').get();
   assert.equal(row.external_id,'222222');
   await publishZaloArticle(f.env,f.env.DB,row,{content:'After reconnect',images:['https://example.com/cover.png']});
-  assert.equal(row.access_token,newTokens.access_token);assert.equal(row.refresh_token,newTokens.refresh_token);assert.equal(publishToken,'OA2-access');
+  assert.equal(row.token,newTokens.token);assert.equal(row.refresh_token,newTokens.refresh_token);assert.equal(publishToken,'OA2-access');
  });f.sqlite.close();
 });
 test('unverified legacy connections are not shown connected and cannot publish',async()=>{
  const f=fixture(),owner=f.login('email:owner@example.com'),start=await begin(f,owner);
- try{await mocked(graph,()=>callback(f,start));f.sqlite.prepare('UPDATE shop_channels SET external_id=NULL,access_token=?,refresh_token=?').run(access,refresh);
+ try{await mocked(graph,()=>callback(f,start));f.sqlite.prepare('UPDATE channels SET external_id=NULL,token=?,refresh_token=?').run(access,refresh);
  const j=await (await f.req(owner,'/channels')).json();assert.equal(j.channels[0].status,'reauth_required');assert.equal(j.channels[0].needsReconnect,true);
  const {publishZaloArticle}=await import('../src/channels.js');
- await mocked(()=>{throw Error('must not publish');},async()=>{await assert.rejects(publishZaloArticle(f.env,f.env.DB,f.sqlite.prepare('SELECT * FROM shop_channels').get(),{content:'Test',images:['https://example.com/cover.png']}),/kết nối lại/);});
+ await mocked(()=>{throw Error('must not publish');},async()=>{await assert.rejects(publishZaloArticle(f.env,f.env.DB,f.sqlite.prepare('SELECT * FROM channels').get(),{content:'Test',images:['https://example.com/cover.png']}),/kết nối lại/);});
+ }finally{f.sqlite.close();}
+});
+
+test('disconnect Zalo deletes only current shop channel, invalidates in-flight OAuth and audits',async()=>{
+ const f=fixture(),owner=f.login('email:owner@example.com'),start=await begin(f,owner);
+ try{await mocked(graph,()=>callback(f,start));const shop=f.sqlite.prepare('SELECT shop_id FROM channels').get().shop_id;
+ const next=await begin(f,owner);
+ const result=await f.req(owner,'/channels/zalo','DELETE');assert.equal(result.status,200);
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM channels WHERE shop_id=?').get(shop).n,0);
+ assert.equal(f.sqlite.prepare("SELECT count(*) n FROM audit_log WHERE action='channels.disconnect' AND shop_id=?").get(shop).n,1);
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM channel_oauth_states WHERE shop_id=?').get(shop).n,0);
+ await mocked(graph,async()=>assert.match((await callback(f,next)).headers.get('Location'),/connect_error/));
+ }finally{f.sqlite.close();}
+});
+test('channel listing never selects token material',async()=>{
+ const f=fixture(),owner=f.login('email:owner@example.com');const queries=[];const original=f.env.DB.prepare;
+ f.env.DB.prepare=s=>{queries.push(s);return original(s);};
+ try{assert.equal((await f.req(owner,'/channels')).status,200);
+ const query=queries.find(s=>s.startsWith('SELECT provider, external_id'));
+ assert.ok(query);assert.doesNotMatch(query,/access_token|refresh_token/);
+ }finally{f.sqlite.close();}
+});
+
+test('Zalo publish persists one common job and honors 429 backoff without duplicate article creation',async()=>{
+ const f=fixture(),owner=f.login('email:zalo-jobs@example.com');await mocked(graph,()=>begin(f,owner).then(s=>callback(f,s)));
+ const post=()=>worker.fetch(new Request(base+'/channels/zalo/publish',{method:'POST',headers:{Cookie:owner,Origin:base,'Content-Type':'application/json','Idempotency-Key':'zalo-shared-backoff-123'},body:JSON.stringify({content:'Test',images:['https://example.com/cover.jpg']})}),f.env);
+ let creates=0;
+ try{await mocked(async url=>{creates++;return Response.json({error:-1,message:'rate limited'},{status:429});},async()=>{
+  assert.equal((await post()).status,429);assert.equal(creates,1);
+  const j=f.sqlite.prepare('SELECT * FROM publish_jobs').get();assert.equal(j.status,'retryable');assert.ok(j.next_attempt_at>now());
+  assert.equal((await post()).status,429);assert.equal(creates,1);
+ });}finally{f.sqlite.close();}
+});
+test('scheduled Zalo job must not silently target a different OA after reconnect',async()=>{
+ const f=fixture(),owner=f.login('email:zalo-target@example.com');await mocked(graph,()=>begin(f,owner).then(s=>callback(f,s)));
+ try{const r=await worker.fetch(new Request(base+'/channels/zalo/schedule',{method:'POST',headers:{Cookie:owner,Origin:base,'Content-Type':'application/json'},body:JSON.stringify({content:'Scheduled',images:['https://example.com/cover.jpg'],runAt:now()+60})}),f.env);
+ assert.equal(r.status,201);f.sqlite.exec("UPDATE channels SET external_id='999999';UPDATE publish_jobs SET next_attempt_at=0");
+ const {runDueScheduledPosts}=await import('../src/channels.js');
+ await mocked(()=>{throw Error('must not send to new OA');},()=>runDueScheduledPosts(f.env));
+ const j=f.sqlite.prepare('SELECT status,error_code FROM publish_jobs').get();assert.equal(j.status,'failed');assert.equal(j.error_code,'account_changed');
+ }finally{f.sqlite.close();}
+});
+
+test('legacy schedules are bound to their original OA before an OAuth replacement',async()=>{
+ const f=fixture(),owner=f.login('email:legacy-target@example.com');await mocked(graph,()=>begin(f,owner).then(s=>callback(f,s)));
+ try{const shop=f.sqlite.prepare('SELECT shop_id FROM channels').get().shop_id;
+ f.sqlite.prepare("INSERT INTO scheduled_posts(id,shop_id,provider,content,images,run_at,status) VALUES('legacy-before-reconnect',?,'zalo','Old OA content',?,0,'scheduled')").run(shop,JSON.stringify(['https://example.com/cover.jpg']));
+ const start=await begin(f,owner);
+ await mocked(async url=>String(url).includes('access_token')?graph(url):Response.json({error:0,data:{oa_id:'999999',name:'New OA'}}),()=>callback(f,start));
+ const {runDueScheduledPosts}=await import('../src/channels.js');
+ await mocked(()=>{throw Error('Must not send legacy content to replacement OA');},()=>runDueScheduledPosts(f.env));
+ const job=f.sqlite.prepare("SELECT status,error_code FROM publish_jobs WHERE id='legacy-before-reconnect'").get();assert.equal(job.status,'failed');assert.equal(job.error_code,'account_changed');
+ }finally{f.sqlite.close();}
+});
+
+test('unified account disconnect for Zalo also removes credential and invalidates OAuth',async()=>{
+ const f=fixture(),owner=f.login('email:unified-disconnect@example.com');await mocked(graph,()=>begin(f,owner).then(s=>callback(f,s)));
+ try{const id=f.sqlite.prepare('SELECT id FROM channels').get().id;await begin(f,owner);
+ assert.equal((await f.req(owner,'/channels/zalo/accounts/'+id,'DELETE')).status,200);
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM channels').get().n,0);
+ assert.equal(f.sqlite.prepare('SELECT count(*) n FROM channel_oauth_states').get().n,0);
  }finally{f.sqlite.close();}
 });

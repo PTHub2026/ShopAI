@@ -23,7 +23,7 @@ test('Meta schema migration matches runtime and never stores plaintext auth code
  sqlite.close();
 });
 test('Facebook Pages text and photo publish; Instagram requires an image and publishes media container',async()=>{
- const e=env(),enc=await encryptToken(e,token),a={provider:'facebook',target_id:'123456',token_ciphertext:enc.cipher,token_iv:enc.iv};
+ const e=env(),enc=await encryptToken(e,token),a={provider:'facebook',external_id:'123456',token:enc.cipher,token_iv:enc.iv};
  const fetch0=globalThis.fetch,requests=[];
  globalThis.fetch=async(url,options)=>{const u=new URL(url);requests.push({u,options});assert.equal(u.hostname,'graph.facebook.com');assert.equal(options.headers.Authorization,'Bearer '+token);assert.equal(u.searchParams.has('access_token'),false);const p=new URLSearchParams(options.body||'');assert.equal(p.has('access_token'),false);
  if(u.pathname.endsWith('/feed')){assert.equal(p.get('message'),'A test text');return Response.json({id:'post_1'});}
@@ -35,7 +35,7 @@ test('Facebook Pages text and photo publish; Instagram requires an image and pub
  try{
   assert.equal(await publishMeta(e,a,{kind:'text',payload:JSON.stringify({text:'A test text'})}),'post_1');
   assert.equal(await publishMeta(e,a,{kind:'photo',payload:JSON.stringify({text:'Caption',photoUrl:'https://example.com/photo.jpg'})}),'post_2');
-  const ig={...a,provider:'instagram',target_id:'987654'};
+  const ig={...a,provider:'instagram',external_id:'987654'};
   await assert.rejects(publishMeta(e,ig,{kind:'text',payload:JSON.stringify({text:'No picture'})}),/IG_REQUIRES_PHOTO/);
   assert.equal(await publishMeta(e,ig,{kind:'photo',payload:JSON.stringify({text:'Caption',photoUrl:'https://example.com/photo.jpg'})}),'ig_1');
   assert.deepEqual(requests.map(x=>x.u.pathname.split('/').at(-1)),['feed','photos','media','container_1','media_publish']);
@@ -47,7 +47,7 @@ test('OAuth callback refuses missing configuration before touching database',asy
 });
 
 test('Instagram never calls media_publish until container reaches FINISHED',async()=>{
- const e=env(),enc=await encryptToken(e,token),account={provider:'instagram',target_id:'987654',token_ciphertext:enc.cipher,token_iv:enc.iv};
+ const e=env(),enc=await encryptToken(e,token),account={provider:'instagram',external_id:'987654',token:enc.cipher,token_iv:enc.iv};
  const original=globalThis.fetch,called=[];
  globalThis.fetch=async(url)=>{
   const path=new URL(url).pathname.split('/').at(-1);called.push(path);

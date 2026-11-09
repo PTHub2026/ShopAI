@@ -387,7 +387,7 @@ const roleLabel=r=>SHOP.roles[r]||r||'—';
 const STATUS_VI={draft:'Bản nháp',pending_review:'Chờ duyệt',approved:'Đã duyệt'};
 const cloudReadOnly=()=>SHOP.ready&&!shopCan('drafts.create')&&!shopCan('drafts.edit_own')&&!shopCan('drafts.edit_any');
 function shopUse(s){SHOP.id=s.id;SHOP.name=s.name;SHOP.role=s.role;SHOP.roleLabel=typeof s.roleLabel==='string'&&s.roleLabel?s.roleLabel:roleLabel(s.role);SHOP.canPublish=s.canPublish===true;SHOP.permissions=Array.isArray(s.permissions)?s.permissions.filter(x=>typeof x==='string'):[];SHOP.status=typeof s.status==='string'?s.status:'active';try{LS.setItem('pdk_shop:'+(APP_SCOPE||'unverified'),s.id)}catch(e){}}
-function shopRefresh(){SHOP.members=[];SHOP.invites=[];SHOP.lastInvite=null;CLOUD.items=[];CLOUD.nextCursor=null;shopMenu();renderShopBox();render(route)}
+function shopRefresh(){stopJobWatch();REALCH=[];syncRealChannels();startJobWatch();channelsLoad();SHOP.members=[];SHOP.invites=[];SHOP.lastInvite=null;CLOUD.items=[];CLOUD.nextCursor=null;shopMenu();renderShopBox();render(route)}
 function shopMenu(){const cfg=MENU.find(g=>g[0]==='KHÁC');if(!cfg)return;const has=cfg[1].some(m=>m[0]==='admin');if(SHOP.admin&&!has)cfg[1].push(['admin','🧭','Quản trị nền tảng']);if(!SHOP.admin&&has)cfg[1]=cfg[1].filter(m=>m[0]!=='admin');navRender()}
 function renderShopBox(){const box=$('#shop_box'),m=$('#mshop');if(!box)return;if(!managedApp()){box.hidden=true;return}box.hidden=false;const opts=SHOP.shops.map(s=>`<option value="${esc(s.id)}" ${s.id===SHOP.id?'selected':''}>${esc(s.name)}</option>`).join('');
 const nm=esc(SHOP.name||'Shop'),av=esc(((SHOP.name||'S').trim().charAt(0))||'S'),chCount=(S.channels||[]).filter(c=>c.connected).length,isOwner=SHOP.role==='owner',crown='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 7l4 4 5-6 5 6 4-4v10H3Z"/></svg>';
@@ -661,9 +661,10 @@ async function aiScript(){try{const kw=$('#s_kw').value||$('#s_name').value;$('#
 // Telegram live channel management is separate from Shoppost login OAuth.
 async function socialRequest(path,options={}){
  const headers={...shopHeaders(),...(options.body?{'Content-Type':'application/json'}:{}),...(options.headers||{})};
- const r=await fetch('/api/social/'+path,{credentials:'same-origin',...options,headers});
+ const target=path==='providers'?'/channels/all/providers':path.startsWith('meta/')?'/channels/'+path:path==='accounts'&&options.method==='POST'?'/channels/telegram/connect':'/channels/all/'+path;
+ const r=await fetch(target,{credentials:'same-origin',...options,headers});
  const data=await r.json().catch(()=>({}));
- if(!r.ok)throw Error(data.error||data.code||'Không thể thực hiện thao tác');
+ if(!r.ok){const e=Error(data.error||data.job?.errorCode||data.code||'Không thể thực hiện thao tác');e.job=data.job;e.status=r.status;throw e;}
  return data;
 }
 async function socialAccountsLive(){
@@ -673,7 +674,7 @@ async function socialAccountsLive(){
   const shopAtStart=SHOP.id;
   const [accounts,jobs,providers,zalo]=await Promise.all([socialRequest('accounts'),socialRequest('jobs'),socialRequest('providers'),cloudRequest('/channels')]);
   if(location.hash!=='#accounts'||SHOP.id!==shopAtStart)return;
-  root.innerHTML=`<div class="card"><h3>Zalo OA</h3><p class="small muted">Đăng nhập tài khoản Zalo đang quản trị OA, chọn OA và xác nhận cấp quyền. Hệ thống tự lưu và làm mới phiên kết nối; không cần sao chép token.</p><button class="btn pri" onclick="zaloConnect()" ${zalo.setup?.zalo?.configured&&zalo.setup?.zalo?.canConnect?'':'disabled'}>Kết nối / cấp lại quyền Zalo OA</button>${!zalo.setup?.zalo?.configured?'<p class="small muted">Kết nối Zalo đang được quản trị viên cấu hình.</p>':''}${!zalo.setup?.zalo?.canConnect?'<p class="small muted">Chỉ chủ shop hoặc quản lý được kết nối OA.</p>':''}<p class="small muted">Nếu Zalo báo -14068, tài khoản hiện tại không có OA phù hợp. <a href="https://oa.zalo.me/manage/oa" target="_blank" rel="noopener">Kiểm tra OA của tôi</a> rồi đăng nhập tài khoản quản trị OA để kết nối lại.</p><p>${(zalo.channels||[]).filter(c=>c.provider==='zalo').map(c=>esc(c.name||'Zalo OA')+' · '+(c.needsReconnect?'Cần cấp quyền lại':c.status==='connected'?'Đã kết nối':'Chưa kết nối')).join(', ')||'Chưa có OA được kết nối cho shop này.'}</p></div><div class="card"><h3>Kết nối Facebook & Instagram</h3><p class="small muted">Ủy quyền qua Meta để cấp quyền đăng bài lên Facebook Page và Instagram Professional đã liên kết Page. Không hỗ trợ đăng trang cá nhân.</p><button class="btn pri" onclick="socialConnectMeta()" ${providers.facebook.enabled?"":"disabled title=\"Meta App chưa được cấu hình ở backend\""}>Kết nối Facebook / Instagram</button>${providers.facebook.enabled?"":"<p class=\"small muted\">Chưa có Meta App ID, App Secret hoặc Redirect URI hợp lệ trong backend staging.</p>"}</div><div class="card"><h3>Kết nối Telegram Bot thật</h3><p class="small muted">Bot phải được cấp quyền đăng trong nhóm hoặc kênh. Token chỉ gửi tới máy chủ và không hiển thị lại.</p>
+  root.innerHTML=`<div class="card"><h3>Zalo OA</h3><p class="small muted">Đăng nhập tài khoản Zalo đang quản trị OA, chọn OA và xác nhận cấp quyền. Hệ thống tự lưu và làm mới phiên kết nối; không cần sao chép token.</p><button class="btn pri" onclick="zaloConnect()" ${zalo.setup?.zalo?.configured&&zalo.setup?.zalo?.canConnect?'':'disabled'}>Kết nối / cấp lại quyền Zalo OA</button>${!zalo.setup?.zalo?.configured?'<p class="small muted">Kết nối Zalo đang được quản trị viên cấu hình.</p>':''}${!zalo.setup?.zalo?.canConnect?'<p class="small muted">Chỉ chủ shop hoặc quản lý được kết nối OA.</p>':''}<p class="small muted">Nếu Zalo báo -14068, tài khoản hiện tại không có OA phù hợp. <a href="https://oa.zalo.me/manage/oa" target="_blank" rel="noopener">Kiểm tra OA của tôi</a> rồi đăng nhập tài khoản quản trị OA để kết nối lại.</p>${(zalo.channels||[]).some(c=>c.provider==='zalo')&&zalo.setup?.zalo?.canConnect?'<button class="btn danger" onclick="zaloDisconnect()">Ngắt kết nối Zalo OA</button>':''}<p>${(zalo.channels||[]).filter(c=>c.provider==='zalo').map(c=>esc(c.name||'Zalo OA')+' · '+(c.needsReconnect?'Cần cấp quyền lại':c.status==='connected'?'Đã kết nối':'Chưa kết nối')).join(', ')||'Chưa có OA được kết nối cho shop này.'}</p></div><div class="card"><h3>Kết nối Facebook & Instagram</h3><p class="small muted">Ủy quyền qua Meta để cấp quyền đăng bài lên Facebook Page và Instagram Professional đã liên kết Page. Không hỗ trợ đăng trang cá nhân.</p><button class="btn pri" onclick="socialConnectMeta()" ${providers.facebook.enabled?"":"disabled title=\"Meta App chưa được cấu hình ở backend\""}>Kết nối Facebook / Instagram</button>${providers.facebook.enabled?"":"<p class=\"small muted\">Chưa có Meta App ID, App Secret hoặc Redirect URI hợp lệ trong backend staging.</p>"}</div><div class="card"><h3>Kết nối Telegram Bot thật</h3><p class="small muted">Bot phải được cấp quyền đăng trong nhóm hoặc kênh. Token chỉ gửi tới máy chủ và không hiển thị lại.</p>
   <label>Telegram Bot Token</label><input id="tg_token" type="password" autocomplete="off" placeholder="Bot Token từ BotFather">
   <label>Chat ID hoặc @channelusername</label><input id="tg_chat" placeholder="@kenh_cua_ban">
   <div class="row" style="margin-top:10px"><button class="btn pri" onclick="socialConnectTelegram()">Kết nối Telegram</button><button class="btn" onclick="socialAccountsLive()">Làm mới</button></div></div>
@@ -683,11 +684,46 @@ async function socialAccountsLive(){
   <label>Nội dung</label><textarea id="tg_text" placeholder="Nội dung đăng thử nghiệm"></textarea>
   <label>Ảnh HTTPS công khai (không bắt buộc)</label><input id="tg_photo" placeholder="https://example.com/image.jpg">
   <button class="btn pri" onclick="socialPublishTelegram()">Đăng lên kênh đã chọn</button>
-  <p class="small muted">Instagram yêu cầu ảnh HTTPS. Facebook Page có thể đăng văn bản hoặc ảnh. Chỉ đăng sau khi bạn xác nhận, không có đăng tự động.</p></div>
-  <div class="card"><h3>Lịch sử 50 bài gần nhất</h3>${jobs.jobs.map(j=>`<div class="ch"><div style="flex:1"><b>${esc(j.kind)}</b><div class="small muted">${esc(j.status)} · ${esc(j.id)} · ${j.attempts} lần</div></div>${j.status==='retryable'?`<button class="btn sm" onclick="socialRetryTelegram('${escAttr(j.id)}')">Thử lại</button>`:''}</div>`).join('')||'<p>Chưa có bài đăng.</p>'}</div>
+  <p class="small muted">Zalo và Instagram yêu cầu ảnh HTTPS. Facebook Page có thể đăng văn bản hoặc ảnh. Chỉ đăng sau khi bạn xác nhận, không có đăng tự động.</p></div>
+  <div class="card"><h3>Lịch sử đăng bài</h3><div id="live_job_history">${jobHistoryHtml(jobs.jobs)}</div></div>
   <div class="card small muted">TikTok và các mạng khác chưa được cấp API đăng bài thật; không hiển thị kết nối giả.</div>`;
  }catch(e){if(location.hash==='#accounts')root.innerHTML='<div class="card"><h3>Không tải được kênh thật</h3><p>'+esc(e.message)+'</p><button class="btn" onclick="socialAccountsLive()">Thử lại</button></div>';}
 }
+async function zaloDisconnect(){
+ if(!confirm('Ngắt kết nối Zalo OA và hủy các bài đang chờ đăng?'))return;
+ try{await cloudRequest('/channels/zalo',{method:'DELETE'});await channelsLoad();toast('Đã ngắt kết nối Zalo OA');}catch(e){toast(e.message);}
+}
+function jobHistoryHtml(jobs){return jobs.map(j=>`<div class="ch"><div style="flex:1"><b>${esc(j.provider||j.kind)}</b><div class="small muted">${esc(j.status)} · ${esc(j.id)} · ${j.attempts} lần${j.errorCode?' · '+esc(j.errorCode):''}</div></div>${j.status==='retryable'?`<button class="btn sm" onclick="socialRetryTelegram('${escAttr(j.id)}')">Thử lại</button>`:''}</div>`).join('')||'<p>Chưa có bài đăng.</p>';}
+function applyPublishJobs(jobs,shop){
+ if(SHOP.id!==shop)return;
+ const history=$('#live_job_history');if(history)history.innerHTML=jobHistoryHtml(jobs);
+ const byId=new Map(jobs.map(j=>[j.id,j]));let changed=false;
+ for(const post of S.posts){const j=byId.get(post.schedId);if(!j)continue;
+  const status=({sent:'published',pending:'scheduled',retryable:'scheduled',sending:'processing',unknown:'unknown',failed:'failed'})[j.status];
+  if(status&&post.status!==status){post.status=status;post.error=j.errorCode||null;if(j.url)post.url=j.url;changed=true;}
+ }
+ if(changed){save();if(route==='posts'||route==='calendar')render();}
+}
+let JOB_WATCH=null;
+function stopJobWatch(){if(JOB_WATCH)JOB_WATCH.abort();JOB_WATCH=null;}
+async function startJobWatch(){
+ stopJobWatch();if(!managedApp()||!SHOP.ready||!SHOP.id||document.hidden||window.QA_RUNNING)return;
+ const controller=new AbortController(),shop=SHOP.id;JOB_WATCH=controller;let cursor='';
+ while(!controller.signal.aborted&&SHOP.id===shop&&!document.hidden){
+  try{
+   const r=await cloudRequest('/channels/all/jobs/events?wait=20&cursor='+encodeURIComponent(cursor),{signal:controller.signal});
+   if(controller.signal.aborted||SHOP.id!==shop)return;
+   if(typeof r.cursor!=='string'||!Array.isArray(r.jobs))throw Error('Không nhận được trạng thái đăng bài.');
+   cursor=r.cursor;if(r.changed)applyPublishJobs(r.jobs,shop);
+  }catch(e){
+   if(controller.signal.aborted||[401,403,404].includes(e.status))return;
+   await new Promise(resolve=>{const done=()=>{clearTimeout(timer);controller.signal.removeEventListener('abort',done);resolve();};const timer=setTimeout(done,5000);controller.signal.addEventListener('abort',done,{once:true});});
+  }
+ }
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopJobWatch();else startJobWatch();});
+window.addEventListener('pagehide',stopJobWatch);
+
 async function socialConnectMeta(){
  try{const result=await socialRequest('meta/start',{method:'POST',body:'{}'});const uri=new URL(result.authorizationUrl);if(uri.protocol!=='https:'||uri.hostname!=='www.facebook.com')throw Error('Đường dẫn xác thực không hợp lệ');window.location.assign(uri.toString());}
  catch(e){toast('Không thể kết nối Meta: '+e.message);}
@@ -705,12 +741,12 @@ async function socialPublishTelegram(){
  const accountId=$('#tg_account')?.value,text=$('#tg_text')?.value||'',photoUrl=$('#tg_photo')?.value.trim()||'';
  const selected=$('#tg_account')?.selectedOptions?.[0]?.dataset?.provider||'';
  if(!accountId||(!text.trim()&&!photoUrl))return toast('Chọn kênh và nhập nội dung');
- if(selected==='instagram'&&!photoUrl)return toast('Instagram yêu cầu URL ảnh HTTPS');
+ if(['instagram','zalo'].includes(selected)&&!photoUrl)return toast('Kênh này yêu cầu URL ảnh HTTPS');
  if(!confirm('Xác nhận đăng bài thật lên nền tảng đã chọn?'))return;
  const button=document.querySelector('#view button[onclick="socialPublishTelegram()"]');if(button)button.disabled=true;
  // Keep the same key for a retry within this page; accidental clicks will not duplicate.
  const key=window.socialPendingKey||(window.socialPendingKey=crypto.randomUUID());
- try {const result=await socialRequest('jobs',{method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify({accountId,kind:photoUrl?'photo':'text',text,photoUrl})});window.socialPendingKey=null;toast('Nền tảng đã xác nhận bài đăng '+result.job.remoteMessageId);socialAccountsLive();}
+ try {const result=await socialRequest('jobs',{method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify({accountId,kind:photoUrl?'photo':'text',text,photoUrl,...(selected==='zalo'?{images:[photoUrl]}:{})})});window.socialPendingKey=null;toast('Nền tảng đã xác nhận bài đăng '+result.job.remoteMessageId);socialAccountsLive();}
  catch(e){toast('Chưa xác nhận đăng thành công: '+e.message+' — kiểm tra lịch sử trước khi thử lại');if(button)button.disabled=false;}
 }
 async function socialRetryTelegram(id){try{await socialRequest('jobs/'+encodeURIComponent(id)+'/retry',{method:'POST'});toast('Đã gửi lại');socialAccountsLive();}catch(e){toast(e.message);socialAccountsLive();}}
@@ -721,11 +757,11 @@ function setConn(id,v){if(!demoAction())return;chById(id).connected=v;if(!v)D.ch
 function connectPf(pf){if(managedApp()&&pf==='zalo')return zaloConnect();if(!demoAction())return;if(!PF[pf])return;S.channels.push({id:'c'+uid(),pf,name:PF[pf].n,handle:'',connected:true});save();V.accounts();toast('Đã kết nối (mô phỏng)')}
 // ===== Kênh THẬT (hiện có Zalo OA). REALCH giữ danh sách kênh đã kết nối thật lấy từ máy chủ. =====
 let REALCH=[];
-async function channelsLoad(){if(!managedApp()||!APP_SCOPE||!SHOP.ready)return;try{const r=await cloudRequest('/channels');REALCH=Array.isArray(r&&r.channels)?r.channels.filter(c=>c&&c.status==='connected'):[]}catch(e){REALCH=[]}syncRealChannels();if(route==='accounts'||route==='create')render()}
+async function channelsLoad(){if(!managedApp()||!APP_SCOPE||!SHOP.ready)return;try{const shop=SHOP.id;const r=await cloudRequest('/channels');if(SHOP.id!==shop)return;REALCH=Array.isArray(r&&r.channels)?r.channels.filter(c=>c&&c.status==='connected'):[]}catch(e){REALCH=[]}syncRealChannels();if(route==='accounts'||route==='create')render()}
 function syncRealChannels(){S.channels=S.channels.filter(c=>!(c&&c.real));for(const rc of REALCH){if(rc.provider!=='zalo')continue;S.channels.push({id:'real_'+rc.provider,pf:rc.provider,name:rc.name||(PF[rc.provider]&&PF[rc.provider].n)||'Zalo OA',handle:rc.oa_id?('OA ID: '+rc.oa_id):'',connected:true,real:true,provider:rc.provider,status:rc.status})}}
 function zaloConnect(){if(!managedApp())return demoAction();if(!SHOP.ready||!SHOP.id)return toast('Hãy chọn shop trước khi kết nối kênh.');toast('Đang chuyển sang Zalo để cấp quyền...');location.href='/channels/zalo/connect?shop='+encodeURIComponent(SHOP.id)}
-async function zaloPublishDraft(content,title,images){return cloudRequest('/channels/zalo/publish',{method:'POST',body:JSON.stringify({content,title:title||'',images:images||[]})})}
-async function zaloScheduleDraft(content,images,runAt){return cloudRequest('/channels/zalo/schedule',{method:'POST',body:JSON.stringify({content,title:'',images:images||[],runAt})})}
+async function zaloPublishDraft(content,title,images){return cloudRequest('/channels/zalo/publish',{method:'POST',headers:{'Idempotency-Key':D.publishKey||(D.publishKey=crypto.randomUUID())},body:JSON.stringify({content,title:title||'',images:images||[]})})}
+async function zaloScheduleDraft(content,images,runAt){return cloudRequest('/channels/zalo/schedule',{method:'POST',headers:{'Idempotency-Key':D.scheduleKey||(D.scheduleKey=crypto.randomUUID())},body:JSON.stringify({content,title:'',images:images||[],runAt})})}
 // Ảnh gửi tới backend: lấy bản thu nhỏ (data URL JPEG < 1MB) của media ảnh trong bản nháp/bài, tối đa 4 ảnh.
 function realImages(media){return (media||[]).filter(m=>m&&(m.type||'').startsWith('image')&&m.thumb).map(m=>m.thumb).slice(0,4)}
 async function submitPostReal(chs){const content=(D.content||'').trim();const realChs=chs.filter(id=>{const c=chById(id);return c&&c.real&&c.provider==='zalo'});const images=realImages(D.media);if(!images.length)return toast('Bài viết Zalo cần ảnh bìa. Hãy thêm ảnh vào bài viết.');const mediaMeta=D.media.map(({name,type,size,thumb,assetId})=>({name,type,size,thumb,assetId}));const custom={};chs.forEach(id=>{if(D.custom[id])custom[id]={...D.custom[id]}});
@@ -1139,9 +1175,9 @@ ${groups.map(g=>`<div class="card"><h3>${esc(g)} <span class="tag">${r.filter(x=
 let _schedTick=0;
 function tick(){let ch=false;if(!managedApp()||window.QA_RUNNING)S.posts.forEach(p=>{if(p.status==='scheduled'&&p.time<=Date.now()){if(p.channels.map(chById).some(c=>!c||!c.connected)){p.status='failed';p.error='Kênh đã ngắt kết nối'}else publish(p);ch=true}});if(ch){save();toast('Đã xử lý bài đến giờ đăng');if(route==='posts'||route==='calendar')render()}
 // Lịch đăng kênh thật do cron máy chủ xử lý: định kỳ (~60s) đồng bộ trạng thái về giao diện.
-if(managedApp()&&APP_SCOPE&&!window.QA_RUNNING&&(++_schedTick%4===0))scheduledLoad();
+
 $('#clock').textContent=new Date().toLocaleString('vi-VN',{weekday:'short',hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'})}
 try{if(LS.getItem('pdk_sb_collapsed')==='1')document.querySelector('.app')?.classList.add('sb-collapsed')}catch(e){}
-setInterval(tick,15000);tick();renderProjects();if(managedApp()){addLogoutButton();shopInit().then(()=>channelsLoad()).then(()=>scheduledLoad()).catch(()=>{})}render(location.hash.slice(1)||'create');try{const q=new URLSearchParams(location.search);if(q.get('connected')==='zalo')toast('Đã kết nối Zalo OA thành công.');else if(q.get('connect_error')==='zalo'){const messages={session_expired:'Phiên cấp quyền đã hết hạn. Bấm kết nối Zalo OA để thử lại.',account_changed:'Tài khoản Shoppost đã thay đổi. Hãy kết nối lại OA.',oa_unavailable:'Zalo chưa cho phép đọc thông tin OA. Kiểm tra quyền quản trị OA và cấp lại quyền.'};toast(messages[q.get('connect_reason')]||'Chưa kết nối được OA. Kiểm tra tài khoản quản trị và thử lại.');}if(q.has('connected')||q.has('connect_error')){q.delete('connected');q.delete('connect_error');q.delete('connect_reason');history.replaceState(null,'',location.pathname+(q.toString()?'?'+q.toString():'')+location.hash)}}catch(e){}bootStorage().then(()=>{if(LS._mem&&!IDB.db){const b=document.createElement('div');b.id='storewarn';b.setAttribute('role','alert');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:60;background:#fff7e6;border-top:1px solid #f5c26b;padding:8px 14px;font-size:13px;display:flex;gap:10px;align-items:center;justify-content:space-between';b.innerHTML='<span>⚠️ Trình duyệt đang <b>chặn lưu trữ</b> trong khung nhúng này: dữ liệu và nháp sẽ <b>mất khi tải lại trang</b>. Để lưu lâu dài, tải file <code>shoppost.html</code> về máy rồi mở bằng Chrome (hoặc đưa lên hosting riêng).</span><button class="btn sm" onclick="this.parentNode.remove()">Đã hiểu</button>';document.body.appendChild(b)}});
+setInterval(tick,15000);tick();renderProjects();if(managedApp()){addLogoutButton();shopInit().then(()=>channelsLoad()).then(()=>scheduledLoad()).then(()=>startJobWatch()).catch(()=>{})}render(location.hash.slice(1)||'create');try{const q=new URLSearchParams(location.search);if(q.get('connected')==='zalo')toast('Đã kết nối Zalo OA thành công.');else if(q.get('connect_error')==='zalo'){const messages={session_expired:'Phiên cấp quyền đã hết hạn. Bấm kết nối Zalo OA để thử lại.',account_changed:'Tài khoản Shoppost đã thay đổi. Hãy kết nối lại OA.',oa_unavailable:'Zalo chưa cho phép đọc thông tin OA. Kiểm tra quyền quản trị OA và cấp lại quyền.'};toast(messages[q.get('connect_reason')]||'Chưa kết nối được OA. Kiểm tra tài khoản quản trị và thử lại.');}if(q.has('connected')||q.has('connect_error')){q.delete('connected');q.delete('connect_error');q.delete('connect_reason');history.replaceState(null,'',location.pathname+(q.toString()?'?'+q.toString():'')+location.hash)}}catch(e){}bootStorage().then(()=>{if(LS._mem&&!IDB.db){const b=document.createElement('div');b.id='storewarn';b.setAttribute('role','alert');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:60;background:#fff7e6;border-top:1px solid #f5c26b;padding:8px 14px;font-size:13px;display:flex;gap:10px;align-items:center;justify-content:space-between';b.innerHTML='<span>⚠️ Trình duyệt đang <b>chặn lưu trữ</b> trong khung nhúng này: dữ liệu và nháp sẽ <b>mất khi tải lại trang</b>. Để lưu lâu dài, tải file <code>shoppost.html</code> về máy rồi mở bằng Chrome (hoặc đưa lên hosting riêng).</span><button class="btn sm" onclick="this.parentNode.remove()">Đã hiểu</button>';document.body.appendChild(b)}});
 </script></body></html>
 

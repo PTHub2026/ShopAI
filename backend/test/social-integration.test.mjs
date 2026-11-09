@@ -64,7 +64,7 @@ test('Telegram live: per-shop permissions, idempotency, revoked credentials and 
   assert.equal((await f.request(other,'/api/social/accounts',{shop:currentShop,method:'POST',body:{token:botToken,chatId:'@testchannel'}})).status,403);
   assert.equal((await f.request(owner,'/api/social/accounts/'+account.id,{method:'DELETE'})).status,200);
   assert.equal((await f.request(owner,'/api/social/accounts')).data.accounts[0].status,'revoked');
-  assert.equal(f.db.sqlite.prepare('SELECT token_ciphertext FROM social_accounts WHERE id=?').get(account.id).token_ciphertext,'');
+  assert.equal(f.db.sqlite.prepare('SELECT token FROM channels WHERE id=?').get(account.id).token,'');
   assert.equal((await f.request(owner,'/api/social/jobs',{method:'POST',idem:'after-revoke-1234',body:message})).status,404);
  });
  f.db.sqlite.close();
@@ -105,4 +105,41 @@ test('Telegram malformed success remains unknown and cannot be retried',async()=
   assert.equal((await f.request(owner,'/api/social/jobs/'+result.data.job.id+'/retry',{method:'POST'})).status,409);
   assert.equal(calls,1);
  });}finally{f.db.sqlite.close();}
+});
+
+test('unified channel API stores Telegram in channels and schedules into common publish_jobs',async()=>{
+ const f=fixture(),owner=f.login('email:unified@example.com');
+ await fakeTelegram(()=>Response.json({ok:true,result:{message_id:123}}),async()=>{
+  const r=await f.request(owner,'/channels/telegram/connect',{method:'POST',body:{token:botToken,chatId:'@testchannel'}});assert.equal(r.status,201);
+  const list=await f.request(owner,'/channels/telegram/accounts');assert.equal(list.status,200);const a=list.data.accounts[0];
+  assert.equal(f.db.sqlite.prepare('SELECT provider FROM channels WHERE id=?').get(a.id).provider,'telegram');
+  const queued=await f.request(owner,'/channels/telegram/schedule',{method:'POST',idem:'unified-scheduled-123',body:{accountId:a.id,kind:'text',text:'Due soon',runAt:now()+60}});
+  assert.equal(queued.status,201);assert.equal(queued.data.job.status,'pending');
+  f.db.sqlite.prepare('UPDATE publish_jobs SET next_attempt_at=0 WHERE id=?').run(queued.data.job.id);
+  const {runDueScheduledPosts}=await import('../src/channels.js');await runDueScheduledPosts(f.env);
+  assert.equal(f.db.sqlite.prepare('SELECT status FROM publish_jobs WHERE id=?').get(queued.data.job.id).status,'sent');
+ });
+});
+test('unified API rejects cross-provider publish and Instagram text without remote sends',async()=>{
+ const f=fixture(),owner=f.login('email:unified-validate@example.com');
+ await fakeTelegram(()=>{throw Error('Must not send');},async()=>{
+  await connect(f.request,owner);const a=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
+  const r=await f.request(owner,'/channels/facebook/publish',{method:'POST',idem:'provider-mismatch-123',body:{accountId:a.id,kind:'text',text:'Wrong provider'}});assert.equal(r.status,404);
+ });
+});
+
+test('job long-poll returns a shop-scoped cursor and detects changes without exposing payload or token',async()=>{
+ const f=fixture(),owner=f.login('email:events@example.com'),other=f.login('email:events-other@example.com');
+ await fakeTelegram(()=>Response.json({ok:true,result:{message_id:88}}),async()=>{
+  await connect(f.request,owner);const a=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
+  await f.request(owner,'/channels/telegram/schedule',{method:'POST',idem:'events-test-key-123',body:{accountId:a.id,kind:'text',text:'PRIVATE PAYLOAD',runAt:now()+500}});
+  const first=await f.request(owner,'/channels/all/jobs/events?wait=0');assert.equal(first.status,200);assert.equal(first.data.jobs.length,1);assert.ok(first.data.cursor);
+  assert.equal(JSON.stringify(first.data).includes('PRIVATE PAYLOAD'),false);assert.equal(JSON.stringify(first.data).includes(botToken),false);
+  const initial=first.data.cursor;
+  setTimeout(()=>f.db.sqlite.prepare("UPDATE publish_jobs SET status='sent',remote_message_id='88' WHERE id=?").run(first.data.jobs[0].id),20);
+  const next=await f.request(owner,'/channels/all/jobs/events?wait=2&cursor='+initial);assert.equal(next.status,200);assert.notEqual(next.data.cursor,initial);assert.equal(next.data.jobs[0].status,'sent');
+  const isolated=await f.request(other,'/channels/all/jobs/events?wait=0');assert.equal(isolated.data.jobs.length,0);
+  const shop=(await f.request(owner,'/session')).data.shop.id;
+  assert.equal((await f.request(other,'/channels/all/jobs/events?wait=0',{shop})).status,404);
+ });
 });

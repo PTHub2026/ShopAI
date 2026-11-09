@@ -4,6 +4,7 @@ import { handleAuth, loginResponse, normalizeEmail, sessionFromRequest } from '.
 import { INVITE_PATH, handleApi, resolveShop } from './shops.js';
 import { channels, zaloCallback, runDueScheduledPosts, publicZaloMedia } from './channels.js';
 import { isPlatformAdmin } from './permissions.js';
+import { legalResponse } from './legal.js';
 const INVITE_COOKIE = '__Host-shopai_invite';
 const LOGIN_REQUIRED = 'Phiên đăng nhập đã hết hạn hoặc chưa đăng nhập.';
 const TASKS = new Set(['generate', 'improve', 'adapt', 'reply']);
@@ -73,6 +74,8 @@ export default {
     if (origin && origin !== new URL(request.url).origin && !allowed.includes(origin)) return json({ error: 'Nguồn truy cập không được phép.' }, 403);
     const path = new URL(request.url).pathname;
     if(path.startsWith('/media/zalo/'))return publicZaloMedia(request,env);
+    const legal = legalResponse(path, request.method);
+    if (legal) return legal;
     if (path.startsWith('/storage/')) {
       // Bản nháp chỉ phục vụ cùng origin: chặn mọi origin khác (kể cả origin trong danh sách CORS) cho cả đọc lẫn ghi.
       if (origin && origin !== new URL(request.url).origin) return json({ error: 'Chỉ cho phép truy cập bản nháp từ cùng origin.' }, 403);

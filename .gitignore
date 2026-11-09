@@ -1,3 +1,5 @@
 backend/dist/
 backend/.wrangler/
 node_modules/
+backend/${HOME}
+backend/.wrangler

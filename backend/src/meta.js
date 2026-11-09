@@ -37,14 +37,14 @@ async function graphRequest(e,path,token,fields={},method='GET'){
  return data;
 }
 export async function publishMeta(e,account,job){
- const token=await decryptToken(e,account.token_ciphertext,account.token_iv);
+ const token=await decryptToken(e,account.token,account.token_iv);
  const p=JSON.parse(job.payload);
  if(account.provider==='facebook'){
   if(job.kind==='text'){
-   const r=await graphRequest(e,encodeURIComponent(account.target_id)+'/feed',token,{message:p.text},'POST');
+   const r=await graphRequest(e,encodeURIComponent(account.external_id)+'/feed',token,{message:p.text},'POST');
    if(!r.id)throw Error('META_MISSING_ID');return String(r.id);
   }
-  const r=await graphRequest(e,encodeURIComponent(account.target_id)+'/photos',token,{url:p.photoUrl,caption:p.text},'POST');
+  const r=await graphRequest(e,encodeURIComponent(account.external_id)+'/photos',token,{url:p.photoUrl,caption:p.text},'POST');
   if(!r.post_id&&!r.id)throw Error('META_MISSING_ID');return String(r.post_id||r.id);
  }
  if(account.provider==='instagram'){
@@ -52,7 +52,7 @@ export async function publishMeta(e,account,job){
   // Container creation is not publishing; once the publish call starts, network uncertainty is not retried.
   let container=job.id?await e.DB.prepare('SELECT container_id AS id FROM meta_publish_containers WHERE job_id=? AND shop_id=?').bind(job.id,job.shop_id).first():null;
   if(!container){
-   container=await graphRequest(e,encodeURIComponent(account.target_id)+'/media',token,{image_url:p.photoUrl,caption:p.text},'POST');
+   container=await graphRequest(e,encodeURIComponent(account.external_id)+'/media',token,{image_url:p.photoUrl,caption:p.text},'POST');
    if(!container.id)throw Error('META_MISSING_CONTAINER');
    if(job.id)await e.DB.prepare('INSERT INTO meta_publish_containers(job_id,shop_id,container_id) VALUES(?,?,?)').bind(job.id,job.shop_id,String(container.id)).run();
   }
@@ -65,9 +65,9 @@ export async function publishMeta(e,account,job){
    throw Error('IG_MEDIA_UNAVAILABLE');
   }
   let publish;
-  try{publish=await graphRequest(e,encodeURIComponent(account.target_id)+'/media_publish',token,{creation_id:String(container.id)},'POST');}
+  try{publish=await graphRequest(e,encodeURIComponent(account.external_id)+'/media_publish',token,{creation_id:String(container.id)},'POST');}
   // A publish attempt must never become retryable, even if Graph sends Retry-After.
-  catch(err){err.retryAfter=0;throw err;}
+  catch(err){err.deliveryUncertain=true;throw err;}
   if(!publish.id)throw Error('META_MISSING_ID');return String(publish.id);
  }
  throw Error('UNSUPPORTED_PROVIDER');
@@ -75,7 +75,7 @@ export async function publishMeta(e,account,job){
 export function metaDenied(e){return e?.status===401||e?.code===190||e?.code===10||e?.code===200;}
 async function saveAccount(db,env,who,shop,provider,item,token){
  const t=stamp(),secret=await encryptToken(env,token),id='sa_'+crypto.randomUUID();
- await db.prepare("INSERT INTO social_accounts(id,shop_id,provider,display_name,target_id,token_ciphertext,token_iv,status,connected_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',?,?,?) ON CONFLICT(shop_id,provider,target_id) DO UPDATE SET display_name=excluded.display_name,token_ciphertext=excluded.token_ciphertext,token_iv=excluded.token_iv,status='active',updated_at=excluded.updated_at")
+ await db.prepare("INSERT INTO channels(id,shop_id,provider,name,external_id,token,token_iv,status,connected_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'connected',?,?,?) ON CONFLICT(shop_id,provider,external_id) DO UPDATE SET name=excluded.name,token=excluded.token,token_iv=excluded.token_iv,status='connected',updated_at=excluded.updated_at")
  .bind(id,shop,provider,String(item.name||item.username||provider).slice(0,80),String(item.id),secret.cipher,secret.iv,who.owner,t,t).run();
  await audit(db,{shopId:shop,actor:who.owner,action:'social.connect',target:String(item.id),detail:{provider}});
 }

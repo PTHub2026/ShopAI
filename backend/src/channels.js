@@ -95,6 +95,7 @@ async function ensureChannelsSchema(db) {
   await db.prepare(SCHEDULED_INDEX).run();
   await db.prepare(STATE_SCHEMA).run();
   await db.prepare(REFRESH_SCHEMA).run();
+  await db.prepare('CREATE TABLE IF NOT EXISTS channel_connection_generations(shop_id TEXT NOT NULL,provider TEXT NOT NULL,generation INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(shop_id,provider))').run();
   await db.prepare('CREATE TABLE IF NOT EXISTS channel_public_media (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, mime TEXT NOT NULL, body BLOB NOT NULL, created_at INTEGER NOT NULL)').run();
   schemaReady.add(db);
 }
@@ -128,14 +129,14 @@ async function getOaInfo(accessToken) {
   return fetchJson(ZALO_GETOA, { method: 'GET', headers: { access_token: accessToken } });
 }
 
-async function upsertChannel(db,env, { shopId, provider, externalId, name, accessToken, refreshToken, expiresAt, connectedBy, expected }) {
+async function upsertChannel(db,env, { shopId, provider, externalId, name, accessToken, refreshToken, expiresAt, connectedBy, expected, generation }) {
   const t = now();
   accessToken=await protectToken(env,shopId,'access',accessToken);
   refreshToken=await protectToken(env,shopId,'refresh',refreshToken);
   const saved=await db.prepare(
-    'INSERT INTO channels (shop_id, provider, external_id, name, token, refresh_token, expires_at, status, connected_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+    'INSERT INTO channels (shop_id, provider, external_id, name, token, refresh_token, expires_at, status, connected_by, created_at, updated_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT generation FROM channel_connection_generations WHERE shop_id=? AND provider=?)=? ' +
     'ON CONFLICT(shop_id, provider) WHERE provider=\'zalo\' DO UPDATE SET external_id = excluded.external_id, name = excluded.name, token = excluded.token, refresh_token = excluded.refresh_token, expires_at = excluded.expires_at, status = excluded.status, connected_by = excluded.connected_by, created_at = excluded.created_at, updated_at = excluded.updated_at WHERE channels.token IS ? AND channels.refresh_token IS ? AND channels.external_id IS ?'
-  ).bind(shopId, provider, externalId, name, accessToken, refreshToken, expiresAt, 'connected', connectedBy, t, t, expected?.token??null,expected?.refresh_token??null,expected?.external_id??null).run();
+  ).bind(shopId, provider, externalId, name, accessToken, refreshToken, expiresAt, 'connected', connectedBy, t, t,shopId,provider,generation, expected?.token??null,expected?.refresh_token??null,expected?.external_id??null).run();
   if(saved.meta.changes!==1)throw Error('Kết nối OA đã thay đổi. Hãy kết nối lại.');
 }
 async function persistTokens(db, env, shopId, provider, { accessToken, refreshToken, expiresAt }, expected) {
@@ -300,6 +301,7 @@ export async function channels(request, env, who, json) {
     await ensureSocialSchema(env.DB);
     const legacy=await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='shop_channels'").first();
     await env.DB.batch([
+      env.DB.prepare("INSERT INTO channel_connection_generations(shop_id,provider,generation) VALUES(?,'zalo',1) ON CONFLICT(shop_id,provider) DO UPDATE SET generation=generation+1").bind(ctx.shop.id),
       ...(legacy?[env.DB.prepare('DELETE FROM shop_channels WHERE shop_id=? AND provider=?').bind(ctx.shop.id,'zalo')]:[]),
       env.DB.prepare("UPDATE publish_jobs SET status='failed',error_code='account_revoked',updated_at=? WHERE shop_id=? AND account_id IN (SELECT id FROM channels WHERE shop_id=? AND provider='zalo') AND status IN ('pending','retryable')").bind(now(),ctx.shop.id,ctx.shop.id),
       env.DB.prepare('DELETE FROM channels WHERE shop_id=? AND provider=?').bind(ctx.shop.id,'zalo'),
@@ -327,7 +329,9 @@ export async function channels(request, env, who, json) {
     await env.DB.prepare('DELETE FROM channel_oauth_states WHERE expires_at<=?').bind(now()).run();
     await env.DB.prepare('INSERT INTO channel_oauth_states(state,actor,shop_id,expires_at) VALUES(?,?,?,?)').bind(state,who.owner,ctx.shop.id,now()+CONNECT_TTL).run();
     const redirectUri = url.origin + '/auth/zalo/callback';
-    const sealed = await sealCookie(env, { v: verifier, st: state, sid: ctx.shop.id, u: who.owner, exp: now() + CONNECT_TTL });
+    await env.DB.prepare("INSERT OR IGNORE INTO channel_connection_generations(shop_id,provider,generation) VALUES(?,'zalo',0)").bind(ctx.shop.id).run();
+    const generation=await env.DB.prepare("SELECT generation FROM channel_connection_generations WHERE shop_id=? AND provider='zalo'").bind(ctx.shop.id).first();
+    const sealed = await sealCookie(env, { g:generation.generation,v: verifier, st: state, sid: ctx.shop.id, u: who.owner, exp: now() + CONNECT_TTL });
     const target = ZALO_PERMISSION + '?' + new URLSearchParams({ app_id: String(env.ZALO_APP_ID), redirect_uri: redirectUri, code_challenge: challenge, state });
     return redirectTo(target, [setCookie(CONNECT_COOKIE, sealed, CONNECT_TTL)]);
   }
@@ -425,7 +429,7 @@ export async function zaloCallback(request, env, who) {
   if (!env.DB) return fail();
   await ensureChannelsSchema(env.DB);
   const data = await openCookie(env, readCookie(request, CONNECT_COOKIE) || '');
-  if (!data) return fail('session_expired');
+  if (!data||!Number.isSafeInteger(data.g)) return fail('session_expired');
   const state = url.searchParams.get('state') || '';
   const code = url.searchParams.get('code') || '';
   if (url.searchParams.has('error') || !code || !state || state !== data.st) return fail();
@@ -453,7 +457,7 @@ export async function zaloCallback(request, env, who) {
   const externalId = String(oaData.oa_id);
   const name = oaData && clean(oaData.name) ? clean(oaData.name) : 'Zalo OA';
 
-  await upsertChannel(env.DB, env, { shopId: ctx.shop.id, provider: 'zalo', externalId, name, accessToken, refreshToken, expiresAt, connectedBy: who.owner, expected });
+  await upsertChannel(env.DB, env, { shopId: ctx.shop.id, provider: 'zalo', externalId, name, accessToken, refreshToken, expiresAt, connectedBy: who.owner, expected,generation:data.g });
   return redirectTo(url.origin + '/?connected=zalo#accounts', [clearCookie(CONNECT_COOKIE)]);
   }catch{return fail('temporary_error');}
 }

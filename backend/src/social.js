@@ -110,13 +110,14 @@ export async function handleSocial(req,env,who,json){
   if(scheduled)return json({ok:true,id:j.id,runAt:j.next_attempt_at,status:'scheduled',job:jobView(j)},201);
   return deliver(j,db,env,shop,json);
  }
- if(section==='jobs'&&resource&&action==='retry'&&req.method==='POST'){
+ if(section==='jobs'&&resource&&['retry','run'].includes(action)&&req.method==='POST'){
   if(!ctx.can('channels.operate')&&!ctx.can('drafts.publish'))return fail(json,403,'forbidden');
   if(ctx.shop.status!=='active')return fail(json,403,'shop_suspended');
   const j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND id=?').bind(shop,resource).first();
   if(!j)return fail(json,404,'not_found');
   const account=await db.prepare('SELECT provider FROM channels WHERE shop_id=? AND id=?').bind(shop,j.account_id).first();
   if(provider!=='all'&&account?.provider!==provider)return fail(json,404,'not_found');
+  if(action==='run'&&j.status==='pending'){await db.prepare("UPDATE publish_jobs SET next_attempt_at=0,updated_at=? WHERE shop_id=? AND id=? AND status='pending'").bind(now(),shop,j.id).run();j.next_attempt_at=0;}
   return deliver(j,db,env,shop,json);
  }
  return fail(json,404,'not_found');

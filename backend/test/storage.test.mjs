@@ -43,6 +43,23 @@ test('Draft revisions prevent overwrites and isolate owners', async()=>{
     assert.equal((await call(db,{owner:'bob',method:'GET'})).status,404);
   } finally { db.sqlite.close(); }
 });
+test('Concurrent creates in the same shop retain the revision conflict and saved draft',async()=>{
+  const db=database();
+  try {
+    const contents=['First concurrent draft','Second concurrent draft'];
+    const responses=await Promise.all(contents.map(content=>call(db,{body:{draft:draft('draft-a',content),revision:0}})));
+    assert.deepEqual(responses.map(response=>response.status).sort(),[200,409]);
+    const conflict=responses.find(response=>response.status===409);
+    assert.equal((await conflict.json()).error,'Bản nháp đã thay đổi trên máy chủ. Mở lại hoặc lưu thành bản mới.');
+    const winner=responses.findIndex(response=>response.status===200);
+    const reopened=await call(db,{method:'GET'});
+    assert.equal(reopened.status,200);
+    const saved=await reopened.json();
+    assert.equal(saved.revision,1);
+    assert.equal(saved.draft.content,contents[winner]);
+    assert.equal(db.sqlite.prepare('SELECT count(*) AS n FROM drafts').get().n,1);
+  } finally { db.sqlite.close(); }
+});
 test('Pagination reaches every draft, including identical timestamps',async()=>{
   const db=database();
   try {

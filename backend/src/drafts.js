@@ -124,7 +124,7 @@ export async function drafts(request, env, owner, json, ctx) {
       // để trả thông điệp lỗi rõ ràng thay vì thông điệp "đã thay đổi trên máy chủ" gây nhầm lẫn.
       if (body.revision === 0) {
         const crossShop = await env.DB.prepare('SELECT shop_id FROM drafts WHERE owner = ? AND id = ?').bind(owner, id).first();
-        if (crossShop) return json({ error: 'Mã bản nháp này đã được dùng trong shop khác. Hãy lưu với mã khác.' }, 409);
+        if (crossShop && crossShop.shop_id !== shopId) return json({ error: 'Mã bản nháp này đã được dùng trong shop khác. Hãy lưu với mã khác.' }, 409);
       }
       return json({ error: 'Bản nháp đã thay đổi trên máy chủ. Mở lại hoặc lưu thành bản mới.' }, 409);
     }

@@ -28,7 +28,13 @@ async function graphRequest(e,path,token,fields={},method='GET'){
  if(method==='GET'){uri.search=form(fields).toString();}
  else {init.headers['Content-Type']='application/x-www-form-urlencoded';init.body=form(fields).toString();}
  const r=await fetch(uri,init);const data=await r.json().catch(()=>({}));
- if(!r.ok||data.error){const err=Error('META_API_FAILED');err.status=r.status;err.code=data.error?.code;err.subcode=data.error?.error_subcode;throw err;}
+ if(!r.ok||data.error){
+  const err=Error('META_API_FAILED');err.status=r.status;err.code=data.error?.code;err.subcode=data.error?.error_subcode;
+  const retryHeader=r.headers.get('Retry-After');
+  const retryAfter=retryHeader===null?NaN:/^\d+$/.test(retryHeader)?Number(retryHeader):Math.ceil((Date.parse(retryHeader)-Date.now())/1000);
+  if(r.status===429&&Number.isFinite(retryAfter)&&retryAfter>0)err.retryAfter=retryAfter;
+  throw err;
+ }
  return data;
 }
 export async function publishMeta(e,account,job){

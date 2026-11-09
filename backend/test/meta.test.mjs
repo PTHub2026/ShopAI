@@ -41,6 +41,21 @@ test('Facebook Pages text and photo publish; Instagram requires an image and pub
   assert.deepEqual(requests.map(x=>x.u.pathname.split('/').at(-1)),['feed','photos','media','container_1','media_publish']);
  }finally{globalThis.fetch=fetch0;}
 });
+test('Meta rate limits preserve Retry-After for the shared retry engine',async()=>{
+ const e=env(),enc=await encryptToken(e,token),a={provider:'facebook',external_id:'123456',token:enc.cipher,token_iv:enc.iv};
+ const original=globalThis.fetch;
+ const {retryDecision}=await import('../src/provider-adapters.js');
+ try{
+  for(const header of ['3600',new Date(Date.now()+3600000).toUTCString()]){
+   globalThis.fetch=async()=>Response.json({error:{code:4}},{status:429,headers:{'Retry-After':header}});
+   await assert.rejects(publishMeta(e,a,{kind:'text',payload:JSON.stringify({text:'Rate limited'})}),error=>{
+    assert.ok(error.retryAfter>=3599);
+    assert.ok(retryDecision(error,1).delay>=error.retryAfter);
+    return true;
+   });
+  }
+ }finally{globalThis.fetch=original;}
+});
 test('OAuth callback refuses missing configuration before touching database',async()=>{
  const r=await handleMeta(new Request('https://shoppost.example/api/social/meta/callback'),{...env(),META_APP_SECRET:''},{owner:'user'},(v,s=200)=>Response.json(v,{status:s}));
  assert.equal(r.status,503);

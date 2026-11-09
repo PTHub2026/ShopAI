@@ -343,3 +343,57 @@ test('immediate Zalo rate-limit responses retain the common job for later succes
  r.w.applyPublishJobs([{id:'pj_retry',status:'sent',kind:'photo',attempts:2}],'shop');assert.equal(r.read('S.posts[0].status'),'published');
  }finally{r.close();}
 });
+
+test('Unconfirmed PUT responses preserve the existing cloud ID and revision',async()=>{
+  const failures=[
+    ()=>Response.json({error:'Conflict'},{status:409}),
+    ()=>{throw new DOMException('Request timed out','TimeoutError')},
+    body=>Response.json({...envelope('wrong-id',body.draft.content,3),draft:{...body.draft,id:'wrong-id'}}),
+    body=>Response.json({...envelope(body.draft.id,body.draft.content,4),draft:body.draft}),
+    body=>Response.json({...envelope(body.draft.id,'Unexpected content',3),draft:{...body.draft,content:'Unexpected content'}})
+  ];
+  for(const fail of failures){
+    const r=runtime({fetchImpl:async(path,options)=>path==='/session'?Response.json(session):fail(JSON.parse(options.body))});
+    try{
+      await settle();edit(r,'Keep this local edit');
+      r.read('D.cloud={id:"existing",revision:2,scope:APP_SCOPE,type:"post"};saveDraft()');
+      const before=r.read('JSON.stringify(D)');
+      await r.w.cloudSaveDraft();
+      assert.equal(r.read('JSON.stringify(D)'),before);
+      assert.equal(JSON.parse(r.w.localStorage.getItem('pdk_draft_v1:'+scope)).cloud.revision,2);
+      assert.equal(r.read('CLOUD.error'),true);
+      assert.equal(r.read('CLOUD.busy'),false);
+      assert.equal(r.requests.filter(x=>x.method==='PUT').length,1);
+    }finally{r.close()}
+  }
+});
+
+test('Confirmed PUT advances an existing cloud revision without changing its ID',async()=>{
+  const r=runtime({fetchImpl:async(path,options)=>{
+    if(path==='/session')return Response.json(session);
+    const body=JSON.parse(options.body);
+    assert.equal(body.revision,2);assert.equal(body.draft.id,'existing');
+    return Response.json({...envelope('existing',body.draft.content,3),draft:body.draft});
+  }});
+  try{
+    await settle();edit(r,'Updated text');r.read('D.cloud={id:"existing",revision:2,scope:APP_SCOPE,type:"post"}');
+    await r.w.cloudSaveDraft();
+    assert.equal(r.read('D.cloud.id'),'existing');assert.equal(r.read('D.cloud.revision'),3);
+    assert.equal(JSON.parse(r.w.localStorage.getItem('pdk_draft_v1:'+scope)).cloud.revision,3);
+  }finally{r.close()}
+});
+
+test('Cloud confirmation cannot overwrite edits, removed media or a replacement editor',async()=>{
+  for(const change of ['D.content="New text"','D.media.splice(0,1)','D=newDraft();D.content="Replacement"']){
+    const r=runtime({fetchImpl:async path=>Response.json(path==='/session'?session:envelope())});
+    try{
+      await settle();edit(r,'Original text');r.read('D.media=[{fid:"original",name:"video.mp4",type:"video/mp4"}]');
+      await r.w.cloudOpenDraft('cloud-a');
+      assert.ok(r.w.document.querySelector('#ask_yes'));
+      r.read(change+';saveDraft()');const before=r.read('JSON.stringify(D)');
+      r.w.document.querySelector('#ask_yes').click();await settle();
+      assert.equal(r.read('JSON.stringify(D)'),before);
+      assert.equal(r.read('!!D.cloud'),false);assert.equal(r.read('CLOUD.error'),true);
+    }finally{r.close()}
+  }
+});

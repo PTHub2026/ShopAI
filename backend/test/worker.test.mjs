@@ -199,38 +199,22 @@ test('Reasoning-only, tool-only and truncated outputs never become successful co
     assert.equal((await worker.fetch(request(),env({AI:{run:async()=>result}}))).status,502);
   }
 }));
-// D1 giả lập: chỉ phục vụ các truy vấn của runDueScheduledPosts và ghi lại các câu UPDATE scheduled_posts.
-function fakeDB(rows, channel){
-  const updates=[];
-  const db={ _updates:updates, prepare(sql){ return { _sql:sql,_args:[],
-    bind(...a){this._args=a;return this},
-    async run(){ if(/UPDATE scheduled_posts/.test(this._sql)) updates.push({sql:this._sql,args:this._args}); return {meta:{changes:1}}; },
-    async all(){ return /SELECT \* FROM scheduled_posts/.test(this._sql)?{results:rows}:{results:[]}; },
-    async first(){ return /FROM shop_channels/.test(this._sql)?channel:null; } }; } };
-  return db;
-}
-test('Cron đánh dấu lịch đăng thất bại khi shop chưa kết nối kênh', async()=>{
-  const row={id:'s_1',shop_id:'shop1',provider:'zalo',title:'',content:'Nội dung',images:'[]',author:'Shoppost',run_at:1,status:'scheduled'};
-  const db=fakeDB([row],null);
-  const res=await runDueScheduledPosts({DB:db});
-  assert.equal(res.processed,1);
-  assert.equal(db._updates.length,2);
-  assert.match(db._updates[0].sql,/status = 'processing'/);
-  assert.match(db._updates[1].sql,/status = 'failed'/);
-  assert.match(String(db._updates[1].args[0]),/chưa kết nối/);
+test('Cron marks a legacy scheduled post failed when its channel is missing',async()=>{
+ const {sqliteDB}=await import('./sqlite-fixture.mjs');const db=sqliteDB();
+ try{await runDueScheduledPosts({DB:db});
+ db.sqlite.exec("INSERT INTO shops(id,name,owner,status,created_at,updated_at) VALUES('shop1','Test','owner','active',0,0)");
+ db.sqlite.exec("INSERT INTO scheduled_posts(id,shop_id,provider,content,images,run_at,status) VALUES('missing-channel','shop1','zalo','Test','[]',0,'scheduled')");
+ assert.equal((await runDueScheduledPosts({DB:db})).processed,1);
+ const job=db.sqlite.prepare('SELECT status,error_code FROM publish_jobs').get();assert.equal(job.status,'failed');assert.equal(job.error_code,'account_revoked');
+ assert.equal(db.sqlite.prepare('SELECT status FROM scheduled_posts').get().status,'failed');
+ }finally{db.sqlite.close();}
 });
-test('Cron không làm gì khi thiếu DB hoặc không có lịch đến giờ', async()=>{
-  assert.deepEqual(await runDueScheduledPosts({}),{processed:0});
-  const db=fakeDB([],null);
-  assert.deepEqual(await runDueScheduledPosts({DB:db}),{processed:0});
-  assert.equal(db._updates.length,0);
+test('Cron is idle without a database or without due jobs',async()=>{
+ assert.deepEqual(await runDueScheduledPosts({}),{processed:0});
+ const {sqliteDB}=await import('./sqlite-fixture.mjs');const db=sqliteDB();try{assert.deepEqual(await runDueScheduledPosts({DB:db}),{processed:0});}finally{db.sqlite.close();}
 });
-test('Handler scheduled chỉ chạy cron khi đã gắn cơ sở dữ liệu', async()=>{
-  let calls=0;
-  await worker.scheduled({},{},{waitUntil:()=>{calls++}});
-  assert.equal(calls,0);
-  let pending=null;
-  await worker.scheduled({},{DB:fakeDB([],null)},{waitUntil:x=>{calls++;pending=x}});
-  assert.equal(calls,1);
-  await pending;
+test('scheduled handler forwards work through waitUntil only when database exists',async()=>{
+ let calls=0;await worker.scheduled({},{},{waitUntil:()=>calls++});assert.equal(calls,0);
+ const {sqliteDB}=await import('./sqlite-fixture.mjs');const db=sqliteDB();const pending=[];
+ try{await worker.scheduled({},{DB:db},{waitUntil:p=>pending.push(p)});assert.equal(pending.length,1);await Promise.all(pending);}finally{db.sqlite.close();}
 });

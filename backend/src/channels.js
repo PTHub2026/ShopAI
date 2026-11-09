@@ -1,5 +1,8 @@
+import {normalizeImages,validatePost,providerFailure} from './provider-adapters.js';
+import { ensureChannelStore } from './channel-store.js';
+import { handleSocial, ensureSocialSchema, runDuePublishJobs, importLegacyScheduledPosts } from './social.js';
 // Kết nối kênh thật cho shop. Hiện triển khai Zalo OA (OAuth v4 + PKCE) và đăng bài viết thật.
-// Các kênh khác (Facebook, TikTok, YouTube, Instagram, Telegram, X, LinkedIn, Threads) vẫn ở chế độ demo trên giao diện.
+// Telegram, Facebook và Instagram dùng cùng kho kênh/hàng đợi qua adapter riêng.
 // Token (access/refresh) chỉ lưu trong D1, KHÔNG BAO GIỜ trả ra giao diện.
 import { resolveShop, SHOP_HEADER } from './shops.js';
 import { pkceVerifier, pkceChallenge, readJson } from './auth.js';
@@ -15,9 +18,6 @@ const ZALO_GETOA = 'https://openapi.zalo.me/v2.0/oa/getoa';
 const ZALO_ARTICLE_CREATE = 'https://openapi.zalo.me/v2.0/article/create';
 const ZALO_ARTICLE_VERIFY = 'https://openapi.zalo.me/v2.0/article/verify';
 
-const MAX_IMAGE_BYTES = 1048576; // Zalo giới hạn mỗi ảnh < 1MB.
-const MAX_IMAGES = 6; // Số ảnh tối đa đính kèm mỗi bài viết.
-const MAX_SCHEDULED_IMAGES_JSON = 900000; // Giữ bản ghi lịch gọn trong D1.
 const PUBLISH_MAX_BYTES = 8 * 1024 * 1024; // Thân yêu cầu đăng/lịch có thể kèm ảnh data URL.
 
 const enc = new TextEncoder();
@@ -84,14 +84,13 @@ const STATE_SCHEMA = 'CREATE TABLE IF NOT EXISTS channel_oauth_states (state TEX
 const REFRESH_SCHEMA = 'CREATE TABLE IF NOT EXISTS channel_refresh_locks (shop_id TEXT NOT NULL, provider TEXT NOT NULL, lease TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY(shop_id,provider))';
 
 // Schema tạo lúc chạy (idempotent) vì Workers Builds không chạy migration tự động.
-const CHANNELS_SCHEMA = 'CREATE TABLE IF NOT EXISTS shop_channels (shop_id TEXT NOT NULL, provider TEXT NOT NULL, external_id TEXT, name TEXT, access_token TEXT, refresh_token TEXT, expires_at INTEGER, status TEXT, connected_by TEXT, connected_at INTEGER, updated_at INTEGER, PRIMARY KEY (shop_id, provider))';
 // Lịch đăng thật cho kênh đã kết nối (hiện dùng Zalo OA). Cron quét bản ghi đến giờ rồi đăng.
 const SCHEDULED_SCHEMA = 'CREATE TABLE IF NOT EXISTS scheduled_posts (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, provider TEXT NOT NULL, title TEXT, content TEXT, images TEXT, author TEXT, run_at INTEGER, status TEXT, result_id TEXT, result_url TEXT, error TEXT, attempts INTEGER DEFAULT 0, created_by TEXT, created_at INTEGER, updated_at INTEGER)';
 const SCHEDULED_INDEX = 'CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_posts (status, run_at)';
 const schemaReady = new WeakSet();
 async function ensureChannelsSchema(db) {
   if (schemaReady.has(db)) return;
-  await db.prepare(CHANNELS_SCHEMA).run();
+  await ensureChannelStore(db);
   await db.prepare(SCHEDULED_SCHEMA).run();
   await db.prepare(SCHEDULED_INDEX).run();
   await db.prepare(STATE_SCHEMA).run();
@@ -134,48 +133,48 @@ async function upsertChannel(db,env, { shopId, provider, externalId, name, acces
   accessToken=await protectToken(env,shopId,'access',accessToken);
   refreshToken=await protectToken(env,shopId,'refresh',refreshToken);
   const saved=await db.prepare(
-    'INSERT INTO shop_channels (shop_id, provider, external_id, name, access_token, refresh_token, expires_at, status, connected_by, connected_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
-    'ON CONFLICT(shop_id, provider) DO UPDATE SET external_id = excluded.external_id, name = excluded.name, access_token = excluded.access_token, refresh_token = excluded.refresh_token, expires_at = excluded.expires_at, status = excluded.status, connected_by = excluded.connected_by, connected_at = excluded.connected_at, updated_at = excluded.updated_at WHERE shop_channels.access_token IS ? AND shop_channels.refresh_token IS ? AND shop_channels.external_id IS ?'
-  ).bind(shopId, provider, externalId, name, accessToken, refreshToken, expiresAt, 'connected', connectedBy, t, t, expected?.access_token??null,expected?.refresh_token??null,expected?.external_id??null).run();
+    'INSERT INTO channels (shop_id, provider, external_id, name, token, refresh_token, expires_at, status, connected_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+    'ON CONFLICT(shop_id, provider) WHERE provider=\'zalo\' DO UPDATE SET external_id = excluded.external_id, name = excluded.name, token = excluded.token, refresh_token = excluded.refresh_token, expires_at = excluded.expires_at, status = excluded.status, connected_by = excluded.connected_by, created_at = excluded.created_at, updated_at = excluded.updated_at WHERE channels.token IS ? AND channels.refresh_token IS ? AND channels.external_id IS ?'
+  ).bind(shopId, provider, externalId, name, accessToken, refreshToken, expiresAt, 'connected', connectedBy, t, t, expected?.token??null,expected?.refresh_token??null,expected?.external_id??null).run();
   if(saved.meta.changes!==1)throw Error('Kết nối OA đã thay đổi. Hãy kết nối lại.');
 }
 async function persistTokens(db, env, shopId, provider, { accessToken, refreshToken, expiresAt }, expected) {
   accessToken=await protectToken(env,shopId,'access',accessToken);
   refreshToken=await protectToken(env,shopId,'refresh',refreshToken);
-  const saved=await db.prepare("UPDATE shop_channels SET access_token = ?, refresh_token = ?, expires_at = ?, updated_at = ? WHERE shop_id = ? AND provider = ? AND access_token IS ? AND refresh_token IS ? AND status='connected'")
-    .bind(accessToken, refreshToken, expiresAt, now(), shopId, provider,expected.access_token,expected.refresh_token).run();
+  const saved=await db.prepare("UPDATE channels SET token = ?, refresh_token = ?, expires_at = ?, updated_at = ? WHERE shop_id = ? AND provider = ? AND token IS ? AND refresh_token IS ? AND status='connected'")
+    .bind(accessToken, refreshToken, expiresAt, now(), shopId, provider,expected.token,expected.refresh_token).run();
   if(saved.meta.changes!==1)throw Error('Kết nối OA đã thay đổi. Hãy kết nối lại.');
 }
 
 // Làm mới access_token nếu sắp/đã hết hạn và lưu lại cặp token mới (refresh_token Zalo dùng một lần, phải lưu cái mới trả về).
 async function ensureFreshToken(env, db, channel) {
- const access=await unprotectToken(env,channel.shop_id,'access',channel.access_token);
+ const access=await unprotectToken(env,channel.shop_id,'access',channel.token);
  const refresh=await unprotectToken(env,channel.shop_id,'refresh',channel.refresh_token);
- if(!/^\d+$/.test(String(channel.external_id||'')))throw Error('Cần kết nối lại Zalo OA để xác minh danh tính.');
- if(!channel.access_token.startsWith('enc1.')){
+ if(!/^\d+$/.test(String(channel.external_id||'')))throw Object.assign(Error('Cần kết nối lại Zalo OA để xác minh danh tính.'),{reauth:true});
+ if(!channel.token.startsWith('enc1.')){
   const verified=await getOaInfo(access);
-  if(!verified.ok||Number(verified.data?.error)!==0||String(verified.data?.data?.oa_id||'')!==String(channel.external_id))throw Error('Cần kết nối lại Zalo OA để xác minh quyền truy cập.');
+  if(!verified.ok||Number(verified.data?.error)!==0||String(verified.data?.data?.oa_id||'')!==String(channel.external_id))throw Object.assign(Error('Cần kết nối lại Zalo OA để xác minh quyền truy cập.'),{reauth:true});
   const a=await protectToken(env,channel.shop_id,'access',access),r=await protectToken(env,channel.shop_id,'refresh',refresh);
-  await db.prepare('UPDATE shop_channels SET access_token=?,refresh_token=? WHERE shop_id=? AND provider=? AND access_token=? AND refresh_token IS ?').bind(a,r,channel.shop_id,channel.provider,channel.access_token,channel.refresh_token).run();
+  await db.prepare('UPDATE channels SET token=?,refresh_token=? WHERE shop_id=? AND provider=? AND token=? AND refresh_token IS ?').bind(a,r,channel.shop_id,channel.provider,channel.token,channel.refresh_token).run();
  }
  if(channel.expires_at && Number(channel.expires_at)-now()>REFRESH_SKEW){
   return {token:access};
  }
- if(!refresh)throw Error('Phiên Zalo OA đã hết hạn. Hãy kết nối lại OA tại mục Kênh.');
+ if(!refresh)throw Object.assign(Error('Phiên Zalo OA đã hết hạn. Hãy kết nối lại OA tại mục Kênh.'),{reauth:true});
  const lease=randToken();
  const lock=await db.prepare('INSERT INTO channel_refresh_locks(shop_id,provider,lease,expires_at) VALUES(?,?,?,?) ON CONFLICT(shop_id,provider) DO UPDATE SET lease=excluded.lease,expires_at=excluded.expires_at WHERE channel_refresh_locks.expires_at<=?').bind(channel.shop_id,channel.provider,lease,now()+30,now()).run();
- if(lock.meta.changes!==1)throw Error('Phiên Zalo đang được làm mới. Vui lòng thử lại sau ít giây.');
+ if(lock.meta.changes!==1)throw Object.assign(Error('Phiên Zalo đang được làm mới. Vui lòng thử lại sau ít giây.'),{safeToRetry:true,retryAfter:30});
  try{
-  const latest=await db.prepare('SELECT * FROM shop_channels WHERE shop_id=? AND provider=?').bind(channel.shop_id,channel.provider).first();
-  if(!latest||latest.status!=='connected')throw Error('OA không còn kết nối. Hãy cấp quyền lại.');
-  if(Number(latest.expires_at)-now()>REFRESH_SKEW)return {token:await unprotectToken(env,latest.shop_id,'access',latest.access_token)};
+  const latest=await db.prepare('SELECT * FROM channels WHERE shop_id=? AND provider=?').bind(channel.shop_id,channel.provider).first();
+  if(!latest||latest.status!=='connected')throw Object.assign(Error('OA không còn kết nối. Hãy cấp quyền lại.'),{reauth:true});
+  if(Number(latest.expires_at)-now()>REFRESH_SKEW)return {token:await unprotectToken(env,latest.shop_id,'access',latest.token)};
   const currentRefresh=await unprotectToken(env,latest.shop_id,'refresh',latest.refresh_token);
-  if(!currentRefresh)throw Error('Cần kết nối lại Zalo OA.');
+  if(!currentRefresh)throw Object.assign(Error('Cần kết nối lại Zalo OA.'),{reauth:true});
   let r;
   try{r=await refreshAccessToken(env,currentRefresh);}catch{r=null;}
   if(!r?.ok||!r.data?.access_token||!r.data?.refresh_token){
-   await db.prepare("UPDATE shop_channels SET status='reauth_required',refresh_token=NULL,updated_at=? WHERE shop_id=? AND provider=? AND access_token IS ? AND refresh_token IS ?").bind(now(),channel.shop_id,channel.provider,latest.access_token,latest.refresh_token).run();
-   throw Error('Không thể làm mới phiên Zalo. Hãy kết nối lại OA tại mục Kênh.');
+   await db.prepare("UPDATE channels SET status='reauth_required',refresh_token=NULL,updated_at=? WHERE shop_id=? AND provider=? AND token IS ? AND refresh_token IS ?").bind(now(),channel.shop_id,channel.provider,latest.token,latest.refresh_token).run();
+   throw Object.assign(Error('Không thể làm mới phiên Zalo. Hãy kết nối lại OA tại mục Kênh.'),{reauth:true});
   }
   const expiresAt=now()+Number(r.data.expires_in||90000);
   await persistTokens(db,env,channel.shop_id,channel.provider,{accessToken:r.data.access_token,refreshToken:r.data.refresh_token,expiresAt},latest);
@@ -184,34 +183,6 @@ async function ensureFreshToken(env, db, channel) {
 }
 
 // Ảnh gửi lên có thể là data URL (base64) hoặc URL http(s). Chuẩn hóa để tải lên Zalo (data URL) hoặc tham chiếu trực tiếp (http).
-function normalizeImages(images) {
-  if (images === undefined || images === null) return [];
-  if (!Array.isArray(images)) throw new Error('Danh sách ảnh không hợp lệ.');
-  if (images.length > MAX_IMAGES) throw new Error('Chỉ hỗ trợ tối đa ' + MAX_IMAGES + ' ảnh mỗi bài.');
-  const out = [];
-  for (const raw of images) {
-    const item = typeof raw === 'string' ? raw : (raw && typeof raw === 'object' ? (raw.data || raw.url || '') : '');
-    const s = clean(item);
-    if (!s) continue;
-    const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(s);
-    if (m) {
-      const mime = clean(m[1]) || 'image/jpeg';
-      if (!/^image\//i.test(mime)) throw new Error('Chỉ hỗ trợ tệp ảnh để đăng kèm.');
-      let bytes;
-      try { bytes = m[2] ? Uint8Array.from(atob(m[3]), c => c.charCodeAt(0)) : enc.encode(decodeURIComponent(m[3])); }
-      catch { throw new Error('Dữ liệu ảnh không hợp lệ.'); }
-      if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error('Ảnh vượt quá 1MB; hãy dùng ảnh nhỏ hơn.');
-      const ext = /png/i.test(mime) ? 'png' : /gif/i.test(mime) ? 'gif' : /webp/i.test(mime) ? 'webp' : 'jpg';
-      out.push({ kind: 'upload', bytes, mime, name: 'image.' + ext });
-    } else if (/^https?:\/\//i.test(s)) {
-      out.push({ kind: 'url', url: s });
-    } else {
-      throw new Error('Ảnh phải là data URL hoặc đường dẫn http(s).');
-    }
-  }
-  return out;
-}
-
 // Public, unguessable image URLs are created only when the user submits a post.
 // Article API requires a photo URL; the messaging attachment API is a different API.
 async function articlePhoto(env,db,shop,img) {
@@ -242,13 +213,12 @@ function imageSegment(ref){return {type:'image',url:ref};}
 // Lõi đăng bài Zalo OA dùng chung cho đăng ngay và đăng theo lịch. Tự làm mới token; ném Error (thông điệp tiếng Việt) khi thất bại.
 // opts: { title, content, images, author }. Ảnh đầu tiên làm bìa, các ảnh còn lại chèn vào thân bài.
 export async function publishZaloArticle(env, db, channel, opts = {}) {
+  validatePost('zalo',{kind:'photo',text:opts.content,images:opts.images});
   const text = clean(opts.content);
-  if (!text) throw new Error('Thiếu nội dung bài viết để đăng.');
   let heading = clean(opts.title);
   if (!heading) heading = text.split('\n').map(s => s.trim()).find(Boolean) || 'Bài viết';
   heading = heading.slice(0, 100);
   const normalized = normalizeImages(opts.images);
-  if(!normalized.length)throw Error('Bài viết Zalo cần ít nhất một ảnh bìa. Hãy thêm ảnh rồi thử lại.');
   const fresh = await ensureFreshToken(env, db, channel);
   const accessToken = fresh.token;
   const refs = [];
@@ -262,9 +232,9 @@ export async function publishZaloArticle(env, db, channel, opts = {}) {
   if (refs[0]) article.cover = coverFrom(refs[0]);
   const created = await fetchJson(ZALO_ARTICLE_CREATE, { method: 'POST', headers: { access_token: accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify(article) });
   const token = created.ok && created.data && Number(created.data.error) === 0 ? (created.data.data && created.data.data.token) : null;
-  if (!token) throw new Error('Zalo từ chối tạo bài viết: ' + zaloError(created));
+  if (!token) throw providerFailure(created,'Zalo từ chối tạo bài viết: '+zaloError(created));
   const verified = await fetchJson(ZALO_ARTICLE_VERIFY, { method: 'POST', headers: { access_token: accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
-  if (!(verified.ok && verified.data && Number(verified.data.error) === 0)) throw new Error('Zalo chưa xác nhận bài viết: ' + zaloError(verified));
+  if (!(verified.ok && verified.data && Number(verified.data.error) === 0)) throw Object.assign(new Error('Zalo chưa xác nhận bài viết: '+zaloError(verified)),{deliveryUncertain:true});
   const art = (verified.data && verified.data.data) || {};
   if(!art.id&&!art.article_id)throw Error('Zalo chưa xác nhận mã bài viết. Kiểm tra OA trước khi đăng lại.');
   return { ok: true, id: art.id || art.article_id, url: art.url || art.link || null };
@@ -272,31 +242,9 @@ export async function publishZaloArticle(env, db, channel, opts = {}) {
 
 // Cron: tìm các bài đến giờ và đăng lên kênh thật. Mỗi bài xử lý độc lập (try/catch riêng) để một lỗi không chặn bài khác.
 export async function runDueScheduledPosts(env) {
-  if (!env || !env.DB) return { processed: 0 };
-  await ensureChannelsSchema(env.DB);
-  const t = now();
-  const { results } = await env.DB.prepare("SELECT * FROM scheduled_posts WHERE status = 'scheduled' AND run_at <= ? ORDER BY run_at ASC LIMIT 25").bind(t).all();
-  let processed = 0;
-  for (const row of results || []) {
-    // Claim atomically before any provider call. A crashed/uncertain send stays
-    // processing for reconciliation; never automatically replay a possible post.
-    const claimed = await env.DB.prepare("UPDATE scheduled_posts SET status = 'processing', updated_at = ? WHERE id = ? AND status = 'scheduled'").bind(now(), row.id).run();
-    if (claimed.meta.changes !== 1) continue;
-    try {
-      const channel = await env.DB.prepare('SELECT * FROM shop_channels WHERE shop_id = ? AND provider = ?').bind(row.shop_id, row.provider).first();
-      if (!channel || channel.status !== 'connected' || !channel.access_token) throw new Error('Shop chưa kết nối ' + (row.provider === 'zalo' ? 'Zalo OA' : row.provider) + '.');
-      let images = [];
-      try { images = JSON.parse(row.images || '[]'); } catch {}
-      const res = await publishZaloArticle(env, env.DB, channel, { title: row.title, content: row.content, images, author: row.author });
-      await env.DB.prepare("UPDATE scheduled_posts SET status = 'posted', result_id = ?, result_url = ?, error = NULL, updated_at = ? WHERE id = ? AND status = 'processing'")
-        .bind(res.id || null, res.url || null, now(), row.id).run();
-    } catch (e) {
-      await env.DB.prepare("UPDATE scheduled_posts SET status = 'failed', error = ?, attempts = COALESCE(attempts, 0) + 1, updated_at = ? WHERE id = ? AND status = 'processing'")
-        .bind(String((e && e.message) || 'Đăng thất bại.').slice(0, 500), now(), row.id).run();
-    }
-    processed++;
-  }
-  return { processed };
+ if(!env?.DB)return {processed:0};
+ await ensureChannelsSchema(env.DB);
+ return runDuePublishJobs(env);
 }
 
 // Ngữ cảnh shop: connect là điều hướng cấp trang (không có header shop) nên nhận shop qua ?shop=; list/publish là fetch nên dùng header.
@@ -312,6 +260,22 @@ export async function channels(request, env, who, json) {
   const path = url.pathname;
   const method = request.method;
 
+  if(/^\/channels\/zalo\/(accounts|jobs)(\/.*)?$/.test(path)){
+    const target=new URL(request.url);target.pathname=path.replace('/channels/zalo/','/api/social/');
+    const h=new Headers(request.headers);h.set('X-Channel-Provider','zalo');
+    return handleSocial(new Request(target,{method,headers:h,...(!['GET','HEAD'].includes(method)?{body:await request.arrayBuffer()}:{}),signal:request.signal}),env,who,json);
+  }
+  const unified = /^\/channels\/(all|telegram|facebook|instagram|meta)\/(accounts|connect|publish|schedule|jobs|providers|start)(\/.*)?$/.exec(path);
+  if(unified){
+    const [,provider,operation,rest='']=unified;
+    let section=operation==='connect'?'accounts':operation==='publish'||operation==='schedule'?'jobs':operation;
+    if(provider==='meta')section='meta/'+operation;
+    const target=new URL(request.url);target.pathname='/api/social/'+section+rest;
+    const h=new Headers(request.headers);h.set('X-Channel-Provider',provider);
+    if(operation==='schedule')h.set('X-Channel-Schedule','1');
+    return handleSocial(new Request(target,{method,headers:h,...(!['GET','HEAD'].includes(method)?{body:await request.arrayBuffer()}:{}),signal:request.signal}),env,who,json);
+  }
+
   // Danh sách kênh của shop — KHÔNG trả access_token/refresh_token.
   if (path === '/channels') {
     if (method !== 'GET') return json({ error: 'Chỉ hỗ trợ GET.' }, 405, { Allow: 'GET' });
@@ -319,13 +283,32 @@ export async function channels(request, env, who, json) {
     try { ctx = await resolveShop(env, who, request); } catch { return json({ error: 'Không thể truy cập ngữ cảnh shop lúc này.' }, 503); }
     if (ctx.error) return json({ error: ctx.error, code: ctx.code }, ctx.status);
     if (!ctx.can('channels.view')) return json({ error: 'Vai trò của bạn trong shop này không được xem kênh.', code: 'forbidden' }, 403);
-    const { results } = await env.DB.prepare('SELECT provider, external_id, name, status, connected_at, expires_at, access_token FROM shop_channels WHERE shop_id = ?').bind(ctx.shop.id).all();
+    const { results } = await env.DB.prepare('SELECT provider, external_id, name, status, created_at, expires_at FROM channels WHERE shop_id = ?').bind(ctx.shop.id).all();
     const list = (results || []).map(r => {
-      const needsReconnect=r.status==='reauth_required'||!/^\d+$/.test(String(r.external_id||''))||!r.access_token?.startsWith('enc1.');
-      return {provider:r.provider,external_id:r.external_id,oa_id:r.external_id,name:r.name,status:needsReconnect?'reauth_required':r.status,connected_at:Number(r.connected_at)||null,expires_at:Number(r.expires_at)||null,needsReconnect};
+      const needsReconnect=r.status==='reauth_required'||(r.provider==='zalo'&&!/^\d+$/.test(String(r.external_id||'')));
+      return {provider:r.provider,external_id:r.external_id,oa_id:r.provider==='zalo'?r.external_id:null,name:r.name,status:needsReconnect?'reauth_required':r.status,connected_at:Number(r.created_at)||null,created_at:Number(r.created_at)||null,expires_at:Number(r.expires_at)||null,needsReconnect};
     });
     let keyReady=false;try{await tokenKey(env);keyReady=true;}catch{}
     return json({ channels:list, setup:{zalo:{configured:Boolean(env.ZALO_APP_ID&&env.ZALO_APP_SECRET&&keyReady),canConnect:ctx.can('channels.configure_token'),callbackUri:url.origin+'/auth/zalo/callback'}} });
+  }
+
+  if (path === '/channels/zalo') {
+    if (method !== 'DELETE') return json({error:'Chỉ hỗ trợ DELETE.'},405,{Allow:'DELETE'});
+    const ctx = await resolveShop(env,who,request);
+    if(ctx.error)return json({error:ctx.error,code:ctx.code},ctx.status);
+    if(!ctx.can('channels.configure_token'))return json({error:'Bạn không có quyền ngắt kết nối.',code:'forbidden'},403);
+    await ensureSocialSchema(env.DB);
+    const legacy=await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='shop_channels'").first();
+    await env.DB.batch([
+      ...(legacy?[env.DB.prepare('DELETE FROM shop_channels WHERE shop_id=? AND provider=?').bind(ctx.shop.id,'zalo')]:[]),
+      env.DB.prepare("UPDATE publish_jobs SET status='failed',error_code='account_revoked',updated_at=? WHERE shop_id=? AND account_id IN (SELECT id FROM channels WHERE shop_id=? AND provider='zalo') AND status IN ('pending','retryable')").bind(now(),ctx.shop.id,ctx.shop.id),
+      env.DB.prepare('DELETE FROM channels WHERE shop_id=? AND provider=?').bind(ctx.shop.id,'zalo'),
+      env.DB.prepare('DELETE FROM channel_oauth_states WHERE shop_id=?').bind(ctx.shop.id),
+      env.DB.prepare('DELETE FROM channel_refresh_locks WHERE shop_id=? AND provider=?').bind(ctx.shop.id,'zalo'),
+      env.DB.prepare("UPDATE scheduled_posts SET status='cancelled',updated_at=? WHERE shop_id=? AND provider='zalo' AND status='scheduled'").bind(now(),ctx.shop.id),
+      env.DB.prepare('INSERT INTO audit_log(shop_id,actor,action,target,detail,created_at) VALUES(?,?,?,?,?,?)').bind(ctx.shop.id,who.owner,'channels.disconnect','zalo',JSON.stringify({provider:'zalo'}),now())
+    ]);
+    return json({ok:true});
   }
 
   // Bắt đầu kết nối Zalo OA: sinh PKCE + state, lưu vào cookie ký HMAC rồi 302 sang trang cấp quyền Zalo.
@@ -368,16 +351,16 @@ export async function channels(request, env, who, json) {
     }
     if (!content) return json({ error: 'Thiếu nội dung bài viết để đăng.' }, 400);
 
-    const channel = await env.DB.prepare('SELECT * FROM shop_channels WHERE shop_id = ? AND provider = ?').bind(ctx.shop.id, 'zalo').first();
-    if (!channel || channel.status !== 'connected' || !channel.access_token) return json({ error: 'Shop chưa kết nối Zalo OA. Hãy kết nối tại mục Kênh trước khi đăng.', code: 'not_connected' }, 409);
+    const channel = await env.DB.prepare('SELECT * FROM channels WHERE shop_id = ? AND provider = ?').bind(ctx.shop.id, 'zalo').first();
+    if (!channel || channel.status !== 'connected' || !channel.token) return json({ error: 'Shop chưa kết nối Zalo OA. Hãy kết nối tại mục Kênh trước khi đăng.', code: 'not_connected' }, 409);
 
-    try {
-      const res = await publishZaloArticle(env, env.DB, channel, { title, content, images: body.images, author: (ctx.shop && clean(ctx.shop.name)) || 'Shoppost' });
-      return json({ ok: true, id: res.id, url: res.url });
-    } catch (e) {
-      return json({ error: (e && e.message) || 'Đăng bài Zalo thất bại.', code: 'zalo_error' }, 502);
-    }
+    await ensureSocialSchema(env.DB);
+    const target=new URL(request.url);target.pathname='/api/social/jobs';
+    const h=new Headers(request.headers);h.set('Content-Type','application/json');h.set('X-Channel-Provider','zalo');
+    h.set('Idempotency-Key',request.headers.get('Idempotency-Key')||'zalo-'+crypto.randomUUID());
+    return handleSocial(new Request(target,{method:'POST',headers:h,body:JSON.stringify({accountId:channel.id,kind:'photo',text:content,title,images:body.images,author:ctx.shop.name})}),env,who,json);
   }
+
 
   // Tạo lịch đăng thật cho kênh Zalo OA. Cron sẽ tự đăng khi đến giờ.
   if (path === '/channels/zalo/schedule') {
@@ -392,22 +375,16 @@ export async function channels(request, env, who, json) {
     if (!content) return json({ error: 'Thiếu nội dung bài viết để lên lịch.' }, 400);
     const runAt = Math.floor(Number(body.runAt));
     if (!Number.isFinite(runAt) || runAt <= now()) return json({ error: 'Thời gian lên lịch phải ở tương lai.' }, 400);
-    // Kiểm tra ảnh hợp lệ ngay lúc tạo lịch để báo lỗi sớm; lưu nguyên data URL để cron tải lên Zalo khi đăng.
-    try { if(!normalizeImages(body.images).length)throw Error('Bài viết Zalo cần ít nhất một ảnh bìa.'); } catch (e) { return json({ error: (e && e.message) || 'Ảnh không hợp lệ.' }, 400); }
-    const imagesJson = JSON.stringify(Array.isArray(body.images) ? body.images : []);
-    if (imagesJson.length > MAX_SCHEDULED_IMAGES_JSON) return json({ error: 'Ảnh đính kèm quá lớn để lên lịch; hãy giảm số lượng hoặc kích thước ảnh.' }, 413);
+    const channel = await env.DB.prepare('SELECT * FROM channels WHERE shop_id = ? AND provider = ?').bind(ctx.shop.id, 'zalo').first();
+    if (!channel || channel.status !== 'connected' || !channel.token) return json({ error: 'Shop chưa kết nối Zalo OA. Hãy kết nối tại mục Kênh trước khi lên lịch.', code: 'not_connected' }, 409);
 
-    const channel = await env.DB.prepare('SELECT * FROM shop_channels WHERE shop_id = ? AND provider = ?').bind(ctx.shop.id, 'zalo').first();
-    if (!channel || channel.status !== 'connected' || !channel.access_token) return json({ error: 'Shop chưa kết nối Zalo OA. Hãy kết nối tại mục Kênh trước khi lên lịch.', code: 'not_connected' }, 409);
-
-    const id = 's_' + randToken(12);
-    const t = now();
-    const title = clean(body.title).slice(0, 100);
-    const author = (ctx.shop && clean(ctx.shop.name)) || 'Shoppost';
-    await env.DB.prepare('INSERT INTO scheduled_posts (id, shop_id, provider, title, content, images, author, run_at, status, attempts, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)')
-      .bind(id, ctx.shop.id, 'zalo', title, content, imagesJson, author, runAt, 'scheduled', who.owner, t, t).run();
-    return json({ ok: true, id, runAt, status: 'scheduled' });
+    await ensureSocialSchema(env.DB);
+    const target=new URL(request.url);target.pathname='/api/social/jobs';
+    const h=new Headers(request.headers);h.set('Content-Type','application/json');h.set('X-Channel-Provider','zalo');h.set('X-Channel-Schedule','1');
+    h.set('Idempotency-Key',request.headers.get('Idempotency-Key')||'schedule-'+crypto.randomUUID());
+    return handleSocial(new Request(target,{method:'POST',headers:h,body:JSON.stringify({accountId:channel.id,kind:'photo',text:content,title:body.title,images:body.images,author:ctx.shop.name,runAt})}),env,who,json);
   }
+
 
   // Danh sách lịch đăng của shop (KHÔNG trả token/ảnh gốc).
   if (path === '/channels/scheduled') {
@@ -416,8 +393,10 @@ export async function channels(request, env, who, json) {
     try { ctx = await resolveShop(env, who, request); } catch { return json({ error: 'Không thể truy cập ngữ cảnh shop lúc này.' }, 503); }
     if (ctx.error) return json({ error: ctx.error, code: ctx.code }, ctx.status);
     if (!ctx.can('drafts.view')) return json({ error: 'Vai trò của bạn trong shop này không được xem lịch đăng.', code: 'forbidden' }, 403);
-    const { results } = await env.DB.prepare('SELECT id, provider, title, content, run_at, status, result_url, error, created_at FROM scheduled_posts WHERE shop_id = ? ORDER BY run_at DESC LIMIT 200').bind(ctx.shop.id).all();
-    const list = (results || []).map(r => ({ id: r.id, provider: r.provider, title: r.title || '', content: (r.content || '').slice(0, 280), run_at: Number(r.run_at) || null, status: r.status || 'scheduled', url: r.result_url || null, error: r.error || null, created_at: Number(r.created_at) || null }));
+    await ensureSocialSchema(env.DB);
+    await importLegacyScheduledPosts(env.DB);
+    const {results}=await env.DB.prepare("SELECT j.id,c.provider,j.payload,j.next_attempt_at,j.status,j.result_url,j.error_code,j.created_at FROM publish_jobs j JOIN channels c ON c.id=j.account_id AND c.shop_id=j.shop_id WHERE j.shop_id=? ORDER BY j.created_at DESC LIMIT 200").bind(ctx.shop.id).all();
+    const list=(results||[]).map(j=>{const p=JSON.parse(j.payload);return {id:j.id,provider:j.provider,title:p.title||'',content:(p.text||'').slice(0,280),run_at:j.next_attempt_at,status:({sent:'posted',pending:'scheduled',retryable:'scheduled',sending:'processing'})[j.status]||j.status,url:j.result_url,error:j.error_code,created_at:j.created_at};});
     return json({ scheduled: list });
   }
 
@@ -429,7 +408,9 @@ export async function channels(request, env, who, json) {
     try { ctx = await resolveShop(env, who, request); } catch { return json({ error: 'Không thể truy cập ngữ cảnh shop lúc này.' }, 503); }
     if (ctx.error) return json({ error: ctx.error, code: ctx.code }, ctx.status);
     if (!ctx.can('drafts.publish')) return json({ error: 'Vai trò của bạn trong shop này không được hủy lịch đăng.', code: 'forbidden' }, 403);
-    const res = await env.DB.prepare("DELETE FROM scheduled_posts WHERE shop_id = ? AND id = ? AND status = 'scheduled'").bind(ctx.shop.id, cancel[1]).run();
+    await ensureSocialSchema(env.DB);
+    const res=await env.DB.prepare("UPDATE publish_jobs SET status='failed',error_code='cancelled',updated_at=? WHERE shop_id=? AND id=? AND status IN ('pending','retryable')").bind(now(),ctx.shop.id,cancel[1]).run();
+    await env.DB.prepare("UPDATE scheduled_posts SET status='cancelled' WHERE shop_id=? AND id=? AND status='scheduled'").bind(ctx.shop.id,cancel[1]).run();
     return json({ deleted: res.meta.changes > 0 });
   }
 
@@ -456,7 +437,9 @@ export async function zaloCallback(request, env, who) {
   if(used.meta.changes!==1)return fail();
 
   try {
-  const expected=await env.DB.prepare('SELECT * FROM shop_channels WHERE shop_id=? AND provider=?').bind(ctx.shop.id,'zalo').first();
+  await ensureSocialSchema(env.DB);
+  await importLegacyScheduledPosts(env.DB);
+  const expected=await env.DB.prepare('SELECT * FROM channels WHERE shop_id=? AND provider=?').bind(ctx.shop.id,'zalo').first();
   const redirectUri = url.origin + '/auth/zalo/callback';
   const tok = await exchangeToken(env, { code, verifier: data.v, redirectUri });
   if (!tok.ok || !tok.data || !tok.data.access_token) return fail();

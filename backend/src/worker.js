@@ -62,7 +62,7 @@ export default {
   // Cron Trigger (xem triggers.crons trong wrangler.jsonc): quét lịch đăng đến giờ và đăng lên kênh thật.
   async scheduled(event, env, ctx) {
     if (!env.DB) return;
-    ctx.waitUntil(runDueScheduledPosts(env).catch(() => {}));
+    ctx.waitUntil(runDueScheduledPosts(env).then(result => console.info(JSON.stringify({event:'publish.cron',processed:result.processed}))).catch(() => console.error(JSON.stringify({event:'publish.cron',code:'scheduler_failed'}))));
   },
   async fetch(request, env) {
     const origin = request.headers.get('Origin');

@@ -1,9 +1,17 @@
 {
   "name": "shopai-backend",
-  "main": "src/app.js",
+  "main": "dist/app.js",
+  "build": {
+    "command": "node build.mjs"
+  },
   "compatibility_date": "2026-11-07",
   "workers_dev": true,
   "preview_urls": true,
+  "keep_vars": true,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
   "ai": {
     "binding": "AI"
   },
@@ -20,16 +28,19 @@
   "vars": {
     "ACCESS_TEAM_DOMAIN": "restless-butterfly-687f.cloudflareaccess.com",
     "ACCESS_AUD": "ff20e92c80e07676c17aa8c812769813ff3aaf0407e58bdf76fa02a844c630a0",
-    "ALLOWED_ORIGINS": "https://pthub2026.github.io",
-    "AI_MODEL": "@cf/meta/llama-3.1-8b-instruct"
+    "ALLOWED_ORIGINS": "https://pthub2026.github.io,https://shopai-backend.ct-3f8.workers.dev",
+    "AI_MODEL": "@cf/google/gemma-4-26b-a4b-it",
+    "ZALO_APP_ID": "3847703053447967855",
+    "PUBLIC_ORIGIN": "https://shoppost.net",
+    "EMAIL_FROM": "Shoppost <no-reply@shoppost.net>",
+    "PLATFORM_ADMIN_EMAILS": "ct@pthub.vn",
+    "EMAIL_LOGIN_DOMAINS": "pthub.vn,shoptrack.vn",
+    "META_APP_ID": "1690219679401963",
+    "META_REDIRECT_URI": "https://shoppost.net/api/social/meta/callback"
   },
-  "rules": [
+  "send_email": [
     {
-      "type": "Text",
-      "globs": [
-        "**/*.html"
-      ],
-      "fallthrough": true
+      "name": "EMAIL"
     }
   ],
   "previews": {
@@ -37,7 +48,8 @@
       "ACCESS_TEAM_DOMAIN": "restless-butterfly-687f.cloudflareaccess.com",
       "ACCESS_AUD": "ff20e92c80e07676c17aa8c812769813ff3aaf0407e58bdf76fa02a844c630a0",
       "ALLOWED_ORIGINS": "",
-      "AI_MODEL": "@cf/meta/llama-3.1-8b-instruct"
+      "AI_MODEL": "@cf/google/gemma-4-26b-a4b-it",
+      "ZALO_APP_ID": "3847703053447967855"
     },
     "ai": {
       "binding": "AI"
@@ -60,5 +72,26 @@
         "migrations_dir": "migrations"
       }
     ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "shopai-drafts-production",
+      "database_id": "50da4192-8c86-4168-b3ff-5ef11f6e3a96",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "shoppost.net/*",
+      "zone_name": "shoppost.net"
+    },
+    {
+      "pattern": "www.shoppost.net/*",
+      "zone_name": "shoppost.net"
+    }
+  ],
+  "triggers": {
+    "crons": ["*/5 * * * *"]
   }
 }

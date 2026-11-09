@@ -1,5 +1,7 @@
 # Bật OAuth Facebook sau khi cấu hình được duyệt
 
+> Đồng bộ main ngày 10/11/2026: hướng dẫn bên dưới mô tả adapter thử nghiệm `facebook.js` cũ, được giữ để đối chiếu. Worker và giao diện hiện dùng Meta theo shop trong `meta.js` và `social.js`; cấu hình hiện hành xem `META_STAGING.md`. Không khôi phục router cũ vì nó sẽ che các endpoint `/channels/facebook/*` của main.
+
 ## Phạm vi hiện tại
 
 Chỉ kết nối OAuth và danh sách Facebook Pages được Meta xác nhận. Chưa có đăng bài, lịch đăng, webhook hoặc đọc/gửi Messenger. Token mã hóa trên server; không dùng localStorage để lưu token. Kết nối chưa được nghiệm thu cloud.

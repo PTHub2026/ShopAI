@@ -23,7 +23,8 @@ test('Authenticated Worker reads/writes real local D1 and rejects stale revision
     await db.exec(readFileSync(new URL('../migrations/0001_drafts.sql',import.meta.url),'utf8').replace(/--[^\n]*/g,'').replace(/\s+/g,' '));
     const alice=await jwt('alice'),bob=await jwt('bob');
     const fetch=(path,options={},token=alice)=>mf.dispatchFetch('https://app.example'+path,{...options,headers:{Origin:'https://app.example','Content-Type':'application/json','Cf-Access-Jwt-Assertion':token,...options.headers}});
-    assert.equal((await mf.dispatchFetch('https://app.example/')).status,401);
+    const login=await mf.dispatchFetch('https://app.example/');assert.equal(login.status,200);assert.doesNotMatch(await login.text(),/shopai-user-scope/);
+    assert.equal((await mf.dispatchFetch('https://app.example/storage/drafts')).status,401);
     const page=await fetch('/');assert.equal(page.status,200);assert.match(await page.text(),/shopai-user-scope/);
     const body=JSON.stringify({draft:{id:'integration-a',type:'post',content:'Dữ liệu thử nghiệm D1 cục bộ',channels:[],status:'draft'},revision:0});
     const saved=await fetch('/storage/drafts/integration-a',{method:'PUT',body});assert.equal(saved.status,200);assert.equal((await saved.json()).revision,1);

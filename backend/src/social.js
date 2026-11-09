@@ -93,7 +93,7 @@ async function deliver(j,db,env,shop,json){
    remote=String(result.message_id);
   }else { remote=await publishMeta(env,a,j); }
   status='sent';error=null;
- }catch(e){if(e.status===429&&e.retryAfter>0){status='retryable';error='rate_limited';nextAttempt=now()+Math.min(86400,Math.max(1,Math.ceil(e.retryAfter))); }else if(e.status===401||e.status===403||metaDenied(e)){status='failed';error='provider_denied';await db.prepare("UPDATE social_accounts SET status='error' WHERE id=? AND shop_id=?").bind(a.id,shop).run();}}
+ }catch(e){const retryAt=now()+Math.ceil(e.retryAfter);if(e.status===429&&Number.isFinite(e.retryAfter)&&e.retryAfter>0&&Number.isSafeInteger(retryAt)){status='retryable';error='rate_limited';nextAttempt=retryAt; }else if(e.status===401||e.status===403||metaDenied(e)){status='failed';error='provider_denied';await db.prepare("UPDATE social_accounts SET status='error' WHERE id=? AND shop_id=?").bind(a.id,shop).run();}}
  await db.prepare('UPDATE publish_jobs SET status=?,remote_message_id=?,error_code=?,updated_at=?,next_attempt_at=? WHERE id=? AND shop_id=?').bind(status,remote,error,now(),nextAttempt,j.id,shop).run();
  await audit(db,{shopId:shop,actor:j.created_by,action:'social.publish',target:j.id,detail:{status,error}});
  return json({job:{...jobView(j),status,attempts:j.attempts+1,remoteMessageId:remote,errorCode:error}},status==='sent'?200:status==='retryable'?429:502);

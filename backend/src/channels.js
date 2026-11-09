@@ -14,6 +14,12 @@ const ZALO_TOKEN = 'https://oauth.zaloapp.com/v4/oa/access_token';
 const ZALO_GETOA = 'https://openapi.zalo.me/v2.0/oa/getoa';
 const ZALO_ARTICLE_CREATE = 'https://openapi.zalo.me/v3.0/article/create';
 const ZALO_ARTICLE_VERIFY = 'https://openapi.zalo.me/v3.0/article/verify';
+const ZALO_UPLOAD_ARTICLE = 'https://openapi.zalo.me/v2.0/oa/upload/article';
+
+const MAX_IMAGE_BYTES = 1048576; // Zalo giới hạn mỗi ảnh < 1MB.
+const MAX_IMAGES = 6; // Số ảnh tối đa đính kèm mỗi bài viết.
+const MAX_SCHEDULED_IMAGES_JSON = 900000; // Giữ bản ghi lịch gọn trong D1.
+const PUBLISH_MAX_BYTES = 8 * 1024 * 1024; // Thân yêu cầu đăng/lịch có thể kèm ảnh data URL.
 
 const enc = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
@@ -59,10 +65,15 @@ async function openCookie(env, value) {
 
 // Schema tạo lúc chạy (idempotent) vì Workers Builds không chạy migration tự động.
 const CHANNELS_SCHEMA = 'CREATE TABLE IF NOT EXISTS shop_channels (shop_id TEXT NOT NULL, provider TEXT NOT NULL, external_id TEXT, name TEXT, access_token TEXT, refresh_token TEXT, expires_at INTEGER, status TEXT, connected_by TEXT, connected_at INTEGER, updated_at INTEGER, PRIMARY KEY (shop_id, provider))';
+// Lịch đăng thật cho kênh đã kết nối (hiện dùng Zalo OA). Cron quét bản ghi đến giờ rồi đăng.
+const SCHEDULED_SCHEMA = 'CREATE TABLE IF NOT EXISTS scheduled_posts (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, provider TEXT NOT NULL, title TEXT, content TEXT, images TEXT, author TEXT, run_at INTEGER, status TEXT, result_id TEXT, result_url TEXT, error TEXT, attempts INTEGER DEFAULT 0, created_by TEXT, created_at INTEGER, updated_at INTEGER)';
+const SCHEDULED_INDEX = 'CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_posts (status, run_at)';
 const schemaReady = new WeakSet();
 async function ensureChannelsSchema(db) {
   if (schemaReady.has(db)) return;
   await db.prepare(CHANNELS_SCHEMA).run();
+  await db.prepare(SCHEDULED_SCHEMA).run();
+  await db.prepare(SCHEDULED_INDEX).run();
   schemaReady.add(db);
 }
 
@@ -123,6 +134,109 @@ async function ensureFreshToken(env, db, channel) {
   return { token: channel.access_token, refreshFailed: true, detail: zaloError(r) };
 }
 
+// Ảnh gửi lên có thể là data URL (base64) hoặc URL http(s). Chuẩn hóa để tải lên Zalo (data URL) hoặc tham chiếu trực tiếp (http).
+function normalizeImages(images) {
+  if (images === undefined || images === null) return [];
+  if (!Array.isArray(images)) throw new Error('Danh sách ảnh không hợp lệ.');
+  if (images.length > MAX_IMAGES) throw new Error('Chỉ hỗ trợ tối đa ' + MAX_IMAGES + ' ảnh mỗi bài.');
+  const out = [];
+  for (const raw of images) {
+    const item = typeof raw === 'string' ? raw : (raw && typeof raw === 'object' ? (raw.data || raw.url || '') : '');
+    const s = clean(item);
+    if (!s) continue;
+    const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(s);
+    if (m) {
+      const mime = clean(m[1]) || 'image/jpeg';
+      if (!/^image\//i.test(mime)) throw new Error('Chỉ hỗ trợ tệp ảnh để đăng kèm.');
+      let bytes;
+      try { bytes = m[2] ? Uint8Array.from(atob(m[3]), c => c.charCodeAt(0)) : enc.encode(decodeURIComponent(m[3])); }
+      catch { throw new Error('Dữ liệu ảnh không hợp lệ.'); }
+      if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error('Ảnh vượt quá 1MB; hãy dùng ảnh nhỏ hơn.');
+      const ext = /png/i.test(mime) ? 'png' : /gif/i.test(mime) ? 'gif' : /webp/i.test(mime) ? 'webp' : 'jpg';
+      out.push({ kind: 'upload', bytes, mime, name: 'image.' + ext });
+    } else if (/^https?:\/\//i.test(s)) {
+      out.push({ kind: 'url', url: s });
+    } else {
+      throw new Error('Ảnh phải là data URL hoặc đường dẫn http(s).');
+    }
+  }
+  return out;
+}
+
+// Tải một ảnh lên Zalo (multipart, HEADER access_token) để lấy tham chiếu dùng cho bìa/thân bài viết.
+async function uploadArticlePhoto(accessToken, bytes, filename, mime) {
+  const form = new FormData();
+  form.append('file', new Blob([bytes], { type: mime || 'image/jpeg' }), filename || 'image.jpg');
+  const r = await fetchJson(ZALO_UPLOAD_ARTICLE, { method: 'POST', headers: { access_token: accessToken }, body: form });
+  const d = r.ok && r.data && Number(r.data.error) === 0 ? r.data.data : null;
+  if (!d) throw new Error('Tải ảnh lên Zalo thất bại: ' + zaloError(r));
+  const token = clean(d.token) || clean(d.photo_id) || clean(d.id);
+  const url = clean(d.url) || clean(d.normalUrl) || clean(d.thumbUrl);
+  if (!token && !url) throw new Error('Zalo không trả về tham chiếu ảnh hợp lệ.');
+  return { token: token || null, url: url || null };
+}
+function coverFrom(ref) {
+  if (!ref) return null;
+  return ref.token ? { cover_type: 'photo', photo_id: ref.token } : { cover_type: 'photo', photo_url: ref.url };
+}
+function imageSegment(ref) {
+  return ref.token ? { type: 'image', photo_id: ref.token } : { type: 'image', url: ref.url };
+}
+
+// Lõi đăng bài Zalo OA dùng chung cho đăng ngay và đăng theo lịch. Tự làm mới token; ném Error (thông điệp tiếng Việt) khi thất bại.
+// opts: { title, content, images, author }. Ảnh đầu tiên làm bìa, các ảnh còn lại chèn vào thân bài.
+export async function publishZaloArticle(env, db, channel, opts = {}) {
+  const text = clean(opts.content);
+  if (!text) throw new Error('Thiếu nội dung bài viết để đăng.');
+  let heading = clean(opts.title);
+  if (!heading) heading = text.split('\n').map(s => s.trim()).find(Boolean) || 'Bài viết';
+  heading = heading.slice(0, 100);
+  const normalized = normalizeImages(opts.images);
+  const fresh = await ensureFreshToken(env, db, channel);
+  const accessToken = fresh.token;
+  const refs = [];
+  for (const img of normalized) {
+    if (img.kind === 'upload') refs.push(await uploadArticlePhoto(accessToken, img.bytes, img.name, img.mime));
+    else refs.push({ token: null, url: img.url });
+  }
+  const body = [{ type: 'text', content: text }];
+  for (const ref of refs.slice(1)) body.push(imageSegment(ref));
+  const article = { type: 'normal', title: heading, author: clean(opts.author) || 'ShopPost', description: text.slice(0, 200), body, status: 'show' };
+  if (refs[0]) article.cover = coverFrom(refs[0]);
+  const created = await fetchJson(ZALO_ARTICLE_CREATE, { method: 'POST', headers: { access_token: accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify(article) });
+  const token = created.ok && created.data && Number(created.data.error) === 0 ? (created.data.data && created.data.data.token) : null;
+  if (!token) throw new Error('Zalo từ chối tạo bài viết: ' + zaloError(created));
+  const verified = await fetchJson(ZALO_ARTICLE_VERIFY, { method: 'POST', headers: { access_token: accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+  if (!(verified.ok && verified.data && Number(verified.data.error) === 0)) throw new Error('Zalo chưa xác nhận bài viết: ' + zaloError(verified));
+  const art = (verified.data && verified.data.data) || {};
+  return { ok: true, id: art.id || art.article_id || null, url: art.url || art.link || null };
+}
+
+// Cron: tìm các bài đến giờ và đăng lên kênh thật. Mỗi bài xử lý độc lập (try/catch riêng) để một lỗi không chặn bài khác.
+export async function runDueScheduledPosts(env) {
+  if (!env || !env.DB) return { processed: 0 };
+  await ensureChannelsSchema(env.DB);
+  const t = now();
+  const { results } = await env.DB.prepare("SELECT * FROM scheduled_posts WHERE status = 'scheduled' AND run_at <= ? ORDER BY run_at ASC LIMIT 25").bind(t).all();
+  let processed = 0;
+  for (const row of results || []) {
+    try {
+      const channel = await env.DB.prepare('SELECT * FROM shop_channels WHERE shop_id = ? AND provider = ?').bind(row.shop_id, row.provider).first();
+      if (!channel || channel.status !== 'connected' || !channel.access_token) throw new Error('Shop chưa kết nối ' + (row.provider === 'zalo' ? 'Zalo OA' : row.provider) + '.');
+      let images = [];
+      try { images = JSON.parse(row.images || '[]'); } catch {}
+      const res = await publishZaloArticle(env, env.DB, channel, { title: row.title, content: row.content, images, author: row.author });
+      await env.DB.prepare("UPDATE scheduled_posts SET status = 'posted', result_id = ?, result_url = ?, error = NULL, updated_at = ? WHERE id = ? AND status = 'scheduled'")
+        .bind(res.id || null, res.url || null, now(), row.id).run();
+    } catch (e) {
+      await env.DB.prepare("UPDATE scheduled_posts SET status = 'failed', error = ?, attempts = COALESCE(attempts, 0) + 1, updated_at = ? WHERE id = ? AND status = 'scheduled'")
+        .bind(String((e && e.message) || 'Đăng thất bại.').slice(0, 500), now(), row.id).run();
+    }
+    processed++;
+  }
+  return { processed };
+}
+
 // Ngữ cảnh shop: connect là điều hướng cấp trang (không có header shop) nên nhận shop qua ?shop=; list/publish là fetch nên dùng header.
 async function shopCtx(env, who, request, shopId) {
   if (shopId) return resolveShop(env, who, new Request(request.url, { headers: { [SHOP_HEADER]: shopId } }));
@@ -166,7 +280,7 @@ export async function channels(request, env, who, json) {
     return redirectTo(target, [setCookie(CONNECT_COOKIE, sealed, CONNECT_TTL)]);
   }
 
-  // Đăng bài viết thật lên Zalo OA: article/create rồi article/verify. Tự làm mới token nếu cần.
+  // Đăng bài viết thật lên Zalo OA (kèm ảnh nếu có): tải ảnh → article/create → article/verify. Tự làm mới token nếu cần.
   if (path === '/channels/zalo/publish') {
     if (method !== 'POST') return json({ error: 'Chỉ hỗ trợ POST.' }, 405, { Allow: 'POST' });
     let ctx;
@@ -174,7 +288,7 @@ export async function channels(request, env, who, json) {
     if (ctx.error) return json({ error: ctx.error, code: ctx.code }, ctx.status);
     if (!ctx.can('drafts.publish')) return json({ error: 'Vai trò của bạn trong shop này không được đăng bài.', code: 'forbidden' }, 403);
     let body;
-    try { body = await readJson(request); } catch { return json({ error: 'Dữ liệu gửi lên không hợp lệ.' }, 400); }
+    try { body = await readJson(request, PUBLISH_MAX_BYTES); } catch { return json({ error: 'Dữ liệu gửi lên không hợp lệ.' }, 400); }
     let title = clean(body.title);
     let content = clean(body.content);
     // Cho phép tham chiếu bản nháp theo id (nội dung nằm trong cột payload JSON của bảng drafts).
@@ -184,30 +298,70 @@ export async function channels(request, env, who, json) {
       try { const p = JSON.parse(row.payload); content = content || clean(p.content); } catch {}
     }
     if (!content) return json({ error: 'Thiếu nội dung bài viết để đăng.' }, 400);
-    if (!title) title = content.split('\n').map(s => s.trim()).find(Boolean) || 'Bài viết';
-    title = title.slice(0, 100);
 
     const channel = await env.DB.prepare('SELECT * FROM shop_channels WHERE shop_id = ? AND provider = ?').bind(ctx.shop.id, 'zalo').first();
     if (!channel || channel.status !== 'connected' || !channel.access_token) return json({ error: 'Shop chưa kết nối Zalo OA. Hãy kết nối tại mục Kênh trước khi đăng.', code: 'not_connected' }, 409);
 
-    const fresh = await ensureFreshToken(env, env.DB, channel);
-    const accessToken = fresh.token;
-    // Bài viết văn bản: ánh xạ tiêu đề + nội dung bản nháp sang cấu trúc article của Zalo (không có ảnh bìa thì vẫn thử, lỗi API sẽ được trả về nguyên văn).
-    const article = {
-      type: 'normal',
-      title,
-      author: (ctx.shop && clean(ctx.shop.name)) || 'ShopPost',
-      description: content.slice(0, 200),
-      body: [{ type: 'text', content }],
-      status: 'show'
-    };
-    const created = await fetchJson(ZALO_ARTICLE_CREATE, { method: 'POST', headers: { access_token: accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify(article) });
-    const token = created.ok && created.data && Number(created.data.error) === 0 ? (created.data.data && created.data.data.token) : null;
-    if (!token) return json({ error: 'Zalo từ chối tạo bài viết: ' + zaloError(created), code: 'zalo_error' }, 502);
-    const verified = await fetchJson(ZALO_ARTICLE_VERIFY, { method: 'POST', headers: { access_token: accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
-    if (!(verified.ok && verified.data && Number(verified.data.error) === 0)) return json({ error: 'Zalo chưa xác nhận bài viết: ' + zaloError(verified), code: 'zalo_error' }, 502);
-    const art = (verified.data && verified.data.data) || {};
-    return json({ ok: true, id: art.id || art.article_id || null, url: art.url || art.link || null });
+    try {
+      const res = await publishZaloArticle(env, env.DB, channel, { title, content, images: body.images, author: (ctx.shop && clean(ctx.shop.name)) || 'ShopPost' });
+      return json({ ok: true, id: res.id, url: res.url });
+    } catch (e) {
+      return json({ error: (e && e.message) || 'Đăng bài Zalo thất bại.', code: 'zalo_error' }, 502);
+    }
+  }
+
+  // Tạo lịch đăng thật cho kênh Zalo OA. Cron sẽ tự đăng khi đến giờ.
+  if (path === '/channels/zalo/schedule') {
+    if (method !== 'POST') return json({ error: 'Chỉ hỗ trợ POST.' }, 405, { Allow: 'POST' });
+    let ctx;
+    try { ctx = await resolveShop(env, who, request); } catch { return json({ error: 'Không thể truy cập ngữ cảnh shop lúc này.' }, 503); }
+    if (ctx.error) return json({ error: ctx.error, code: ctx.code }, ctx.status);
+    if (!ctx.can('drafts.publish')) return json({ error: 'Vai trò của bạn trong shop này không được đăng bài.', code: 'forbidden' }, 403);
+    let body;
+    try { body = await readJson(request, PUBLISH_MAX_BYTES); } catch { return json({ error: 'Dữ liệu gửi lên không hợp lệ.' }, 400); }
+    const content = clean(body.content);
+    if (!content) return json({ error: 'Thiếu nội dung bài viết để lên lịch.' }, 400);
+    const runAt = Math.floor(Number(body.runAt));
+    if (!Number.isFinite(runAt) || runAt <= now()) return json({ error: 'Thời gian lên lịch phải ở tương lai.' }, 400);
+    // Kiểm tra ảnh hợp lệ ngay lúc tạo lịch để báo lỗi sớm; lưu nguyên data URL để cron tải lên Zalo khi đăng.
+    try { normalizeImages(body.images); } catch (e) { return json({ error: (e && e.message) || 'Ảnh không hợp lệ.' }, 400); }
+    const imagesJson = JSON.stringify(Array.isArray(body.images) ? body.images : []);
+    if (imagesJson.length > MAX_SCHEDULED_IMAGES_JSON) return json({ error: 'Ảnh đính kèm quá lớn để lên lịch; hãy giảm số lượng hoặc kích thước ảnh.' }, 413);
+
+    const channel = await env.DB.prepare('SELECT * FROM shop_channels WHERE shop_id = ? AND provider = ?').bind(ctx.shop.id, 'zalo').first();
+    if (!channel || channel.status !== 'connected' || !channel.access_token) return json({ error: 'Shop chưa kết nối Zalo OA. Hãy kết nối tại mục Kênh trước khi lên lịch.', code: 'not_connected' }, 409);
+
+    const id = 's_' + randToken(12);
+    const t = now();
+    const title = clean(body.title).slice(0, 100);
+    const author = (ctx.shop && clean(ctx.shop.name)) || 'ShopPost';
+    await env.DB.prepare('INSERT INTO scheduled_posts (id, shop_id, provider, title, content, images, author, run_at, status, attempts, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)')
+      .bind(id, ctx.shop.id, 'zalo', title, content, imagesJson, author, runAt, 'scheduled', who.owner, t, t).run();
+    return json({ ok: true, id, runAt, status: 'scheduled' });
+  }
+
+  // Danh sách lịch đăng của shop (KHÔNG trả token/ảnh gốc).
+  if (path === '/channels/scheduled') {
+    if (method !== 'GET') return json({ error: 'Chỉ hỗ trợ GET.' }, 405, { Allow: 'GET' });
+    let ctx;
+    try { ctx = await resolveShop(env, who, request); } catch { return json({ error: 'Không thể truy cập ngữ cảnh shop lúc này.' }, 503); }
+    if (ctx.error) return json({ error: ctx.error, code: ctx.code }, ctx.status);
+    if (!ctx.can('drafts.view')) return json({ error: 'Vai trò của bạn trong shop này không được xem lịch đăng.', code: 'forbidden' }, 403);
+    const { results } = await env.DB.prepare('SELECT id, provider, title, content, run_at, status, result_url, error, created_at FROM scheduled_posts WHERE shop_id = ? ORDER BY run_at DESC LIMIT 200').bind(ctx.shop.id).all();
+    const list = (results || []).map(r => ({ id: r.id, provider: r.provider, title: r.title || '', content: (r.content || '').slice(0, 280), run_at: Number(r.run_at) || null, status: r.status || 'scheduled', url: r.result_url || null, error: r.error || null, created_at: Number(r.created_at) || null }));
+    return json({ scheduled: list });
+  }
+
+  // Hủy một lịch đăng chưa chạy.
+  const cancel = /^\/channels\/scheduled\/([A-Za-z0-9_-]{1,64})$/.exec(path);
+  if (cancel) {
+    if (method !== 'DELETE') return json({ error: 'Chỉ hỗ trợ DELETE.' }, 405, { Allow: 'DELETE' });
+    let ctx;
+    try { ctx = await resolveShop(env, who, request); } catch { return json({ error: 'Không thể truy cập ngữ cảnh shop lúc này.' }, 503); }
+    if (ctx.error) return json({ error: ctx.error, code: ctx.code }, ctx.status);
+    if (!ctx.can('drafts.publish')) return json({ error: 'Vai trò của bạn trong shop này không được hủy lịch đăng.', code: 'forbidden' }, 403);
+    const res = await env.DB.prepare("DELETE FROM scheduled_posts WHERE shop_id = ? AND id = ? AND status = 'scheduled'").bind(ctx.shop.id, cancel[1]).run();
+    return json({ deleted: res.meta.changes > 0 });
   }
 
   return json({ error: 'Không tìm thấy endpoint kênh.' }, 404);

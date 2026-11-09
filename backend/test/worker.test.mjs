@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 const worker = (await import(new URL('../src/worker.js', import.meta.url))).default;
+const { runDueScheduledPosts } = await import(new URL('../src/channels.js', import.meta.url));
 const { subtle } = webcrypto;
 const pair = await subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
 const jwk = { ...await subtle.exportKey('jwk', pair.publicKey), kid: 'test-key', use: 'sig', alg: 'RS256' };
@@ -124,7 +125,7 @@ test('Session capabilities require a verified subject and separate local account
   assert.equal(first.status,200);
   const session=await first.json();
   assert.match(session.userScope,/^[a-f0-9]{64}$/);
-  assert.deepEqual(session.capabilities,{ai:true,drafts:true,publishing:true,scheduling:false,inbox:false});
+  assert.deepEqual(session.capabilities,{ai:true,drafts:true,publishing:true,scheduling:true,inbox:false});
   const second=await (await worker.fetch(request({path:'/session',method:'GET',jwt:await token({sub:'user-b'})}),env())).json();
   assert.notEqual(second.userScope,session.userScope);assert.equal(second.capabilities.drafts,false);
   const page=await worker.fetch(request({path:'/',method:'GET'}),env({FRONTEND_HTML:'<head></head><body></body>'}));
@@ -198,3 +199,37 @@ test('Reasoning-only, tool-only and truncated outputs never become successful co
     assert.equal((await worker.fetch(request(),env({AI:{run:async()=>result}}))).status,502);
   }
 }));
+// D1 giả lập: chỉ phục vụ các truy vấn của runDueScheduledPosts và ghi lại các câu UPDATE scheduled_posts.
+function fakeDB(rows, channel){
+  const updates=[];
+  const db={ _updates:updates, prepare(sql){ return { _sql:sql,_args:[],
+    bind(...a){this._args=a;return this},
+    async run(){ if(/UPDATE scheduled_posts/.test(this._sql)) updates.push({sql:this._sql,args:this._args}); return {meta:{changes:1}}; },
+    async all(){ return /SELECT \* FROM scheduled_posts/.test(this._sql)?{results:rows}:{results:[]}; },
+    async first(){ return /FROM shop_channels/.test(this._sql)?channel:null; } }; } };
+  return db;
+}
+test('Cron đánh dấu lịch đăng thất bại khi shop chưa kết nối kênh', async()=>{
+  const row={id:'s_1',shop_id:'shop1',provider:'zalo',title:'',content:'Nội dung',images:'[]',author:'ShopPost',run_at:1,status:'scheduled'};
+  const db=fakeDB([row],null);
+  const res=await runDueScheduledPosts({DB:db});
+  assert.equal(res.processed,1);
+  assert.equal(db._updates.length,1);
+  assert.match(db._updates[0].sql,/status = 'failed'/);
+  assert.match(String(db._updates[0].args[0]),/chưa kết nối/);
+});
+test('Cron không làm gì khi thiếu DB hoặc không có lịch đến giờ', async()=>{
+  assert.deepEqual(await runDueScheduledPosts({}),{processed:0});
+  const db=fakeDB([],null);
+  assert.deepEqual(await runDueScheduledPosts({DB:db}),{processed:0});
+  assert.equal(db._updates.length,0);
+});
+test('Handler scheduled chỉ chạy cron khi đã gắn cơ sở dữ liệu', async()=>{
+  let calls=0;
+  await worker.scheduled({},{},{waitUntil:()=>{calls++}});
+  assert.equal(calls,0);
+  let pending=null;
+  await worker.scheduled({},{DB:fakeDB([],null)},{waitUntil:x=>{calls++;pending=x}});
+  assert.equal(calls,1);
+  await pending;
+});

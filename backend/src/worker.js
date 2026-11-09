@@ -1,7 +1,7 @@
 import { drafts } from './drafts.js';
 import { handleAuth, loginResponse, normalizeEmail, sessionFromRequest } from './auth.js';
 import { INVITE_PATH, handleApi, resolveShop } from './shops.js';
-import { channels, zaloCallback } from './channels.js';
+import { channels, zaloCallback, runDueScheduledPosts } from './channels.js';
 import { isPlatformAdmin } from './permissions.js';
 const INVITE_COOKIE = '__Host-shopai_invite';
 const LOGIN_REQUIRED = 'Phiên đăng nhập đã hết hạn hoặc chưa đăng nhập.';
@@ -58,6 +58,11 @@ function appResponse(env, request, scope, invite = '', extra = {}) {
   } });
 }
 export default {
+  // Cron Trigger (xem triggers.crons trong wrangler.jsonc): quét lịch đăng đến giờ và đăng lên kênh thật.
+  async scheduled(event, env, ctx) {
+    if (!env.DB) return;
+    ctx.waitUntil(runDueScheduledPosts(env).catch(() => {}));
+  },
   async fetch(request, env) {
     const origin = request.headers.get('Origin');
     const allowed = (env.ALLOWED_ORIGINS || '').split(',').map(x => x.trim()).filter(Boolean);
@@ -126,7 +131,7 @@ export default {
         try { const ctx = await resolveShop(env, who, request); if (ctx.error) shopError = { code: ctx.code, error: ctx.error }; else shop = { id: ctx.shop.id, name: ctx.shop.name, role: ctx.membership.role, canPublish: ctx.membership.can_publish, permissions: ctx.permissions }; }
         catch { shopError = { code: 'shop_unavailable', error: 'Không thể tải thông tin shop lúc này.' }; }
       }
-      return json({ userScope: await scopeFor(owner), auth: who.via, account: who.via === 'session' ? { provider: who.provider, name: who.name } : null, admin: isPlatformAdmin(env, who), shop, shopError, capabilities: { ai: true, drafts: Boolean(env.DB), publishing: Boolean(env.DB), scheduling: false, inbox: false }, version: env.CF_VERSION_METADATA?.id || null, release: env.RELEASE_SHA || null });
+      return json({ userScope: await scopeFor(owner), auth: who.via, account: who.via === 'session' ? { provider: who.provider, name: who.name } : null, admin: isPlatformAdmin(env, who), shop, shopError, capabilities: { ai: true, drafts: Boolean(env.DB), publishing: Boolean(env.DB), scheduling: Boolean(env.DB), inbox: false }, version: env.CF_VERSION_METADATA?.id || null, release: env.RELEASE_SHA || null });
     }
     if (path.startsWith('/auth/')) return handleAuth(request, env, { json, headers, accessUser: async () => Boolean(request.headers.get('Cf-Access-Jwt-Assertion')) && await authenticate(request, env) });
     // Giao diện và API cùng origin; cần Access JWT hợp lệ hoặc phiên đăng nhập, nếu không thì hiện trang đăng nhập.

@@ -201,7 +201,7 @@ export async function publishZaloArticle(env, db, channel, opts = {}) {
   }
   const body = [{ type: 'text', content: text }];
   for (const ref of refs.slice(1)) body.push(imageSegment(ref));
-  const article = { type: 'normal', title: heading, author: clean(opts.author) || 'ShopPost', description: text.slice(0, 200), body, status: 'show' };
+  const article = { type: 'normal', title: heading, author: clean(opts.author) || 'Shoppost', description: text.slice(0, 200), body, status: 'show' };
   if (refs[0]) article.cover = coverFrom(refs[0]);
   const created = await fetchJson(ZALO_ARTICLE_CREATE, { method: 'POST', headers: { access_token: accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify(article) });
   const token = created.ok && created.data && Number(created.data.error) === 0 ? (created.data.data && created.data.data.token) : null;
@@ -220,16 +220,20 @@ export async function runDueScheduledPosts(env) {
   const { results } = await env.DB.prepare("SELECT * FROM scheduled_posts WHERE status = 'scheduled' AND run_at <= ? ORDER BY run_at ASC LIMIT 25").bind(t).all();
   let processed = 0;
   for (const row of results || []) {
+    // Claim atomically before any provider call. A crashed/uncertain send stays
+    // processing for reconciliation; never automatically replay a possible post.
+    const claimed = await env.DB.prepare("UPDATE scheduled_posts SET status = 'processing', updated_at = ? WHERE id = ? AND status = 'scheduled'").bind(now(), row.id).run();
+    if (claimed.meta.changes !== 1) continue;
     try {
       const channel = await env.DB.prepare('SELECT * FROM shop_channels WHERE shop_id = ? AND provider = ?').bind(row.shop_id, row.provider).first();
       if (!channel || channel.status !== 'connected' || !channel.access_token) throw new Error('Shop chưa kết nối ' + (row.provider === 'zalo' ? 'Zalo OA' : row.provider) + '.');
       let images = [];
       try { images = JSON.parse(row.images || '[]'); } catch {}
       const res = await publishZaloArticle(env, env.DB, channel, { title: row.title, content: row.content, images, author: row.author });
-      await env.DB.prepare("UPDATE scheduled_posts SET status = 'posted', result_id = ?, result_url = ?, error = NULL, updated_at = ? WHERE id = ? AND status = 'scheduled'")
+      await env.DB.prepare("UPDATE scheduled_posts SET status = 'posted', result_id = ?, result_url = ?, error = NULL, updated_at = ? WHERE id = ? AND status = 'processing'")
         .bind(res.id || null, res.url || null, now(), row.id).run();
     } catch (e) {
-      await env.DB.prepare("UPDATE scheduled_posts SET status = 'failed', error = ?, attempts = COALESCE(attempts, 0) + 1, updated_at = ? WHERE id = ? AND status = 'scheduled'")
+      await env.DB.prepare("UPDATE scheduled_posts SET status = 'failed', error = ?, attempts = COALESCE(attempts, 0) + 1, updated_at = ? WHERE id = ? AND status = 'processing'")
         .bind(String((e && e.message) || 'Đăng thất bại.').slice(0, 500), now(), row.id).run();
     }
     processed++;
@@ -303,7 +307,7 @@ export async function channels(request, env, who, json) {
     if (!channel || channel.status !== 'connected' || !channel.access_token) return json({ error: 'Shop chưa kết nối Zalo OA. Hãy kết nối tại mục Kênh trước khi đăng.', code: 'not_connected' }, 409);
 
     try {
-      const res = await publishZaloArticle(env, env.DB, channel, { title, content, images: body.images, author: (ctx.shop && clean(ctx.shop.name)) || 'ShopPost' });
+      const res = await publishZaloArticle(env, env.DB, channel, { title, content, images: body.images, author: (ctx.shop && clean(ctx.shop.name)) || 'Shoppost' });
       return json({ ok: true, id: res.id, url: res.url });
     } catch (e) {
       return json({ error: (e && e.message) || 'Đăng bài Zalo thất bại.', code: 'zalo_error' }, 502);
@@ -334,7 +338,7 @@ export async function channels(request, env, who, json) {
     const id = 's_' + randToken(12);
     const t = now();
     const title = clean(body.title).slice(0, 100);
-    const author = (ctx.shop && clean(ctx.shop.name)) || 'ShopPost';
+    const author = (ctx.shop && clean(ctx.shop.name)) || 'Shoppost';
     await env.DB.prepare('INSERT INTO scheduled_posts (id, shop_id, provider, title, content, images, author, run_at, status, attempts, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)')
       .bind(id, ctx.shop.id, 'zalo', title, content, imagesJson, author, runAt, 'scheduled', who.owner, t, t).run();
     return json({ ok: true, id, runAt, status: 'scheduled' });

@@ -210,13 +210,14 @@ function fakeDB(rows, channel){
   return db;
 }
 test('Cron đánh dấu lịch đăng thất bại khi shop chưa kết nối kênh', async()=>{
-  const row={id:'s_1',shop_id:'shop1',provider:'zalo',title:'',content:'Nội dung',images:'[]',author:'ShopPost',run_at:1,status:'scheduled'};
+  const row={id:'s_1',shop_id:'shop1',provider:'zalo',title:'',content:'Nội dung',images:'[]',author:'Shoppost',run_at:1,status:'scheduled'};
   const db=fakeDB([row],null);
   const res=await runDueScheduledPosts({DB:db});
   assert.equal(res.processed,1);
-  assert.equal(db._updates.length,1);
-  assert.match(db._updates[0].sql,/status = 'failed'/);
-  assert.match(String(db._updates[0].args[0]),/chưa kết nối/);
+  assert.equal(db._updates.length,2);
+  assert.match(db._updates[0].sql,/status = 'processing'/);
+  assert.match(db._updates[1].sql,/status = 'failed'/);
+  assert.match(String(db._updates[1].args[0]),/chưa kết nối/);
 });
 test('Cron không làm gì khi thiếu DB hoặc không có lịch đến giờ', async()=>{
   assert.deepEqual(await runDueScheduledPosts({}),{processed:0});

@@ -31,14 +31,14 @@ function database() {
 const row = (db, sql, ...params) => db.sqlite.prepare(sql).get(...params) || null;
 const rows = (db, sql, ...params) => db.sqlite.prepare(sql).all(...params);
 
-const LOGIN_HTML = '<!DOCTYPE html><html lang="vi"><head><script nonce="__CSP_NONCE__">window.dangNhap=1</script></head><body><h1>Đăng nhập ShopPost</h1></body></html>';
+const LOGIN_HTML = '<!DOCTYPE html><html lang="vi"><head><script nonce="__CSP_NONCE__">window.dangNhap=1</script></head><body><h1>Đăng nhập Shoppost</h1></body></html>';
 function env(overrides = {}) {
   return {
     ACCESS_TEAM_DOMAIN: 'test-team.cloudflareaccess.com', ACCESS_AUD: 'test-audience', ALLOWED_ORIGINS: 'https://pthub2026.github.io',
     AI: { run: async () => ({ response: 'Nội dung AI' }) }, AI_RATE_LIMITER: { limit: async () => ({ success: true }) }, DB: database(),
-    RESEND_API_KEY: RESEND_KEY, EMAIL_FROM: 'ShopPost <no-reply@shoppost.net>',
+    RESEND_API_KEY: RESEND_KEY, EMAIL_FROM: 'Shoppost <no-reply@shoppost.net>',
     EMAIL_LOGIN_DOMAINS: 'pthub.vn,shoptrack.vn,shoppost.net,example.com,b.vn,vidu.vn,y.vn',
-    FRONTEND_HTML: '<html><head></head><body>Ứng dụng ShopPost</body></html>', LOGIN_HTML, ...overrides
+    FRONTEND_HTML: '<html><head></head><body>Ứng dụng Shoppost</body></html>', LOGIN_HTML, ...overrides
   };
 }
 const get = (e, path, headers = {}, method = 'GET') => worker.fetch(new Request(BASE + path, { method, headers }), e);
@@ -138,7 +138,7 @@ test('Chưa đăng nhập: / trả trang đăng nhập với CSP nonce riêng, k
     const response = await get(e, '/', headers);
     assert.equal(response.status, 200);
     const html = await response.text(), csp = response.headers.get('Content-Security-Policy');
-    assert.match(html, /Đăng nhập ShopPost/); assert.doesNotMatch(html, /shopai-user-scope|Ứng dụng ShopPost|__CSP_NONCE__/);
+    assert.match(html, /Đăng nhập Shoppost/); assert.doesNotMatch(html, /shopai-user-scope|Ứng dụng Shoppost|__CSP_NONCE__/);
     const nonce = html.match(/nonce="([A-Za-z0-9_-]{22})"/)[1];
     assert.ok(csp.includes(`'nonce-${nonce}'`)); assert.ok(!csp.includes('facebook')); assert.ok(csp.includes("frame-ancestors 'none'"));
     assert.equal(response.headers.get('Cache-Control'), 'no-store'); assert.equal(response.headers.get('X-Frame-Options'), 'DENY');
@@ -185,7 +185,7 @@ test('Phiên hết hạn bị xóa và quay về trang đăng nhập; đăng xu�
   const expired = sessionToken(await loginEmail(e, 'het-han@vidu.vn'));
   e.DB.sqlite.prepare('UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ?').run(now() - 1, sha(expired));
   const login = await get(e, '/', withSession(expired));
-  assert.match(await login.text(), /Đăng nhập ShopPost/);
+  assert.match(await login.text(), /Đăng nhập Shoppost/);
   assert.equal(row(e.DB, 'SELECT * FROM auth_sessions WHERE token_hash = ?', sha(expired)), null);
   assert.equal((await get(e, '/session', withSession(expired))).status, 401);
 
@@ -213,7 +213,7 @@ test('Email OTP: gửi mã, chặn gửi lại quá nhanh, sai mã, đúng mã m
     const start = await post(e, '/auth/email/start', { email: '  Khach@Example.com ' });
     assert.equal(start.status, 200); assert.deepEqual(await start.json(), { ok: true, retryAfter: 60, expiresIn: 600 });
     assert.equal(sent.length, 1);
-    assert.equal(sent[0].from, 'ShopPost <no-reply@shoppost.net>'); assert.equal(sent[0].subject, 'Mã đăng nhập ShopPost của bạn'); assert.match(sent[0].text, /^Mã đăng nhập ShopPost của bạn là \d{6}\./); assert.deepEqual(sent[0].to, ['khach@example.com']);
+    assert.equal(sent[0].from, 'Shoppost <no-reply@shoppost.net>'); assert.equal(sent[0].subject, 'Mã đăng nhập Shoppost của bạn'); assert.match(sent[0].text, /^Mã đăng nhập Shoppost của bạn là \d{6}\./); assert.deepEqual(sent[0].to, ['khach@example.com']);
     const code = sent[0].text.match(/\b(\d{6})\b/)[1];
     const stored = row(e.DB, 'SELECT * FROM auth_otp_codes WHERE email = ?', 'khach@example.com');
     assert.equal(JSON.stringify(stored).includes(code), false); assert.match(stored.code_hash, /^[a-f0-9]{64}$/);
@@ -318,11 +318,11 @@ async function captureErrors(callback) {
 }
 
 test('parseEmailFrom: tách tên hiển thị và địa chỉ, từ chối giá trị chèn header', () => {
-  assert.deepEqual(parseEmailFrom('ShopPost <no-reply@shoppost.net>'), { email: 'no-reply@shoppost.net', name: 'ShopPost' });
-  assert.deepEqual(parseEmailFrom(' "ShopPost Hỗ trợ" <Ho-Tro@ShopPost.net> '), { email: 'ho-tro@shoppost.net', name: 'ShopPost Hỗ trợ' });
+  assert.deepEqual(parseEmailFrom('Shoppost <no-reply@shoppost.net>'), { email: 'no-reply@shoppost.net', name: 'Shoppost' });
+  assert.deepEqual(parseEmailFrom(' "Shoppost Hỗ trợ" <Ho-Tro@Shoppost.net> '), { email: 'ho-tro@shoppost.net', name: 'Shoppost Hỗ trợ' });
   assert.deepEqual(parseEmailFrom('no-reply@shoppost.net'), { email: 'no-reply@shoppost.net' });
   assert.deepEqual(parseEmailFrom('<no-reply@shoppost.net>'), { email: 'no-reply@shoppost.net' });
-  for (const bad of [undefined, '', 'ShopPost', 'ShopPost <khong-hop-le>', 'sai\r\nBcc: x@y.vn', 'A <a@b.vn> <c@d.vn>', 'x'.repeat(201) + '@a.vn']) assert.equal(parseEmailFrom(bad), null, String(bad));
+  for (const bad of [undefined, '', 'Shoppost', 'Shoppost <khong-hop-le>', 'sai\r\nBcc: x@y.vn', 'A <a@b.vn> <c@d.vn>', 'x'.repeat(201) + '@a.vn']) assert.equal(parseEmailFrom(bad), null, String(bad));
 });
 
 test('Email OTP qua binding Cloudflare: gửi thành công, email tiếng Việt có html + text, đăng nhập được', async () => {
@@ -334,9 +334,9 @@ test('Email OTP qua binding Cloudflare: gửi thành công, email tiếng Việt
     assert.equal(start.status, 200); assert.deepEqual(await start.json(), { ok: true, retryAfter: 60, expiresIn: 600 });
     assert.equal(calls.length, 1); assert.equal(fetchCalls.length, 0);
     const message = calls[0];
-    assert.deepEqual(message.from, { email: 'no-reply@shoppost.net', name: 'ShopPost' });
+    assert.deepEqual(message.from, { email: 'no-reply@shoppost.net', name: 'Shoppost' });
     assert.equal(message.to, 'khach.moi@example.com');
-    assert.equal(message.subject, 'Mã đăng nhập ShopPost của bạn');
+    assert.equal(message.subject, 'Mã đăng nhập Shoppost của bạn');
     const code = message.text.match(/\b(\d{6})\b/)[1];
     for (const part of [message.text, message.html]) {
       assert.ok(part.includes(code)); assert.match(part, /hiệu lực trong 10 phút/); assert.ok(part.includes('Nếu bạn không yêu cầu, hãy bỏ qua email này'));
@@ -400,7 +400,7 @@ test('Thiếu cấu hình email: /auth/providers tắt email, trang đăng nhậ
   assert.equal(await emailEnabled(configured), true); assert.equal(await loginShowsEmail(configured), true);
   for (const overrides of [
     { EMAIL: binding, EMAIL_FROM: undefined, RESEND_API_KEY: undefined },
-    { EMAIL: binding, EMAIL_FROM: 'ShopPost <khong-hop-le>', RESEND_API_KEY: undefined },
+    { EMAIL: binding, EMAIL_FROM: 'Shoppost <khong-hop-le>', RESEND_API_KEY: undefined },
     { EMAIL: {}, RESEND_API_KEY: undefined },
     { EMAIL: { send: 'khong-phai-ham' }, RESEND_API_KEY: undefined },
     { EMAIL: undefined, RESEND_API_KEY: undefined },
@@ -415,9 +415,9 @@ test('Thiếu cấu hình email: /auth/providers tắt email, trang đăng nhậ
 });
 
 
-// ---- TikTok Login Kit, số điện thoại (OTP SMS) và thương hiệu ShopPost ----
+// ---- TikTok Login Kit, số điện thoại (OTP SMS) và thương hiệu Shoppost ----
 const TIKTOK_KEY = 'awtestclientkey', TIKTOK_SECRET = 'tiktok-secret-khong-duoc-lo';
-const ESMS = { ESMS_API_KEY: 'esms-api-khoa-bi-mat', ESMS_SECRET_KEY: 'esms-secret-khoa-bi-mat', ESMS_BRANDNAME: 'ShopPost' };
+const ESMS = { ESMS_API_KEY: 'esms-api-khoa-bi-mat', ESMS_SECRET_KEY: 'esms-secret-khoa-bi-mat', ESMS_BRANDNAME: 'Shoppost' };
 const TWILIO = { TWILIO_ACCOUNT_SID: 'AC' + 'a1'.repeat(16), TWILIO_AUTH_TOKEN: 'twilio-token-khong-duoc-lo', TWILIO_VERIFY_SERVICE_SID: 'VA' + 'b2'.repeat(16) };
 const tiktokEnv = (overrides = {}) => env({ TIKTOK_CLIENT_KEY: TIKTOK_KEY, TIKTOK_CLIENT_SECRET: TIKTOK_SECRET, ...overrides });
 const smsCode = body => body.Content.match(/\b(\d{6})\b/)[1];
@@ -570,9 +570,9 @@ test('Số điện thoại (eSMS): gửi mã, chặn gửi lại nhanh, sai mã,
     assert.equal(start.status, 200); assert.deepEqual(await start.json(), { ok: true, retryAfter: 60, expiresIn: 600 });
     assert.equal(sent.length, 1);
     const message = sent[0];
-    assert.equal(message.ApiKey, ESMS.ESMS_API_KEY); assert.equal(message.SecretKey, ESMS.ESMS_SECRET_KEY); assert.equal(message.Brandname, 'ShopPost');
+    assert.equal(message.ApiKey, ESMS.ESMS_API_KEY); assert.equal(message.SecretKey, ESMS.ESMS_SECRET_KEY); assert.equal(message.Brandname, 'Shoppost');
     assert.equal(message.Phone, '0912345678'); assert.equal(message.SmsType, '2'); assert.equal(message.IsUnicode, '1'); assert.match(message.RequestId, /^[A-Za-z0-9_-]{24}$/);
-    assert.match(message.Content, /^Mã đăng nhập ShopPost của bạn là \d{6}\. Hiệu lực 10 phút\./);
+    assert.match(message.Content, /^Mã đăng nhập Shoppost của bạn là \d{6}\. Hiệu lực 10 phút\./);
     const code = smsCode(message);
     const stored = row(e.DB, 'SELECT * FROM auth_otp_codes WHERE email = ?', phone);
     assert.equal(JSON.stringify(stored).includes(code), false); assert.match(stored.code_hash, /^[a-f0-9]{64}$/);
@@ -690,16 +690,16 @@ test('Số điện thoại (Twilio Verify): Twilio gửi và kiểm mã, Worker 
   });
 });
 
-test('Thương hiệu ShopPost: giao diện hiển thị ShopPost, giữ định danh kỹ thuật shopai; trang đăng nhập đủ các phương thức đúng thứ tự', async () => {
+test('Thương hiệu Shoppost: giao diện hiển thị Shoppost, giữ định danh kỹ thuật shopai; trang đăng nhập đủ các phương thức đúng thứ tự', async () => {
   const index = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
   const TECH = /shopai-ai-endpoint|shopai-user-scope|X-ShopAI-User-Scope|__Host-shopai_\w+|SHOPAI_RELEASE_SHA|shopai-backend|shopai-drafts[\w-]*/g;
   for (const [name, text] of [['login.html', LOGIN_FILE], ['index.html', index], ['README.md', readme]]) {
-    assert.ok(text.includes('ShopPost'), name);
+    assert.ok(text.includes('Shoppost'), name);
     assert.doesNotMatch(text.replace(TECH, ''), /shop\s?ai/i, name);
   }
-  assert.match(index, /<title>ShopPost × ShopTrack/); assert.match(index, /name="shopai-ai-endpoint"/); assert.match(index, /name="shopai-user-scope"/);
-  assert.match(LOGIN_FILE, /<title>Đăng nhập ShopPost<\/title>/); assert.ok(LOGIN_FILE.includes('© ShopPost × ShopTrack'));
+  assert.match(index, /<title>Shoppost × ShopTrack/); assert.match(index, /name="shopai-ai-endpoint"/); assert.match(index, /name="shopai-user-scope"/);
+  assert.match(LOGIN_FILE, /<title>Đăng nhập Shoppost<\/title>/); assert.ok(LOGIN_FILE.includes('© Shoppost × ShopTrack'));
   const order = ['id="tiktok"', 'id="phoneBtn"', 'id="emailForm"'].map(id => LOGIN_FILE.indexOf(id));
   assert.ok(order.every(i => i > 0), JSON.stringify(order)); assert.deepEqual([...order].sort((a, b) => a - b), order);
   // Đã gỡ đăng nhập nền tảng Zalo/Facebook khỏi trang đăng nhập.

@@ -1,4 +1,4 @@
-// Đăng nhập bằng phiên riêng của ShopPost (TikTok, số điện thoại OTP, email OTP, email + mật khẩu), chạy song song với Cloudflare Access.
+// Đăng nhập bằng phiên riêng của Shoppost (TikTok, số điện thoại OTP, email OTP, email + mật khẩu), chạy song song với Cloudflare Access.
 // Tên cookie/bảng giữ tiền tố "shopai" vì là định danh kỹ thuật: đổi sẽ làm mất phiên và dữ liệu đang có.
 const enc = new TextEncoder();
 export const SESSION_COOKIE = '__Host-shopai_session';
@@ -36,7 +36,7 @@ export const PASSWORD_SCHEMA = [
   'CREATE TABLE IF NOT EXISTS auth_passwords (owner TEXT PRIMARY KEY, email TEXT NOT NULL, provider TEXT NOT NULL, display_name TEXT, password_hash TEXT NOT NULL, updated_at INTEGER NOT NULL)',
   'CREATE UNIQUE INDEX IF NOT EXISTS auth_passwords_email ON auth_passwords(email)'
 ];
-const FALLBACK_LOGIN = '<!DOCTYPE html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Đăng nhập ShopPost</title></head><body><main><h1>ShopPost</h1><p>Vui lòng đăng nhập để tiếp tục. Trang đăng nhập đang được cập nhật, hãy tải lại sau ít phút.</p></main></body></html>';
+const FALLBACK_LOGIN = '<!DOCTYPE html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Đăng nhập Shoppost</title></head><body><main><h1>Shoppost</h1><p>Vui lòng đăng nhập để tiếp tục. Trang đăng nhập đang được cập nhật, hãy tải lại sau ít phút.</p></main></body></html>';
 
 const now = () => Math.floor(Date.now() / 1000);
 const clean = value => typeof value === 'string' ? value.trim() : '';
@@ -129,7 +129,7 @@ export function emailDomainAllowed(env, email) {
 }
 // Thông điệp từ chối khi email không thuộc tên miền cho phép. action: 'Đăng nhập' (mặc định) hoặc 'Đăng ký'.
 const emailDomainMessage = (env, action = 'Đăng nhập') => `${action} bằng email chỉ dành cho địa chỉ ${emailLoginDomains(env).map(d => '@' + d).join(' và ')}.`;
-// EMAIL_FROM dạng "ShopPost <no-reply@shoppost.net>" hoặc "no-reply@shoppost.net" → { email, name? }; sai định dạng → null.
+// EMAIL_FROM dạng "Shoppost <no-reply@shoppost.net>" hoặc "no-reply@shoppost.net" → { email, name? }; sai định dạng → null.
 export function parseEmailFrom(value) {
   const v = clean(value);
   if (v.length < 3 || v.length > 200 || /[\r\n]/.test(v)) return null;
@@ -170,35 +170,35 @@ const escapeHtml = value => String(value).replace(/[&<>"']/g, ch => ({ '&': '&am
 export function emailLayout(paragraphs, highlight = '') {
   const body = paragraphs.map(p => `<p style="margin:0 0 12px">${escapeHtml(p)}</p>`);
   if (highlight) body.splice(1, 0, `<p style="margin:0 0 12px;font-size:28px;font-weight:700;letter-spacing:6px">${escapeHtml(highlight)}</p>`);
-  return `<!DOCTYPE html><html lang="vi"><head><meta charset="utf-8"></head><body style="margin:0;padding:24px;background:#f6f6f8"><div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:12px;padding:24px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#0a0a0a"><p style="margin:0 0 16px;font-weight:700;font-size:18px">ShopPost</p>${body.join('')}</div></body></html>`;
+  return `<!DOCTYPE html><html lang="vi"><head><meta charset="utf-8"></head><body style="margin:0;padding:24px;background:#f6f6f8"><div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:12px;padding:24px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#0a0a0a"><p style="margin:0 0 16px;font-weight:700;font-size:18px">Shoppost</p>${body.join('')}</div></body></html>`;
 }
 export function otpEmail(code) {
   const minutes = Math.round(OTP_TTL / 60);
   const ignore = 'Nếu bạn không yêu cầu, hãy bỏ qua email này.';
   return {
-    subject: 'Mã đăng nhập ShopPost của bạn',
-    text: `Mã đăng nhập ShopPost của bạn là ${code}.\n\nMã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.\n\n${ignore}\n\nShopPost – https://shoppost.net`,
-    html: emailLayout(['Mã đăng nhập ShopPost của bạn là:', `Mã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.`, ignore], code)
+    subject: 'Mã đăng nhập Shoppost của bạn',
+    text: `Mã đăng nhập Shoppost của bạn là ${code}.\n\nMã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.\n\n${ignore}\n\nShoppost – https://shoppost.net`,
+    html: emailLayout(['Mã đăng nhập Shoppost của bạn là:', `Mã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.`, ignore], code)
   };
 }
 
 // Email mời tham gia shop (link dùng một lần, hết hạn sau 7 ngày).
 export function inviteEmail({ shopName, roleLabel, link, days = 7 }) {
   return {
-    subject: `Lời mời tham gia shop ${shopName} trên ShopPost`,
-    text: `Bạn được mời tham gia shop "${shopName}" trên ShopPost với vai trò ${roleLabel}.\n\nMở liên kết sau để chấp nhận (cần đăng nhập ShopPost bằng email này hoặc tài khoản của bạn):\n${link}\n\nLiên kết chỉ dùng được một lần và hết hạn sau ${days} ngày. Nếu bạn không mong đợi lời mời này, hãy bỏ qua email.\n\nShopPost – https://shoppost.net`,
-    html: emailLayout([`Bạn được mời tham gia shop "${shopName}" trên ShopPost với vai trò ${roleLabel}.`, `Mở liên kết sau để chấp nhận lời mời: ${link}`, `Liên kết chỉ dùng được một lần và hết hạn sau ${days} ngày. Nếu bạn không mong đợi lời mời này, hãy bỏ qua email.`])
+    subject: `Lời mời tham gia shop ${shopName} trên Shoppost`,
+    text: `Bạn được mời tham gia shop "${shopName}" trên Shoppost với vai trò ${roleLabel}.\n\nMở liên kết sau để chấp nhận (cần đăng nhập Shoppost bằng email này hoặc tài khoản của bạn):\n${link}\n\nLiên kết chỉ dùng được một lần và hết hạn sau ${days} ngày. Nếu bạn không mong đợi lời mời này, hãy bỏ qua email.\n\nShoppost – https://shoppost.net`,
+    html: emailLayout([`Bạn được mời tham gia shop "${shopName}" trên Shoppost với vai trò ${roleLabel}.`, `Mở liên kết sau để chấp nhận lời mời: ${link}`, `Liên kết chỉ dùng được một lần và hết hạn sau ${days} ngày. Nếu bạn không mong đợi lời mời này, hãy bỏ qua email.`])
   };
 }
 
 // Email mã xác minh đăng ký tài khoản bằng mật khẩu.
 export function registerEmail(code) {
   const minutes = Math.round(OTP_TTL / 60);
-  const ignore = 'Nếu bạn không yêu cầu tạo tài khoản ShopPost, hãy bỏ qua email này.';
+  const ignore = 'Nếu bạn không yêu cầu tạo tài khoản Shoppost, hãy bỏ qua email này.';
   return {
-    subject: 'Mã xác minh đăng ký ShopPost',
-    text: `Mã xác minh đăng ký tài khoản ShopPost của bạn là ${code}.\n\nMã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.\n\n${ignore}\n\nShopPost – https://shoppost.net`,
-    html: emailLayout(['Mã xác minh đăng ký tài khoản ShopPost của bạn là:', `Mã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.`, ignore], code)
+    subject: 'Mã xác minh đăng ký Shoppost',
+    text: `Mã xác minh đăng ký tài khoản Shoppost của bạn là ${code}.\n\nMã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.\n\n${ignore}\n\nShoppost – https://shoppost.net`,
+    html: emailLayout(['Mã xác minh đăng ký tài khoản Shoppost của bạn là:', `Mã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.`, ignore], code)
   };
 }
 // Email mã đặt lại mật khẩu.
@@ -206,9 +206,9 @@ export function resetEmail(code) {
   const minutes = Math.round(OTP_TTL / 60);
   const ignore = 'Nếu bạn không yêu cầu đặt lại mật khẩu, hãy bỏ qua email này; mật khẩu của bạn vẫn an toàn.';
   return {
-    subject: 'Mã đặt lại mật khẩu ShopPost',
-    text: `Mã đặt lại mật khẩu ShopPost của bạn là ${code}.\n\nMã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.\n\n${ignore}\n\nShopPost – https://shoppost.net`,
-    html: emailLayout(['Mã đặt lại mật khẩu ShopPost của bạn là:', `Mã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.`, ignore], code)
+    subject: 'Mã đặt lại mật khẩu Shoppost',
+    text: `Mã đặt lại mật khẩu Shoppost của bạn là ${code}.\n\nMã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.\n\n${ignore}\n\nShoppost – https://shoppost.net`,
+    html: emailLayout(['Mã đặt lại mật khẩu Shoppost của bạn là:', `Mã có hiệu lực trong ${minutes} phút và chỉ dùng được một lần. Không chia sẻ mã này với bất kỳ ai.`, ignore], code)
   };
 }
 
@@ -339,7 +339,7 @@ async function sendSmsCode(env, provider, phone, code) {
     const result = await fetchJson(ESMS_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
       ApiKey: clean(env.ESMS_API_KEY), SecretKey: clean(env.ESMS_SECRET_KEY), Brandname: clean(env.ESMS_BRANDNAME),
       Phone: '0' + phone.slice(3), SmsType: '2', IsUnicode: '1', Sandbox: '0', RequestId: randomToken(18),
-      Content: `Mã đăng nhập ShopPost của bạn là ${code}. Hiệu lực 10 phút. Không chia sẻ mã này.`
+      Content: `Mã đăng nhập Shoppost của bạn là ${code}. Hiệu lực 10 phút. Không chia sẻ mã này.`
     }) });
     return result.ok && String(result.data?.CodeResult) === '100';
   }

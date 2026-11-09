@@ -13,7 +13,7 @@ function fixture(){
  for(const file of ['0001_drafts.sql','0002_auth.sql'])sqlite.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'));
  const prepare=(sql,p=[])=>({bind:(...args)=>prepare(sql,args),async first(){return sqlite.prepare(sql).get(...p)||null;},async all(){return {results:sqlite.prepare(sql).all(...p)};},async run(){return {meta:{changes:Number(sqlite.prepare(sql).run(...p).changes)}};},exec(){return {meta:{changes:Number(sqlite.prepare(sql).run(...p).changes)}};}});
  const db={sqlite,prepare:sql=>prepare(sql),async batch(stmts){sqlite.exec('BEGIN');try{const out=stmts.map(s=>s.exec());sqlite.exec('COMMIT');return out;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
- const env={DB:db,ACCESS_TEAM_DOMAIN:'test-team.cloudflareaccess.com',ACCESS_AUD:'test',AI:{},AI_RATE_LIMITER:{},SOCIAL_TOKEN_KEY:Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64')};
+ const env={DB:db,ACCESS_TEAM_DOMAIN:'test-team.cloudflareaccess.com',ACCESS_AUD:'test',AI:{},AI_RATE_LIMITER:{limit:async()=>({success:true})},SOCIAL_TOKEN_KEY:Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64')};
  function login(owner){
   const token=Buffer.from(owner+':'+crypto.randomUUID()).toString('base64url').slice(0,43).padEnd(43,'A');
   db.sqlite.prepare('INSERT OR IGNORE INTO auth_identities(owner,provider,created_at,last_login_at) VALUES(?,?,?,?)').run(owner,'email',now(),now());
@@ -22,7 +22,7 @@ function fixture(){
  }
  async function request(cookie,path,{method='GET',body,shop,idem}={}){
   const r=await worker.fetch(new Request(base+path,{method,headers:{Cookie:cookie,Origin:base,...(body?{'Content-Type':'application/json'}:{}),...(shop?{'X-ShopPost-Shop':shop}:{}),...(idem?{'Idempotency-Key':idem}:{})},...(body?{body:JSON.stringify(body)}:{})}),env);
-  return {status:r.status,data:await r.json()};
+  return {status:r.status,headers:r.headers,data:await r.json()};
  }
  return {db,env,login,request};
 }
@@ -80,9 +80,16 @@ test('Telegram 429 is retryable; unknown outcomes never retry automatically',asy
   assert.equal(throttled.status,429);assert.equal(throttled.data.job.status,'retryable');
   const jobId=throttled.data.job.id;
   const early=await f.request(owner,'/api/social/jobs/'+jobId+'/retry',{method:'POST'});
+  assert.ok(Number(early.headers.get('Retry-After'))>0);
+  assert.equal((await f.request(owner,'/api/social/jobs',{method:'POST',idem:'retry-test-key-123',body:data})).status,429);
   assert.equal(early.status,429);assert.equal(called,1,'retry_after must block early delivery');
   f.db.sqlite.prepare('UPDATE publish_jobs SET next_attempt_at=0 WHERE id=?').run(jobId);
-  const retried=await f.request(owner,'/api/social/jobs/'+jobId+'/retry',{method:'POST'});
+  const manager=f.login('email:manager@example.com');
+  const shopId=(await f.request(owner,'/session')).data.shop.id;
+  f.db.sqlite.prepare('INSERT INTO shop_members(shop_id,user_id,role,can_publish,created_at) VALUES(?,?,?,?,?)').run(shopId,'email:manager@example.com','manager',0,now());
+  const retried=await f.request(manager,'/api/social/jobs/'+jobId+'/retry',{method:'POST',shop:shopId});
+  assert.equal(f.db.sqlite.prepare("SELECT actor FROM audit_log WHERE action='social.publish' ORDER BY id DESC LIMIT 1").get().actor,'email:manager@example.com');
+  assert.equal(f.db.sqlite.prepare('SELECT created_by FROM publish_jobs WHERE id=?').get(jobId).created_by,'email:retry@example.com');
   assert.equal(retried.status,200);assert.equal(retried.data.job.status,'sent');assert.equal(called,2);
   const redundant=await f.request(owner,'/api/social/jobs/'+jobId+'/retry',{method:'POST'});
   assert.equal(redundant.status,200);assert.equal(called,2);
@@ -153,4 +160,29 @@ test('publish-now operates the existing scheduled job and cannot duplicate it',a
   assert.equal((await f.request(owner,path,{method:'POST'})).data.job.status,'sent');
   assert.equal((await f.request(owner,path,{method:'POST'})).data.job.status,'sent');assert.equal(sent,1);
  });
+});
+
+test('social mutations share the fail-closed API write limiter before any writes or Telegram calls',async()=>{
+ const f=fixture(),owner=f.login('email:limited@example.com');
+ await f.request(owner,'/session');
+ for(const [limiter,status] of [[undefined,503],[{limit:async()=>({})},503],[{limit:async()=>{throw Error('offline')}},503],[{limit:async({key})=>{assert.equal(key,'api-write:email:limited@example.com');return {success:false}}},429]]){
+  f.env.AI_RATE_LIMITER=limiter;
+  for(const path of ['accounts','jobs','jobs/missing/retry'])assert.equal((await f.request(owner,'/api/social/'+path,{method:'POST',body:{}})).status,status);
+ }
+ assert.equal(f.db.sqlite.prepare("SELECT count(*) n FROM sqlite_master WHERE name='social_accounts'").get().n,0);
+ f.db.sqlite.close();
+});
+test('concurrent identical jobs call Telegram once and isolate retry by shop',async()=>{
+ const f=fixture(),owner=f.login('email:race@example.com'),other=f.login('email:outside@example.com');let calls=0,release,started;
+ const entered=new Promise(r=>started=r),gate=new Promise(r=>release=r);
+ await fakeTelegram(async()=>{calls++;started();await gate;return Response.json({ok:true,result:{message_id:7}})},async()=>{
+  await connect(f.request,owner);
+  const account=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
+  const options={method:'POST',idem:'concurrent-key-123',body:{accountId:account.id,kind:'text',text:'Race'}};
+  const first=f.request(owner,'/api/social/jobs',options);await entered;
+  const second=await f.request(owner,'/api/social/jobs',options);assert.equal(second.status,409);assert.equal(calls,1);
+  release();const sent=await first;
+  assert.equal((await f.request(other,'/api/social/jobs/'+sent.data.job.id+'/retry',{method:'POST'})).status,404);
+  assert.equal((await f.request(owner,'/api/social/jobs/'+sent.data.job.id+'/retry',{method:'POST'})).status,200);assert.equal(calls,1);
+ });f.db.sqlite.close();
 });

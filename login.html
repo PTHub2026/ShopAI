@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta name="zalo-platform-site-verification" content="QS3a3fR5Jobnm_HteU9WUsBtorEEWH09CJGp" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Đăng nhập Shoppost</title>
+<style>
+:root{--p:#030213;--fg:#0a0a0a;--mut:#ececf0;--mutf:#717182;--in:#f3f3f5;--bd:#0000001a;--sb:#fafafa;--red:#d4183d;--green:#16a34a;--r:10px;--fb:#1877F2;--zalo:#0068FF;--tiktok:#000}
+*{box-sizing:border-box}
+html{height:100%}
+body{min-height:100%;margin:0;font-family:Inter,Geist,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--fg);background:var(--sb);font-size:14px;line-height:1.5;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 16px}
+main{width:100%;max-width:400px;background:#fff;border:1px solid var(--bd);border-radius:14px;padding:28px 24px;box-shadow:0 1px 2px #0000000d}
+.logo{font-weight:700;font-size:18px;display:flex;gap:8px;align-items:center;margin-bottom:20px}
+.logo i{background:var(--p);color:#fff;border-radius:8px;width:30px;height:30px;display:grid;place-items:center;font-style:normal}
+h1{font-size:22px;line-height:1.3;margin:0 0 6px}
+.muted{color:var(--mutf)}
+.lead{margin:0 0 20px}
+.status{border-radius:var(--r);padding:10px 12px;margin:0 0 16px;background:var(--in);font-size:13px}
+.status.error{background:#d4183d14;color:var(--red);border:1px solid #d4183d33}
+.status.ok{background:#16a34a14;color:var(--green);border:1px solid #16a34a33}
+.stack{display:flex;flex-direction:column;gap:10px}
+.btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:44px;padding:10px 14px;border-radius:var(--r);border:1px solid var(--bd);background:#fff;color:var(--fg);font:inherit;font-weight:600;cursor:pointer;text-decoration:none}
+.btn:focus-visible,input:focus-visible{outline:2px solid var(--p);outline-offset:2px}
+.btn[disabled],.btn[aria-disabled="true"]{opacity:.6;cursor:not-allowed}
+.btn svg{flex:none}
+.btn.fb{background:var(--fb);border-color:var(--fb);color:#fff}
+.btn.zalo{background:var(--zalo);border-color:var(--zalo);color:#fff}
+.btn.tiktok{background:var(--tiktok);border-color:var(--tiktok);color:#fff}
+.btn.pri{background:var(--p);border-color:var(--p);color:#fff}
+.btn.link{background:none;border:none;min-height:auto;padding:4px;width:auto;font-weight:500;color:var(--mutf);text-decoration:underline}
+.zalo-mark{font-weight:800;font-size:13px;background:#fff;color:var(--zalo);border-radius:6px;padding:1px 5px}
+.divider{display:flex;align-items:center;gap:10px;color:var(--mutf);font-size:12px;margin:6px 0}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--bd)}
+label{display:block;font-weight:600;font-size:13px;margin:0 0 6px}
+input{width:100%;min-height:44px;padding:10px 12px;border-radius:var(--r);border:1px solid var(--bd);background:var(--in);font:inherit;color:inherit}
+.hint{font-size:12px;margin:6px 0 0}
+input.code{font-size:22px;letter-spacing:8px;text-align:center;font-variant-numeric:tabular-nums}
+.pw-wrap{position:relative}
+.pw-wrap input{padding-right:52px}
+.pw-toggle{position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;min-height:34px;padding:0 8px;cursor:pointer;color:var(--mutf);font:inherit;font-weight:600;font-size:12px}
+.pw-toggle:focus-visible{outline:2px solid var(--p);outline-offset:2px;border-radius:6px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.spinner{width:16px;height:16px;border:2px solid var(--mut);border-top-color:var(--p);border-radius:50%;animation:spin .8s linear infinite;display:inline-block;vertical-align:-3px;margin-right:8px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.note{font-size:12px;color:var(--mutf);margin:20px 0 0;border-top:1px solid var(--bd);padding-top:14px}
+.note p{margin:0 0 6px}
+.owner{font-size:12px;margin:14px 0 0;text-align:center}
+.owner a{color:var(--mutf)}
+footer{font-size:12px;color:var(--mutf);margin-top:16px;text-align:center}
+[hidden]{display:none!important}
+@media (min-width:768px){main{padding:36px 36px 28px}h1{font-size:24px}}
+</style>
+</head>
+<body>
+<main>
+  <div class="logo"><i>S</i>Shoppost</div>
+  <h1 id="screenTitle">Đăng nhập Shoppost</h1>
+  <p class="lead muted" id="screenLead">Trợ lý soạn nội dung bán hàng của bạn. Chọn một cách đăng nhập để tiếp tục.</p>
+  <div id="status" class="status" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span>Đang tải phương thức đăng nhập…</div>
+  <div id="methods" class="stack" hidden>
+    <form id="pwLoginForm" class="stack" hidden novalidate>
+      <div>
+        <label for="loginEmail">Email</label>
+        <input id="loginEmail" name="loginEmail" type="email" inputmode="email" autocomplete="email" maxlength="254" placeholder="ban@vidu.vn" required>
+      </div>
+      <div>
+        <label for="loginPassword">Mật khẩu</label>
+        <div class="pw-wrap">
+          <input id="loginPassword" name="loginPassword" type="password" autocomplete="current-password" maxlength="200" placeholder="Mật khẩu của bạn" required>
+          <button type="button" class="pw-toggle" data-for="loginPassword" aria-label="Hiện mật khẩu">Hiện</button>
+        </div>
+      </div>
+      <button type="submit" class="btn pri" id="pwLoginBtn"><span>Đăng nhập</span></button>
+      <div class="row">
+        <button type="button" class="btn link" id="toForgot">Quên mật khẩu?</button>
+        <button type="button" class="btn link" id="toRegister">Chưa có tài khoản? Đăng ký</button>
+      </div>
+    </form>
+    <div id="pwDivider" class="divider" hidden>hoặc tiếp tục với</div>
+    <a id="tiktok" class="btn tiktok" href="/auth/tiktok/start" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="#fff" d="M12.53.02C13.84 0 15.14.01 16.44 0c.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/></svg>
+      <span>Tiếp tục với TikTok</span>
+    </a>
+    <button type="button" id="phoneBtn" class="btn" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></svg>
+      <span>Tiếp tục với số điện thoại</span>
+    </button>
+    <form id="phoneForm" class="stack" hidden novalidate>
+      <div>
+        <label for="phone">Số điện thoại</label>
+        <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" maxlength="20" placeholder="+84 912 345 678" aria-describedby="phoneHint" required>
+        <p id="phoneHint" class="hint muted">Số di động Việt Nam, ví dụ 0912 345 678 hoặc +84 912 345 678. Mã gồm 6 chữ số sẽ được gửi qua tin nhắn SMS.</p>
+      </div>
+      <button type="submit" class="btn pri" id="sendSms">
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>Gửi mã qua SMS</span>
+      </button>
+      <div class="row"><button type="button" class="btn link" id="phoneCancel">Chọn cách đăng nhập khác</button></div>
+    </form>
+    <div id="divider" class="divider" hidden>hoặc nhận mã đăng nhập qua email</div>
+    <form id="emailForm" class="stack" hidden novalidate>
+      <div>
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" inputmode="email" autocomplete="email" maxlength="254" placeholder="ban@pthub.vn" aria-describedby="emailHint" required>
+        <p id="emailHint" class="hint muted">Nhận mã đăng nhập dùng một lần qua email, không cần mật khẩu. Nếu chưa có tài khoản, tài khoản Shoppost sẽ được tạo tự động. Luồng này chỉ dành cho địa chỉ @pthub.vn và @shoptrack.vn.</p>
+      </div>
+      <button type="submit" class="btn pri" id="sendCode">
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+        <span>Gửi mã đăng nhập</span>
+      </button>
+    </form>
+    <form id="codeForm" class="stack" hidden novalidate>
+      <p class="muted" style="margin:0"><span id="sentLead">Mã gồm 6 chữ số đã được gửi tới</span> <b id="sentTo"></b>. Mã có hiệu lực trong 10 phút.</p>
+      <div>
+        <label for="code">Mã đăng nhập</label>
+        <input id="code" name="code" class="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="••••••" required>
+      </div>
+      <button type="submit" class="btn pri" id="verify"><span>Xác nhận và đăng nhập</span></button>
+      <div class="row">
+        <button type="button" class="btn link" id="changeTarget">Đổi email</button>
+        <button type="button" class="btn link no-busy" id="resend" disabled>Gửi lại mã</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="registerScreen" class="stack" hidden>
+    <form id="regForm" class="stack" novalidate>
+      <div>
+        <label for="regEmail">Email</label>
+        <input id="regEmail" name="regEmail" type="email" inputmode="email" autocomplete="email" maxlength="254" placeholder="ban@pthub.vn" aria-describedby="regEmailHint" required>
+        <p id="regEmailHint" class="hint muted">Đăng ký chỉ dành cho địa chỉ @pthub.vn và @shoptrack.vn.</p>
+      </div>
+      <div>
+        <label for="regPassword">Mật khẩu</label>
+        <div class="pw-wrap">
+          <input id="regPassword" name="regPassword" type="password" autocomplete="new-password" maxlength="200" placeholder="Tạo mật khẩu" required>
+          <button type="button" class="pw-toggle" data-for="regPassword" aria-label="Hiện mật khẩu">Hiện</button>
+        </div>
+        <p class="hint muted">Mật khẩu cần ít nhất 8 ký tự.</p>
+      </div>
+      <div>
+        <label for="regConfirm">Nhập lại mật khẩu</label>
+        <div class="pw-wrap">
+          <input id="regConfirm" name="regConfirm" type="password" autocomplete="new-password" maxlength="200" placeholder="Nhập lại mật khẩu" required>
+          <button type="button" class="pw-toggle" data-for="regConfirm" aria-label="Hiện mật khẩu">Hiện</button>
+        </div>
+      </div>
+      <button type="submit" class="btn pri" id="regSendBtn"><span>Gửi mã đăng ký</span></button>
+    </form>
+    <form id="regCodeForm" class="stack" hidden novalidate>
+      <p class="muted" style="margin:0">Mã gồm 6 chữ số đã được gửi tới <b id="regSentTo"></b>. Mã có hiệu lực trong 10 phút.</p>
+      <div>
+        <label for="regCode">Mã xác minh</label>
+        <input id="regCode" name="regCode" class="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="••••••" required>
+      </div>
+      <button type="submit" class="btn pri" id="regVerifyBtn"><span>Hoàn tất đăng ký</span></button>
+      <div class="row">
+        <button type="button" class="btn link" id="regChange">Đổi email</button>
+        <button type="button" class="btn link no-busy" id="regResend" disabled>Gửi lại mã</button>
+      </div>
+    </form>
+    <div class="row"><button type="button" class="btn link" id="toLoginFromReg">← Quay lại đăng nhập</button></div>
+  </div>
+
+  <div id="forgotScreen" class="stack" hidden>
+    <form id="fgForm" class="stack" novalidate>
+      <div>
+        <label for="fgEmail">Email</label>
+        <input id="fgEmail" name="fgEmail" type="email" inputmode="email" autocomplete="email" maxlength="254" placeholder="ban@vidu.vn" required>
+        <p class="hint muted">Nhập email đã đăng ký, chúng tôi sẽ gửi mã đặt lại mật khẩu.</p>
+      </div>
+      <button type="submit" class="btn pri" id="fgSendBtn"><span>Gửi mã đặt lại</span></button>
+    </form>
+    <form id="fgResetForm" class="stack" hidden novalidate>
+      <p class="muted" style="margin:0">Nhập mã đã gửi tới <b id="fgSentTo"></b> và mật khẩu mới của bạn.</p>
+      <div>
+        <label for="fgCode">Mã đặt lại</label>
+        <input id="fgCode" name="fgCode" class="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="••••••" required>
+      </div>
+      <div>
+        <label for="fgPassword">Mật khẩu mới</label>
+        <div class="pw-wrap">
+          <input id="fgPassword" name="fgPassword" type="password" autocomplete="new-password" maxlength="200" placeholder="Mật khẩu mới" required>
+          <button type="button" class="pw-toggle" data-for="fgPassword" aria-label="Hiện mật khẩu">Hiện</button>
+        </div>
+        <p class="hint muted">Mật khẩu cần ít nhất 8 ký tự.</p>
+      </div>
+      <button type="submit" class="btn pri" id="fgResetBtn"><span>Đặt lại mật khẩu</span></button>
+      <div class="row"><button type="button" class="btn link no-busy" id="fgResend" disabled>Gửi lại mã</button></div>
+    </form>
+    <div class="row"><button type="button" class="btn link" id="toLoginFromForgot">← Quay lại đăng nhập</button></div>
+  </div>
+
+  <div id="setup" class="status" hidden>Đăng nhập đang được thiết lập. Vui lòng quay lại sau ít phút.</div>
+  <p class="owner" id="owner" hidden><a id="ownerLink" href="#" rel="noopener">Chủ cửa hàng: đăng nhập qua Cloudflare Access</a></p>
+  <div class="note">
+    <p>Khi đăng nhập, Shoppost chỉ dùng tên, mã định danh tài khoản, số điện thoại hoặc địa chỉ email của bạn để nhận diện phiên làm việc và lưu bản nháp. Shoppost không tự đăng bài hay gửi tin nhắn thay bạn.</p>
+    <p>Phiên đăng nhập được lưu 30 ngày trên thiết bị này; bạn có thể đăng xuất bất cứ lúc nào.</p>
+  </div>
+</main>
+<footer>© Shoppost × ShopTrack · <a href="/privacy" style="color:inherit">Chính sách quyền riêng tư</a> · <a href="/terms" style="color:inherit">Điều khoản</a> · <a href="/data-deletion" style="color:inherit">Xóa dữ liệu</a></footer>
+<script nonce="__CSP_NONCE__">
+(() => {
+  const $ = s => document.querySelector(s);
+  const statusBox = $('#status');
+  const ERRORS = {
+    zalo_state: 'Phiên đăng nhập Zalo không hợp lệ hoặc đã được dùng. Vui lòng thử lại.',
+    zalo_het_han: 'Phiên đăng nhập Zalo đã hết hạn (quá 10 phút). Vui lòng thử lại.',
+    zalo_tu_choi: 'Bạn đã hủy đăng nhập hoặc Zalo chưa cấp quyền.',
+    zalo_token: 'Zalo từ chối mã xác thực. Vui lòng thử lại sau ít phút.',
+    zalo_ho_so: 'Không đọc được hồ sơ Zalo. Vui lòng thử lại.',
+    zalo_chua_cau_hinh: 'Đăng nhập Zalo chưa được kích hoạt.',
+    zalo_tam_loi: 'Đăng nhập Zalo tạm thời gặp lỗi. Vui lòng thử lại sau.',
+    tiktok_state: 'Phiên đăng nhập TikTok không hợp lệ hoặc đã được dùng. Vui lòng thử lại.',
+    tiktok_het_han: 'Phiên đăng nhập TikTok đã hết hạn (quá 10 phút). Vui lòng thử lại.',
+    tiktok_tu_choi: 'Bạn đã hủy đăng nhập hoặc TikTok chưa cấp quyền.',
+    tiktok_token: 'TikTok từ chối mã xác thực. Vui lòng thử lại sau ít phút.',
+    tiktok_ho_so: 'Không đọc được hồ sơ TikTok. Vui lòng thử lại.',
+    tiktok_chua_cau_hinh: 'Đăng nhập TikTok chưa được kích hoạt.',
+    tiktok_tam_loi: 'Đăng nhập TikTok tạm thời gặp lỗi. Vui lòng thử lại sau.'
+  };
+  function show(message, kind = '') {
+    statusBox.replaceChildren();
+    if (kind === 'loading') { const s = document.createElement('span'); s.className = 'spinner'; s.setAttribute('aria-hidden', 'true'); statusBox.appendChild(s); }
+    statusBox.appendChild(document.createTextNode(message || ''));
+    statusBox.className = 'status' + (kind === 'error' || kind === 'ok' ? ' ' + kind : '');
+    statusBox.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    statusBox.hidden = !message;
+  }
+  function busy(on) {
+    document.querySelectorAll('main button, main input').forEach(el => {
+      if (el.classList.contains('no-busy') || el.classList.contains('pw-toggle')) return;
+      el.disabled = on;
+    });
+    ['#tiktok'].forEach(s => $(s).setAttribute('aria-disabled', on ? 'true' : 'false'));
+  }
+  async function post(path, data) {
+    try {
+      const r = await fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      let body = null; try { body = await r.json(); } catch { body = null; }
+      return { ok: r.ok, status: r.status, data: body || {} };
+    } catch { return { ok: false, status: 0, data: { error: 'Không kết nối được máy chủ. Kiểm tra mạng và thử lại.' } }; }
+  }
+  function done() { show('Đăng nhập thành công. Đang mở Shoppost…', 'ok'); location.replace('/'); }
+  const validEmail = v => typeof v === 'string' && v.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+
+  const params = new URLSearchParams(location.search);
+  const initialError = ERRORS[params.get('loi')] || '';
+  if (params.has('loi')) history.replaceState(null, '', location.pathname);
+
+  // Chuyển giữa các màn: đăng nhập, đăng ký, quên mật khẩu.
+  const SCREENS = {
+    login: ['Đăng nhập Shoppost', 'Trợ lý soạn nội dung bán hàng của bạn. Chọn một cách đăng nhập để tiếp tục.'],
+    register: ['Đăng ký Shoppost', 'Tạo tài khoản bằng email và mật khẩu. Chúng tôi sẽ gửi mã xác minh tới email của bạn.'],
+    forgot: ['Quên mật khẩu', 'Nhập email đã đăng ký để nhận mã đặt lại mật khẩu.']
+  };
+  function screen(name) {
+    $('#methods').hidden = name !== 'login';
+    $('#registerScreen').hidden = name !== 'register';
+    $('#forgotScreen').hidden = name !== 'forgot';
+    const s = SCREENS[name] || SCREENS.login;
+    $('#screenTitle').textContent = s[0];
+    $('#screenLead').textContent = s[1];
+    show('');
+  }
+
+  // Hiện/ẩn mật khẩu cho mọi ô có nút tương ứng.
+  document.querySelectorAll('.pw-toggle').forEach(btn => btn.addEventListener('click', () => {
+    const input = document.getElementById(btn.dataset.for);
+    if (!input) return;
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    btn.textContent = showing ? 'Hiện' : 'Ẩn';
+    btn.setAttribute('aria-label', showing ? 'Hiện mật khẩu' : 'Ẩn mật khẩu');
+  }));
+
+  // Đếm ngược cho các nút "Gửi lại mã" (dùng chung cho đăng nhập, đăng ký, quên mật khẩu).
+  const timers = new WeakMap();
+  function countdown(btn, seconds) {
+    if (!btn) return;
+    clearInterval(timers.get(btn));
+    const base = btn.dataset.base || (btn.dataset.base = btn.textContent);
+    let left = Math.max(1, Math.min(3600, Number(seconds) || 60));
+    const tick = () => {
+      if (left <= 0) { clearInterval(timers.get(btn)); btn.disabled = false; btn.textContent = base; return; }
+      btn.disabled = true; btn.textContent = base + ' (' + left + ' giây)'; left--;
+    };
+    tick(); timers.set(btn, setInterval(tick, 1000));
+  }
+
+  // Mã OTP dùng chung cho email và số điện thoại; đích nhận mã chỉ được gán qua textContent (không chèn HTML).
+  const OTP = {
+    email: { sending: 'Đang gửi mã tới email của bạn…', sent: 'Đã gửi mã. Kiểm tra hộp thư đến (và thư rác) của bạn.', lead: 'Mã gồm 6 chữ số đã được gửi tới', change: 'Đổi email', input: '#email' },
+    phone: { sending: 'Đang gửi mã qua SMS tới số điện thoại của bạn…', sent: 'Đã gửi mã qua SMS. Kiểm tra tin nhắn trên điện thoại của bạn.', lead: 'Mã gồm 6 chữ số đã được gửi qua SMS tới', change: 'Đổi số điện thoại', input: '#phone' }
+  };
+  const enabled = { email: false, phone: false, divider: false, social: false };
+  let otpMode = 'email', otpTarget = '';
+  // Chuẩn hóa giống máy chủ: 0912345678 / 84912345678 / +84912345678 → +84912345678.
+  function normalizePhone(value) {
+    if (typeof value !== 'string' || value.length > 32) return '';
+    let d = value.trim().replace(/[\s.()-]/g, '');
+    if (d.startsWith('+84')) d = d.slice(3).replace(/^0(?=\d{9}$)/, '');
+    else if (d.startsWith('0')) d = d.slice(1);
+    else if (d.startsWith('84') && d.length === 11) d = d.slice(2);
+    else return '';
+    return /^[35789]\d{8}$/.test(d) ? '+84' + d : '';
+  }
+  const formatPhone = p => p.slice(0, 3) + ' ' + p.slice(3, 6) + ' ' + p.slice(6, 9) + ' ' + p.slice(9);
+  // Trở về bước chọn cách đăng nhập; mode = 'phone' giữ ô nhập số điện thoại đang mở.
+  function resetOtp(mode) {
+    clearInterval(timers.get($('#resend')));
+    $('#codeForm').hidden = true; $('#code').value = '';
+    $('#phoneForm').hidden = !(enabled.phone && mode === 'phone');
+    $('#phoneBtn').hidden = !enabled.phone || mode === 'phone';
+    $('#emailForm').hidden = !enabled.email;
+    $('#divider').hidden = !enabled.divider;
+  }
+  async function sendCode(mode, target) {
+    const text = OTP[mode];
+    busy(true); show(text.sending, 'loading');
+    const r = await post('/auth/' + mode + '/start', mode === 'phone' ? { phone: target } : { email: target });
+    busy(false);
+    if (r.ok || (r.status === 429 && r.data.retryAfter && r.data.retryAfter <= 60)) {
+      otpMode = mode; otpTarget = target;
+      $('#sentLead').textContent = text.lead;
+      $('#sentTo').textContent = mode === 'phone' ? formatPhone(target) : target;
+      $('#changeTarget').textContent = text.change;
+      ['#pwLoginForm', '#pwDivider', '#emailForm', '#phoneForm', '#phoneBtn', '#divider'].forEach(s => { $(s).hidden = true; });
+      $('#codeForm').hidden = false;
+      countdown($('#resend'), r.data.retryAfter || 60);
+      show(r.ok ? text.sent : r.data.error, r.ok ? 'ok' : 'error');
+      $('#code').focus();
+    } else show(r.data.error || 'Không gửi được mã. Vui lòng thử lại.', 'error');
+  }
+  function setupOtp() {
+    $('#code').addEventListener('input', event => { event.target.value = event.target.value.replace(/\D/g, '').slice(0, 6); });
+    $('#codeForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const code = $('#code').value.trim();
+      if (!/^\d{6}$/.test(code)) { show('Mã gồm đúng 6 chữ số.', 'error'); $('#code').focus(); return; }
+      busy(true); show('Đang xác minh mã…', 'loading');
+      const r = await post('/auth/' + otpMode + '/verify', otpMode === 'phone' ? { phone: otpTarget, code } : { email: otpTarget, code });
+      if (r.ok) return done();
+      busy(false); show(r.data.error || 'Không xác minh được mã. Vui lòng thử lại.', 'error');
+      $('#code').select();
+    });
+    $('#resend').addEventListener('click', () => sendCode(otpMode, otpTarget));
+    $('#changeTarget').addEventListener('click', () => { resetOtp(otpMode); $('#pwLoginForm').hidden = !pwEnabled; $('#pwDivider').hidden = !(pwEnabled && enabled.social); show(''); $(OTP[otpMode].input).focus(); });
+  }
+  function setupEmail() {
+    $('#emailForm').hidden = false;
+    $('#emailForm').addEventListener('submit', event => {
+      event.preventDefault();
+      const email = $('#email').value.trim();
+      if (!validEmail(email)) { show('Vui lòng nhập địa chỉ email hợp lệ.', 'error'); $('#email').focus(); return; }
+      sendCode('email', email);
+    });
+  }
+  function setupPhone() {
+    $('#phoneBtn').hidden = false;
+    $('#phoneBtn').addEventListener('click', () => { resetOtp('phone'); $('#pwLoginForm').hidden = true; $('#pwDivider').hidden = true; show(''); $('#phone').focus(); });
+    $('#phoneCancel').addEventListener('click', () => { resetOtp('email'); $('#pwLoginForm').hidden = !pwEnabled; $('#pwDivider').hidden = !(pwEnabled && enabled.social); show(''); $('#phoneBtn').focus(); });
+    $('#phoneForm').addEventListener('submit', event => {
+      event.preventDefault();
+      const phone = normalizePhone($('#phone').value);
+      if (!phone) { show('Số điện thoại không hợp lệ. Vui lòng nhập số di động Việt Nam, ví dụ 0912 345 678 hoặc +84 912 345 678.', 'error'); $('#phone').focus(); return; }
+      sendCode('phone', phone);
+    });
+  }
+
+  // ===== Đăng nhập / đăng ký / quên mật khẩu bằng mật khẩu =====
+  let pwEnabled = false;
+  function setupPwLogin() {
+    $('#pwLoginForm').hidden = false;
+    $('#pwLoginForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const email = $('#loginEmail').value.trim(), pw = $('#loginPassword').value;
+      if (!validEmail(email)) { show('Vui lòng nhập địa chỉ email hợp lệ.', 'error'); $('#loginEmail').focus(); return; }
+      if (!pw) { show('Vui lòng nhập mật khẩu.', 'error'); $('#loginPassword').focus(); return; }
+      busy(true); show('Đang đăng nhập…', 'loading');
+      const r = await post('/auth/password/login', { email, password: pw });
+      if (r.ok) return done();
+      busy(false); show(r.data.error || 'Email hoặc mật khẩu không đúng.', 'error'); $('#loginPassword').select();
+    });
+    $('#toRegister').addEventListener('click', () => { const v = $('#loginEmail').value.trim(); screen('register'); if (v) $('#regEmail').value = v; $('#regEmail').focus(); });
+    $('#toForgot').addEventListener('click', () => { const v = $('#loginEmail').value.trim(); screen('forgot'); if (v) $('#fgEmail').value = v; $('#fgEmail').focus(); });
+  }
+
+  let regEmail = '', regPassword = '';
+  function setupRegister() {
+    $('#regCode').addEventListener('input', e => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6); });
+    $('#toLoginFromReg').addEventListener('click', () => { $('#regForm').hidden = false; $('#regCodeForm').hidden = true; screen('login'); });
+    $('#regForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const email = $('#regEmail').value.trim(), pw = $('#regPassword').value, confirm = $('#regConfirm').value;
+      if (!validEmail(email)) { show('Vui lòng nhập địa chỉ email hợp lệ.', 'error'); $('#regEmail').focus(); return; }
+      if (pw.length < 8) { show('Mật khẩu phải có ít nhất 8 ký tự.', 'error'); $('#regPassword').focus(); return; }
+      if (pw !== confirm) { show('Mật khẩu nhập lại không khớp.', 'error'); $('#regConfirm').focus(); return; }
+      busy(true); show('Đang gửi mã xác minh tới email của bạn…', 'loading');
+      const r = await post('/auth/register/start', { email, password: pw });
+      busy(false);
+      if (r.ok || (r.status === 429 && r.data.retryAfter && r.data.retryAfter <= 60)) {
+        regEmail = email; regPassword = pw;
+        $('#regSentTo').textContent = email;
+        $('#regForm').hidden = true; $('#regCodeForm').hidden = false;
+        countdown($('#regResend'), r.data.retryAfter || 60);
+        show(r.ok ? 'Đã gửi mã. Kiểm tra hộp thư đến (và thư rác) của bạn.' : r.data.error, r.ok ? 'ok' : 'error');
+        $('#regCode').focus();
+      } else show(r.data.error || 'Không gửi được mã. Vui lòng thử lại.', 'error');
+    });
+    $('#regCodeForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const code = $('#regCode').value.trim();
+      if (!/^\d{6}$/.test(code)) { show('Mã gồm đúng 6 chữ số.', 'error'); $('#regCode').focus(); return; }
+      busy(true); show('Đang hoàn tất đăng ký…', 'loading');
+      const r = await post('/auth/register/verify', { email: regEmail, code, password: regPassword });
+      if (r.ok) return done();
+      busy(false); show(r.data.error || 'Không hoàn tất được đăng ký. Vui lòng thử lại.', 'error'); $('#regCode').select();
+    });
+    $('#regResend').addEventListener('click', async () => {
+      busy(true); show('Đang gửi lại mã…', 'loading');
+      const r = await post('/auth/register/start', { email: regEmail, password: regPassword });
+      busy(false);
+      if (r.ok || (r.status === 429 && r.data.retryAfter)) { countdown($('#regResend'), r.data.retryAfter || 60); show(r.ok ? 'Đã gửi lại mã.' : r.data.error, r.ok ? 'ok' : 'error'); }
+      else show(r.data.error || 'Không gửi được mã. Vui lòng thử lại.', 'error');
+    });
+    $('#regChange').addEventListener('click', () => { $('#regCodeForm').hidden = true; $('#regForm').hidden = false; show(''); $('#regEmail').focus(); });
+  }
+
+  let fgEmail = '';
+  function setupForgot() {
+    $('#fgCode').addEventListener('input', e => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6); });
+    $('#toLoginFromForgot').addEventListener('click', () => { $('#fgForm').hidden = false; $('#fgResetForm').hidden = true; screen('login'); });
+    $('#fgForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const email = $('#fgEmail').value.trim();
+      if (!validEmail(email)) { show('Vui lòng nhập địa chỉ email hợp lệ.', 'error'); $('#fgEmail').focus(); return; }
+      busy(true); show('Đang gửi mã đặt lại…', 'loading');
+      const r = await post('/auth/password/forgot', { email });
+      busy(false);
+      fgEmail = email;
+      $('#fgSentTo').textContent = email;
+      $('#fgForm').hidden = true; $('#fgResetForm').hidden = false;
+      countdown($('#fgResend'), (r.data && r.data.retryAfter) || 60);
+      show((r.data && r.data.message) || 'Nếu email tồn tại, mã đặt lại đã được gửi.', 'ok');
+      $('#fgCode').focus();
+    });
+    $('#fgResetForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const code = $('#fgCode').value.trim(), pw = $('#fgPassword').value;
+      if (!/^\d{6}$/.test(code)) { show('Mã gồm đúng 6 chữ số.', 'error'); $('#fgCode').focus(); return; }
+      if (pw.length < 8) { show('Mật khẩu phải có ít nhất 8 ký tự.', 'error'); $('#fgPassword').focus(); return; }
+      busy(true); show('Đang đặt lại mật khẩu…', 'loading');
+      const r = await post('/auth/password/reset', { email: fgEmail, code, password: pw });
+      busy(false);
+      if (r.ok) {
+        $('#fgForm').hidden = false; $('#fgResetForm').hidden = true; $('#fgCode').value = ''; $('#fgPassword').value = '';
+        screen('login');
+        $('#loginEmail').value = fgEmail;
+        show('Đặt lại mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.', 'ok');
+        $('#loginPassword').focus();
+      } else { show(r.data.error || 'Không đặt lại được mật khẩu. Vui lòng thử lại.', 'error'); $('#fgCode').select(); }
+    });
+    $('#fgResend').addEventListener('click', async () => {
+      busy(true); show('Đang gửi lại mã…', 'loading');
+      const r = await post('/auth/password/forgot', { email: fgEmail });
+      busy(false);
+      countdown($('#fgResend'), (r.data && r.data.retryAfter) || 60);
+      show((r.data && r.data.message) || 'Nếu email tồn tại, mã đặt lại đã được gửi.', 'ok');
+    });
+  }
+
+  [['#tiktok', 'TikTok']].forEach(([selector, name]) => $(selector).addEventListener('click', event => {
+    if ($(selector).getAttribute('aria-disabled') === 'true') { event.preventDefault(); return; }
+    show('Đang chuyển tới ' + name + '…', 'loading');
+  }));
+
+  fetch('/auth/providers', { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+    .then(r => r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))
+    .then(p => {
+      show(initialError, initialError ? 'error' : '');
+      const tiktok = Boolean(p.tiktok && p.tiktok.enabled);
+      const phone = Boolean(p.phone && p.phone.enabled);
+      const email = Boolean(p.email && p.email.enabled);
+      pwEnabled = Boolean(p.password && p.password.enabled);
+      const social = tiktok || phone;
+      const any = tiktok || phone || email || pwEnabled;
+      $('#methods').hidden = !any;
+      $('#tiktok').hidden = !tiktok;
+      enabled.phone = phone; enabled.email = email; enabled.social = social; enabled.divider = email && (social || pwEnabled);
+      if (phone || email) setupOtp();
+      if (phone) setupPhone();
+      if (email) setupEmail();
+      if (pwEnabled) { setupPwLogin(); setupRegister(); setupForgot(); }
+      $('#pwDivider').hidden = !(pwEnabled && social);
+      $('#divider').hidden = !enabled.divider;
+      $('#setup').hidden = any;
+      if (p.access && typeof p.access.url === 'string' && /^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/i.test(p.access.url)) { $('#ownerLink').href = p.access.url; $('#owner').hidden = false; }
+    })
+    .catch(() => show('Không tải được phương thức đăng nhập. Vui lòng tải lại trang.', 'error'));
+})();
+</script>
+</body>
+</html>

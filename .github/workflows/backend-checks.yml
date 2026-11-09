@@ -3,6 +3,7 @@ name: Kiểm tra backend
 on:
   push:
     branches:
+      - main
       - feat/cloudflare-ai-backend
       - feat/same-origin-access
       - fix/**
@@ -20,15 +21,18 @@ jobs:
     steps:
       - name: Lấy mã nguồn
         uses: actions/checkout@v4
-      - name: Thiết lập Node.js 22
+      - name: Thiết lập Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+          cache: npm
+      - name: Cài đúng phiên bản đã khóa
+        run: npm ci
       - name: Chạy kiểm thử backend
-        run: node --test backend/test/*.test.mjs
+        run: npm test
       - name: Kiểm tra build Wrangler không triển khai
-        working-directory: backend
         env:
           CI: 'true'
           WRANGLER_SEND_METRICS: 'false'
-        run: npx --yes wrangler@4 deploy --dry-run --outdir /tmp/shopai-backend-build
+        run: npm run build
+

@@ -38,3 +38,8 @@ Ruling: select the requested long-poll alternative; backend waits up to 20 secon
 - Actual Cloudflare settings showed no Cron trigger despite the repository declaration. Added every-five-minute trigger in the dashboard. Persisted logging was disabled after deployment; enable observability in Wrangler configuration to retain it on releases.
 - Follow-up validation: **147 tests pass**, Wrangler dry-run build succeeds. Includes tests for lost idempotency header, immediate rate-limit reconciliation, in-flight callback unlink, and running an existing scheduled job only once.
 - Automatic approval review blocked a proposed unauthenticated DELETE production smoke test because it targets a destructive endpoint. Did not retry it. Used read-only authenticated UI/anonymous GET checks; unlink behavior is verified against SQLite in automated tests.
+
+## Safe manual recovery after reauthorization
+Automatic review of #26 found that a definitely rejected publish could no longer use its existing Retry button after reconnecting the same OA. Regression reproduced HTTP 409. Explicit run/retry now reopens only `failed/provider_denied` jobs with a connected matching target and fewer than five attempts. It preserves the job/idempotency key and never reopens unknown, cancelled, or target-changed outcomes. `npm run check`: **148 tests passed**, zero failed, build passed.
+
+Production follow-up #26 is live at release ebc8be55cb840085ee366f9b273cb35e988cce54 (aaf25dab-7267-416e-9cba-841efa04de86). Read-only D1 verification found channels, publish_jobs, durable migration marker and disconnect generation table; migration marker count 1. No connected channels or publish jobs were present, so no provider post was emitted for smoke testing.

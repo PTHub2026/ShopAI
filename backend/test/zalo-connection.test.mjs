@@ -246,3 +246,17 @@ test('disconnect invalidates a callback already awaiting token exchange',async()
  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM channels').get().n,0);
  });}finally{f.sqlite.close();}
 });
+
+test('explicit retry after reauthorizing the same OA recovers a pre-send failure using the same job',async()=>{
+ const f=fixture(),owner=f.login('email:safe-recovery@example.com');await mocked(graph,()=>begin(f,owner).then(s=>callback(f,s)));
+ try{f.sqlite.exec('UPDATE channels SET expires_at=1,refresh_token=NULL');
+ const r=await worker.fetch(new Request(base+'/channels/zalo/publish',{method:'POST',headers:{Cookie:owner,Origin:base,'Content-Type':'application/json','Idempotency-Key':'recover-same-oa-job-123'},body:JSON.stringify({content:'Recover',images:['https://example.com/cover.jpg']})}),f.env);
+ const first=await r.json();assert.equal(first.job.status,'failed');assert.equal(first.job.errorCode,'provider_denied');
+ await mocked(graph,()=>begin(f,owner).then(s=>callback(f,s)));
+ let creates=0;await mocked(async url=>{if(String(url).endsWith('/create')){creates++;return Response.json({error:0,data:{token:'article'}});}return Response.json({error:0,data:{id:'post'}});},async()=>{
+  const path='/channels/zalo/jobs/'+first.job.id+'/run';
+  const resumed=await f.req(owner,path,'POST');assert.equal(resumed.status,200);assert.equal((await resumed.json()).job.id,first.job.id);
+  assert.equal((await f.req(owner,path,'POST')).status,200);assert.equal(creates,1);
+ });
+ }finally{f.sqlite.close();}
+});

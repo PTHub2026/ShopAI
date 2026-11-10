@@ -274,7 +274,7 @@ export async function channels(request, env, who, json) {
     const h=new Headers(request.headers);h.set('X-Channel-Provider','zalo');
     return handleSocial(new Request(target,{method,headers:h,...(!['GET','HEAD'].includes(method)?{body:await request.arrayBuffer()}:{}),signal:request.signal}),env,who,json);
   }
-  const unified = /^\/channels\/(all|telegram|facebook|instagram|meta)\/(accounts|connect|publish|schedule|jobs|providers|start)(\/.*)?$/.exec(path);
+  const unified = /^\/channels\/(all|telegram|facebook|instagram|meta)\/(accounts|connect|publish|schedule|jobs|providers|start|sync)(\/.*)?$/.exec(path);
   if(unified){
     const [,provider,operation,rest='']=unified;
     let section=operation==='connect'?'accounts':operation==='publish'||operation==='schedule'?'jobs':operation;

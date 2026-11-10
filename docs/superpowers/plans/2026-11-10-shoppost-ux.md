@@ -47,6 +47,6 @@ Interfaces: screen metadata helper applied after synchronous/asynchronous render
 
 ### Task 4: Whole product review and deployment
 - [x] Review all task changes and required checks; fix important findings.
-- [ ] Merge reviewed PR after CI succeeds, verify Cloudflare release.
-- [ ] Visit all routes, inspect representative screenshots and primary safe interactions; compare account/channel target with implementation.
-- [ ] Save design-qa.md with actual evidence, intentional differences and honest limits.
+- [x] Merge reviewed PR after CI succeeds, verify Cloudflare release.
+- [x] Visit all routes, inspect representative screenshots and primary safe interactions; compare account/channel target with implementation.
+- [x] Save design-qa.md with actual evidence, intentional differences and honest limits.

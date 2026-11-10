@@ -68,8 +68,8 @@ export default {
     ctx.waitUntil(Promise.all([
       cleanupGoogleData(env).catch(() => console.error(JSON.stringify({event:'google.cleanup',code:'cleanup_failed'}))),
       runDueScheduledPosts(env).then(result => console.info(JSON.stringify({event:'publish.cron',processed:result.processed}))).catch(() => console.error(JSON.stringify({event:'publish.cron',code:'scheduler_failed'}))),
-      // Mỗi giờ một lần: tự phát hiện Instagram vừa được liên kết với Trang Facebook đã kết nối.
-      (new Date(event?.scheduledTime || Date.now()).getUTCMinutes() < 5 ? syncInstagramFromPages(env, env.DB).then(result => console.info(JSON.stringify({event:'meta.ig_sync',pages:result.pages,connected:result.connected}))) : Promise.resolve()).catch(() => console.error(JSON.stringify({event:'meta.ig_sync',code:'sync_failed'})))
+      // Mỗi giờ một lần: tự phát hiện Instagram vừa được liên kết với Trang Facebook đã kết nối và đánh dấu Trang có token bị thu hồi.
+      (new Date(event?.scheduledTime || Date.now()).getUTCMinutes() < 5 ? syncInstagramFromPages(env, env.DB).then(result => console.info(JSON.stringify({event:'meta.ig_sync',pages:result.pages,connected:result.connected,reauth:result.reauth,errors:result.errors}))) : Promise.resolve()).catch(() => console.error(JSON.stringify({event:'meta.ig_sync',code:'sync_failed'})))
     ]));
   },
   async fetch(request, env) {

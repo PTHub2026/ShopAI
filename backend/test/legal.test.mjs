@@ -18,3 +18,9 @@ test('Trang pháp lý công khai cho Meta App Review không cần đăng nhập'
   const post = await worker.fetch(new Request('https://shoppost.net/terms', { method: 'POST' }), {});
   assert.equal(post.status, 405);
 });
+
+test('Drive privacy and deletion instructions distinguish the separate grant from YouTube',async()=>{
+ const p=await (await worker.fetch(new Request('https://shoppost.net/privacy'),{})).text();
+ assert.match(p,/Google Drive trong Kho tài nguyên/);assert.match(p,/xem và tải tất cả tệp/);assert.match(p,/thành viên.*quyền nhập/s);assert.match(p,/không tự đồng bộ/);
+ const d=await (await worker.fetch(new Request('https://shoppost.net/data-deletion'),{})).text();assert.match(d,/Ngắt Drive/);
+});

@@ -159,11 +159,34 @@ test('Đồng bộ Instagram: lỗi Graph được đếm, không làm hỏng k�
  const warn=console.warn;const logs=[];console.warn=m=>logs.push(String(m));
  try{
   await connectPage(f,owner);
-  await withGraph(async()=>Response.json({error:{code:190,message:'expired PAGE_TOKEN_SECRET'}},{status:400}),async()=>{
+  await withGraph(async()=>Response.json({error:{code:2,message:'temporary PAGE_TOKEN_SECRET'}},{status:500}),async()=>{
    const body=await (await f.req(owner,'/api/social/meta/sync','POST')).json();
-   assert.equal(body.errors,1);assert.equal(body.connected,0);
+   assert.equal(body.errors,1);assert.equal(body.connected,0);assert.equal(body.reauth,0);
   });
+  assert.deepEqual(await providers(f,owner),['facebook:active'],'lỗi tạm thời không đổi trạng thái kênh');
   assert.ok(logs.some(l=>l.includes('meta_ig_sync_failed')));
   assert.equal(logs.join('\n').includes('PAGE_TOKEN_SECRET'),false);
  }finally{console.warn=warn;f.sqlite.close();}
+});
+
+test('Sức khỏe kết nối: token Trang bị thu hồi (190) thì kênh chuyển "Cần cấp quyền lại", lỗi quyền (10) thì giữ nguyên',async()=>{
+ const f=fixture(),owner=f.login('email:owner@example.com');
+ try{
+  await connectPage(f,owner);
+  await withGraph(async()=>Response.json({error:{code:10,message:'permission'}},{status:403}),async()=>{
+   const body=await syncInstagramFromPages(f.env,f.env.DB);
+   assert.equal(body.reauth,0);assert.equal(body.errors,1);
+  });
+  assert.deepEqual(await providers(f,owner),['facebook:active']);
+  await withGraph(async()=>Response.json({error:{code:190,message:'Error validating access token'}},{status:400}),async()=>{
+   const tasks=[];await worker.scheduled({cron:'*/5 * * * *',scheduledTime:Date.UTC(2026,10,10,12,0)},f.env,{waitUntil:p=>tasks.push(p)});await Promise.all(tasks);
+  });
+  assert.deepEqual(await providers(f,owner),['facebook:reauth_required']);
+  const audits=f.sqlite.prepare("SELECT count(*) n FROM audit_log WHERE action='social.reauth_required' AND target='111111'").get();
+  assert.equal(audits.n,1);
+  await withGraph(async()=>{throw Error('kênh đã cần cấp quyền lại thì không quét nữa');},async calls=>{
+   const again=await syncInstagramFromPages(f.env,f.env.DB);
+   assert.equal(again.pages,0);assert.equal(calls.length,0);
+  });
+ }finally{f.sqlite.close();}
 });

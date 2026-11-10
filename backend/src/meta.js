@@ -94,7 +94,7 @@ async function tokenScopes(e,token){
  return new Set(Array.isArray(d.scopes)?d.scopes.map(String):[]);
 }
 export async function syncInstagramFromPages(env,db,{shopId=null,actor=null,manual=false}={}){
- const out={pages:0,linked:0,connected:0,alreadyConnected:0,missingPermission:0,errors:0};
+ const out={pages:0,linked:0,connected:0,alreadyConnected:0,missingPermission:0,reauth:0,errors:0};
  if(!db||!metaConfigured(env))return out;
  const {results}=await db.prepare("SELECT c.shop_id,c.external_id,c.token,c.token_iv,c.connected_by FROM channels c JOIN shops s ON s.id=c.shop_id WHERE c.provider='facebook' AND c.status='connected' AND c.token IS NOT NULL AND c.token<>'' AND s.status='active' AND (? IS NULL OR c.shop_id=?) ORDER BY c.updated_at DESC LIMIT 50").bind(shopId,shopId).all();
  for(const page of results||[]){
@@ -115,6 +115,12 @@ export async function syncInstagramFromPages(env,db,{shopId=null,actor=null,manu
    await saveAccount(db,env,{owner:actor||page.connected_by||'system:meta-sync'},page.shop_id,'instagram',{id:ig.id,name:ig.username||'Instagram'},token);
    out.connected++;
   }catch(e){
+   // Page token bị thu hồi/hết hạn (Chủ shop gỡ app, đổi mật khẩu, mất quyền Trang): báo "Cần cấp quyền lại"
+   // ngay thay vì chờ tới lúc bài hẹn giờ đăng thất bại. Chỉ mã 190 mới là token hỏng; lỗi quyền (10/200) giữ nguyên.
+   if(Number(e?.code)===190){
+    const marked=await db.prepare("UPDATE channels SET status='reauth_required',updated_at=? WHERE shop_id=? AND provider='facebook' AND external_id=? AND status='connected' AND token IS ?").bind(stamp(),page.shop_id,String(page.external_id),page.token).run().catch(()=>null);
+    if(marked?.meta?.changes){out.reauth++;await audit(db,{shopId:page.shop_id,actor:'system:meta-health',action:'social.reauth_required',target:String(page.external_id),detail:{provider:'facebook'}}).catch(()=>{});continue;}
+   }
    out.errors++;
    console.warn(JSON.stringify({event:'meta_ig_sync_failed',stage:String(e?.message||'unknown').slice(0,40),status:Number(e?.status)||0,code:Number(e?.code)||0}));
   }

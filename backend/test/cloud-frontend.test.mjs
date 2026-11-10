@@ -401,3 +401,22 @@ test('published history uses the submitted snapshot while keeping edits made dur
  const pending=deferred(),r=runtime({fetchImpl:async(path,opts)=>path==='/channels/all/jobs'&&opts.method==='POST'?pending.promise:Response.json(session)});
  try{await settle();r.w.confirm=()=>true;r.w.crypto.randomUUID=()=> 'immutable-submission-test-key';r.read("SHOP.ready=true;SHOP.id='shop';S.channels=[{id:'fb',accountId:'a',pf:'facebook',provider:'facebook',name:'Page',connected:true,real:true}];D.content='Submitted';D.channels=['fb']");const send=r.w.submitPostReal(['fb']);await settle();r.read("D.content='New unsent edit';D.media=[{type:'image/png',thumb:'new-photo'}]");pending.resolve(Response.json({ok:true,job:{id:'sent-snapshot',status:'sent'}}));await send;assert.equal(r.read('S.posts[0].content'),'Submitted');assert.equal(r.read('S.posts[0].media.length'),0);assert.equal(r.read('D.content'),'New unsent edit');assert.equal(r.read('D.media.length'),1);}finally{r.close();}
 });
+
+test('real connection inventory counts Facebook and YouTube and never counts configuration or revoked accounts',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop'");
+ r.w.updateConnectionInventory({accounts:[{id:'fb',name:'ShopTrack',provider:'facebook',targetId:'123',status:'active'},{id:'old',name:'Old',provider:'facebook',targetId:'456',status:'revoked'},{id:'bad',name:'Missing identity',provider:'telegram',status:'active'}]},{channels:[],setup:{zalo:{configured:true}}},{configured:true,accounts:[{id:'yt',name:'My YouTube',targetId:'UCtest',status:'connected'}]},'shop');
+ const card=r.w.connectionSummary();assert.match(card,/2 tài khoản đã kết nối thật/);assert.match(card,/Facebook/);assert.match(card,/YouTube/);assert.match(card,/Chưa kết nối/);assert.match(card,/Đã ngắt kết nối/);assert.match(card,/Cần cấp quyền lại/);assert.match(r.w.document.querySelector('#shop_box').textContent,/2 kênh đã kết nối thật/);
+ }finally{r.close();}
+});
+test('connection status comes only from matching shop server data and incomplete reads never retain stale success',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='a'");r.w.updateConnectionInventory({accounts:[{id:'fb',name:'<script>bad</script>',provider:'facebook',targetId:'123',status:'active'}]},{channels:[]},{accounts:[]},'a');assert.doesNotMatch(r.w.connectionSummary(),/<script>/);
+ r.read("SHOP.id='b'");assert.doesNotMatch(r.w.connectionSummary(),/bad/);r.w.updateConnectionInventory({accounts:[]},{channels:[]},{accounts:[]},'a');assert.doesNotMatch(r.w.connectionSummary(),/bad/);
+ r.w.updateConnectionInventory(null,{channels:[]},{accounts:[]},'b');assert.match(r.w.connectionSummary(),/Chưa xác nhận đủ/);assert.doesNotMatch(r.w.connectionSummary(),/1 tài khoản đã kết nối thật/);
+ }finally{r.close();}
+});
+
+test('partial Zalo metadata stays visible as connected but is not publish selectable without its account ID',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop'");r.w.updateConnectionInventory(null,{channels:[{provider:'zalo',name:'OA',external_id:'123',status:'connected'}]},{accounts:[]},'shop');assert.match(r.w.connectionSummary(),/Đã kết nối thật/);assert.equal(r.read('S.channels.filter(c=>c.real).length'),0);assert.match(r.w.document.querySelector('#shop_box').textContent,/cần kiểm tra lại/);
+ r.w.updateConnectionInventory({accounts:[{id:'zalo-a',provider:'zalo',targetId:'123',status:'active'}]},{channels:[{provider:'zalo',name:'OA',external_id:'123',status:'connected'}]},{accounts:[]},'shop');assert.equal(r.read('S.channels[0].accountId'),'zalo-a');
+ }finally{r.close();}
+});

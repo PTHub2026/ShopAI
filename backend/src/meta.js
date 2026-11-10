@@ -92,7 +92,13 @@ export async function handleMeta(req,env,who,json){
   const state=random(),t=stamp();
   await db.prepare('INSERT INTO meta_oauth_states(state_hash,shop_id,actor,expires_at,created_at) VALUES(?,?,?,?,?)').bind(await sha(state),ctx.shop.id,who.owner,t+600,t).run();
   const auth=new URL('https://www.facebook.com/'+version(env)+'/dialog/oauth');
-  auth.search=new URLSearchParams({client_id:appId(env),redirect_uri:env.META_REDIRECT_URI,response_type:'code',state,scope:'pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish'}).toString();
+  // Business-type Meta apps use Facebook Login for Business: permissions come from a
+  // Dashboard configuration (config_id) instead of the scope parameter.
+  const configId=String(env.META_LOGIN_CONFIG_ID||'').trim();
+  const params={client_id:appId(env),redirect_uri:env.META_REDIRECT_URI,response_type:'code',state};
+  if(/^\d{5,20}$/.test(configId))params.config_id=configId;
+  else params.scope='pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish';
+  auth.search=new URLSearchParams(params).toString();
   return json({authorizationUrl:auth.toString()});
  }
  if(req.method!=='GET')return error(json,'method_not_allowed',405);

@@ -76,3 +76,19 @@ test('Meta OAuth: one-use state, same actor, scoped accounts, encrypted Page tok
   assert.deepEqual(calls.map(p=>p.split('/').at(-1)),['access_token','access_token','permissions','accounts','accounts']);
  }finally{globalThis.fetch=previous;f.sqlite.close();}
 });
+test('Meta OAuth: META_LOGIN_CONFIG_ID dùng config_id (Facebook Login for Business) thay cho scope',async()=>{
+ const f=fixture();
+ const owner=f.login('email:cfg@example.com');
+ f.env.META_LOGIN_CONFIG_ID='987654321012345';
+ const r=await f.req(owner,'/api/social/meta/start','POST');
+ assert.equal(r.status,200);
+ const url=new URL((await r.json()).authorizationUrl);
+ assert.equal(url.searchParams.get('config_id'),'987654321012345');
+ assert.equal(url.searchParams.has('scope'),false);
+ assert.equal(url.searchParams.get('response_type'),'code');
+ f.env.META_LOGIN_CONFIG_ID='khong-hop-le';
+ const r2=await f.req(owner,'/api/social/meta/start','POST');
+ const url2=new URL((await r2.json()).authorizationUrl);
+ assert.equal(url2.searchParams.has('config_id'),false);
+ assert.match(url2.searchParams.get('scope'),/pages_manage_posts/);
+});

@@ -1186,13 +1186,13 @@ function driveConnect(){if(!DRIVE.data?.configured||!DRIVE.data.canConnect||DRIV
 function driveDisconnect(){if(DRIVE.shop!==SHOP.id||!DRIVE.data?.canConnect)return;const shop=SHOP.id;ask('Ngắt Google Drive khỏi shop này? Các tệp đã nhập trong Kho vẫn được giữ.',async()=>{try{await cloudRequest('/api/library/drive/connection',{method:'DELETE'});if(SHOP.id!==shop)return;DRIVE_PICK.run++;closeModal();await driveLoad(true);toast('Đã ngắt Google Drive trong ShopPost. Có thể thu hồi quyền ứng dụng tại tài khoản Google.');}catch(e){toast(driveMessage(e));}},{ok:'Ngắt Drive'});}
 async function driveBrowse(pageToken='',append=false){
  if(window.QA_RUNNING||DRIVE.shop!==SHOP.id||!DRIVE.data?.connected||!DRIVE.data.canImport||DRIVE_PICK.busy)return;
- const shop=SHOP.id,run=++DRIVE_PICK.run,generation=modalGeneration;
+ const shop=SHOP.id,run=++DRIVE_PICK.run,generation=modalGeneration,view=viewGeneration;
  if(!append){DRIVE_PICK.shop=shop;DRIVE_PICK.files=[];DRIVE_PICK.q='';DRIVE_PICK.selection.clear();}
  if(append&&DRIVE_PICK.shop!==shop)return;
  if(append)document.querySelectorAll('.drive_pick').forEach(c=>{const f=DRIVE_PICK.files[Number(c.value)];if(f)c.checked?DRIVE_PICK.selection.add(f.id):DRIVE_PICK.selection.delete(f.id)});const q=append?DRIVE_PICK.q:'';DRIVE_PICK.busy=true;DRIVE_PICK.controller=new AbortController();
- try{const j=await cloudRequest('/api/library/drive/files?'+new URLSearchParams({q,...(pageToken?{pageToken}:{})}),{signal:DRIVE_PICK.controller.signal});if(SHOP.id!==shop||DRIVE_PICK.run!==run||modalGeneration!==generation)return;
+ try{const j=await cloudRequest('/api/library/drive/files?'+new URLSearchParams({q,...(pageToken?{pageToken}:{})}),{signal:DRIVE_PICK.controller.signal});if(SHOP.id!==shop||DRIVE_PICK.run!==run||modalGeneration!==generation||viewGeneration!==view)return;
   const old=new Set(DRIVE_PICK.files.map(f=>f.id));DRIVE_PICK.files.push(...(j.files||[]).filter(f=>/^[a-zA-Z0-9_-]{1,200}$/.test(f.id||'')&&!old.has(f.id)));DRIVE_PICK.next=j.nextPageToken||null;drivePicker();
- }catch(e){if(SHOP.id===shop&&modalGeneration===generation&&DRIVE_PICK.run===run){toast(driveMessage(e));DRIVE.loadedAt=0;await driveLoad(true);}}finally{DRIVE_PICK.busy=false;}
+ }catch(e){if(SHOP.id===shop&&modalGeneration===generation&&viewGeneration===view&&DRIVE_PICK.run===run){toast(driveMessage(e));DRIVE.loadedAt=0;await driveLoad(true);}}finally{DRIVE_PICK.busy=false;}
 }
 async function driveSearch(){if(DRIVE_PICK.busy)return;DRIVE_PICK.q=($('#drive_q')?.value||'').trim().slice(0,200);DRIVE_PICK.selection.clear();DRIVE_PICK.files=[];await driveBrowse('',true);}
 function drivePicker(){const have=new Set(S.assets.map(a=>a.rid));modal(`<h3>Nhập tệp từ Google Drive</h3><p class="small muted">Danh sách tệp thật · tối đa 50 MB/tệp. Google Docs, Sheets, Slides được xuất thành tệp Office. Bản sao lưu trên trình duyệt này.</p><div class="row"><input id="drive_q" aria-label="Tìm tên tệp trên Drive" placeholder="Tìm tên tệp" value="${esc(DRIVE_PICK.q)}" onkeydown="if(event.key==='Enter')driveSearch()"><button class="btn" onclick="driveSearch()">Tìm trên Drive</button></div><div style="max-height:320px;overflow:auto;margin:12px 0">${DRIVE_PICK.files.length?DRIVE_PICK.files.map((f,i)=>{const imported=have.has('drive:'+DRIVE_PICK.shop+':'+f.id),disabled=imported||!f.downloadable||f.size>50*1024*1024;return `<label class="ch" style="color:inherit"><input class="drive_pick" type="checkbox" value="${i}" style="width:auto" ${disabled?'disabled':''} ${DRIVE_PICK.selection.has(f.id)?'checked':''}><span>${esc(f.name)}<small style="display:block">${f.size?fmtSize(f.size):f.exported?'Xuất tài liệu Google':'Chưa rõ dung lượng'}${imported?' · Đã nhập':!f.downloadable?' · Không hỗ trợ tải':f.size>50*1024*1024?' · Quá 50 MB':''}</small></span></label>`;}).join(''):'<p>Không có tệp phù hợp.</p>'}</div>${DRIVE_PICK.next?'<button class="btn" onclick="driveBrowse(DRIVE_PICK.next,true)">Xem thêm tệp</button>':''}<p id="drive_progress" role="status"></p><div class="row" style="justify-content:flex-end"><button class="btn" onclick="DRIVE_PICK.run++;closeModal()">Đóng</button><button class="btn pri" onclick="driveImport()">Nhập tệp đã chọn</button></div>`);}
@@ -1209,8 +1209,8 @@ async function driveImport(){
  const picked=[...document.querySelectorAll('.drive_pick:checked:not(:disabled)')].map(c=>DRIVE_PICK.files[Number(c.value)]).filter(Boolean);
  if(!picked.length)return toast('Chọn ít nhất một tệp.');
  if(!IDB.db)return toast('Chưa có bộ nhớ tệp trên trình duyệt. Hãy cho phép lưu trữ rồi tải lại trang.');
- const shop=SHOP.id,run=DRIVE_PICK.run,generation=modalGeneration;DRIVE_PICK.busy=true;DRIVE_PICK.controller=new AbortController();let imported=0,failed=0;
- const current=()=>SHOP.id===shop&&DRIVE_PICK.run===run&&modalGeneration===generation;
+ const shop=SHOP.id,run=DRIVE_PICK.run,generation=modalGeneration,view=viewGeneration;DRIVE_PICK.busy=true;DRIVE_PICK.controller=new AbortController();let imported=0,failed=0;const reasons=new Set();
+ const current=()=>SHOP.id===shop&&DRIVE_PICK.run===run&&modalGeneration===generation&&viewGeneration===view;
  for(const remote of picked){
   if(!current())break;
   const rid='drive:'+shop+':'+remote.id;if(S.assets.some(a=>a.rid===rid))continue;
@@ -1223,14 +1223,14 @@ async function driveImport(){
    await IDB.put('files',a.id,f);if(!BLOBS[a.id])BLOBS[a.id]=URL.createObjectURL(f);const saved=await IDB.get('files',a.id);
    if(!saved||saved.size!==f.size)throw Object.assign(Error('local_storage_failed'),{code:'local_storage_failed'});
    if(!current()){await IDB.del('files',a.id);if(BLOBS[a.id])URL.revokeObjectURL(BLOBS[a.id]);delete BLOBS[a.id];break;}
-   a.source='drive';a.rid=rid;S.assets.unshift(a);S.savedAt=Date.now();
+   a.source='drive';a.name=f.name;a.rid=rid;S.assets.unshift(a);S.savedAt=Date.now();
    const snapshot=JSON.stringify({...S,channels:S.channels.filter(c=>!c.real)});await IDB.put('kv','state',snapshot);
    const durable=JSON.parse(await IDB.get('kv','state')||'null');if(!durable?.assets?.some(item=>item.id===a.id&&item.rid===rid))throw Object.assign(Error('local_storage_failed'),{code:'local_storage_failed'});
    persist();imported++;
-  }catch(e){failed++;if(a){S.assets=S.assets.filter(item=>item.id!==a.id);persist();await IDB.del('files',a.id);if(BLOBS[a.id])URL.revokeObjectURL(BLOBS[a.id]);delete BLOBS[a.id];}if(current())toast(driveMessage(e));}
+  }catch(e){failed++;reasons.add(driveMessage(e));if(a){S.assets=S.assets.filter(item=>item.id!==a.id);persist();await IDB.del('files',a.id);if(BLOBS[a.id])URL.revokeObjectURL(BLOBS[a.id]);delete BLOBS[a.id];}if(current())toast(driveMessage(e));}
  }
  DRIVE_PICK.busy=false;
- if(current()){closeModal();if(route==='library')V.library();toast(`Đã nhập ${imported} tệp từ Google Drive${failed?' · '+failed+' tệp không nhập được':''}. Tệp lưu trên trình duyệt này.`);}
+ if(current()){closeModal();if(route==='library')V.library();toast(`Đã nhập ${imported} tệp từ Google Drive${failed?' · '+failed+' tệp không nhập được: '+[...reasons].join(' '):''}. Tệp lưu trên trình duyệt này.`);}
 }
 
 function lbConnect(k){if(!demoAction())return;const c=CONN[k];modal(`<h3>${c.ic} Kết nối ${c.n}</h3><div class="card small" style="background:#fffbeb;border-color:#fde68a">ℹ️ Bản demo <b>mô phỏng</b> kết nối. Bản production dùng <b>${c.api}</b> qua backend – không lưu mật khẩu trong trình duyệt.</div><label>${k==='email'?'Địa chỉ email nhận tài nguyên cho Kho':'Tài khoản'}</label><input id="cn_acc" value="${esc(c.acc)}">${k==='email'?'<p class="small muted">Sau khi kết nối, file đính kèm trong các email gửi tới địa chỉ này có thể nhập vào Kho.</p>':''}<div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" onclick="closeModal()">Hủy</button><button class="btn pri" onclick="lbDoConnect('${k}')">Kết nối</button></div>`)}

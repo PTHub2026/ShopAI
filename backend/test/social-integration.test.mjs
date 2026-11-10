@@ -169,7 +169,7 @@ test('social mutations share the fail-closed API write limiter before any writes
   f.env.AI_RATE_LIMITER=limiter;
   for(const path of ['accounts','jobs','jobs/missing/retry'])assert.equal((await f.request(owner,'/api/social/'+path,{method:'POST',body:{}})).status,status);
  }
- assert.equal(f.db.sqlite.prepare("SELECT count(*) n FROM sqlite_master WHERE name='social_accounts'").get().n,0);
+ assert.equal(f.db.sqlite.prepare("SELECT count(*) n FROM sqlite_master WHERE name='publish_jobs'").get().n,0);
  f.db.sqlite.close();
 });
 test('concurrent identical jobs call Telegram once and isolate retry by shop',async()=>{

@@ -420,3 +420,16 @@ test('same-shop obsolete loads and channel initialization cannot erase current a
  assert.equal(r.w.document.querySelector('#tg_text').value,'Keep this');
  }finally{r.close()}
 });
+
+test('switching shops refreshes composer channel controls without replacing the draft',async()=>{
+ const r=runtime();try{await settle();const pending=deferred();
+ r.w.fetch=async url=>new URL(url,r.w.location.href).pathname==='/channels'?pending.promise:Response.json({error:'stop polling'},{status:403});
+ r.read("SHOP.ready=true;SHOP.id='one';SHOP.shops=[{id:'one',name:'One',role:'owner'},{id:'two',name:'Two',role:'owner'}];go('create');shopSwitch('two');stopJobWatch()");
+ const editor=r.w.document.querySelector('#ct');editor.value='Keep my draft';editor.dispatchEvent(new r.w.Event('input'));r.read("D.channels=['real_zalo']");
+ assert.doesNotMatch(r.w.document.querySelector('#chlist').textContent,/New OA/);
+ pending.resolve(Response.json({channels:[{provider:'zalo',status:'connected',name:'New OA',oa_id:'12345'}]}));await settle();await settle();
+ assert.match(r.w.document.querySelector('#chlist').textContent,/New OA/);
+ assert.equal(r.w.document.querySelector('#ct'),editor);assert.equal(editor.value,'Keep my draft');
+ assert.equal(r.w.document.querySelector('#sub').disabled,false);
+ }finally{r.close()}
+});

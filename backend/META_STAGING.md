@@ -17,6 +17,7 @@
 2. `wrangler secret put SOCIAL_TOKEN_KEY`: base64 của 32 byte ngẫu nhiên (không commit, không đưa secret vào URL/log). Cần khóa ổn định qua các lần deploy.
 3. Dùng `FACEBOOK_APP_ID` và `FACEBOOK_APP_SECRET` **nếu Meta App hiện có được quyền Pages + Instagram**; nếu không, cấu hình `META_APP_ID` và `META_APP_SECRET` tách riêng. Secret chỉ đặt trong Cloudflare Secrets.
 4. Cấu hình `META_REDIRECT_URI=https://<staging-host>/api/social/meta/callback`. Thêm URI này *chính xác* vào Valid OAuth Redirect URIs trong Meta App Dashboard. Có thể dùng `META_GRAPH_VERSION=v26.0` để pin version sau khi kiểm chứng.
+5. Nếu app Meta thuộc loại Business (dùng **Facebook Login for Business**), tạo một Configuration loại *User access token* gồm đủ các quyền ở trên rồi đặt var `META_LOGIN_CONFIG_ID=<Configuration ID>`. Khi biến này hợp lệ (chỉ gồm chữ số), hộp thoại OAuth gửi `config_id` thay cho `scope`; bỏ trống thì giữ cách dùng `scope` như cũ.
 5. App scopes bắt buộc theo use case: `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `instagram_basic`, `instagram_content_publish`. Các tài khoản Instagram phải Professional (Business/Creator) và liên kết Page.
 6. Chỉ khi App Review / Business Verification / Advanced Access đáp ứng mới cho phép các shop khác sử dụng; nếu không chỉ test bằng tài khoản Role tester/developer được Meta cho phép.
 

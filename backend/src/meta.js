@@ -2,6 +2,7 @@
 // Never log authorization codes, OAuth access tokens or response bodies from Graph.
 import {resolveShop,audit} from './shops.js';
 import {encryptToken,decryptToken} from './social.js';
+import {normalizeImages} from './provider-adapters.js';
 export const META_SCHEMA = [
  "CREATE TABLE IF NOT EXISTS meta_oauth_states (state_hash TEXT PRIMARY KEY, shop_id TEXT NOT NULL, actor TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL)",
  "CREATE INDEX IF NOT EXISTS meta_oauth_expires ON meta_oauth_states(expires_at)"
@@ -26,6 +27,7 @@ async function graphRequest(e,path,token,fields={},method='GET'){
  // Keep Graph access tokens out of URLs, browser history and edge request logs.
  init.headers={Authorization:'Bearer '+token};
  if(method==='GET'){uri.search=form(fields).toString();}
+ else if(fields instanceof FormData){init.body=fields;}
  else {init.headers['Content-Type']='application/x-www-form-urlencoded';init.body=form(fields).toString();}
  const r=await fetch(uri,init);const data=await r.json().catch(()=>({}));
  if(!r.ok||data.error){const err=Error('META_API_FAILED');err.status=r.status;err.code=data.error?.code;err.subcode=data.error?.error_subcode;throw err;}
@@ -38,6 +40,21 @@ export async function publishMeta(e,account,job){
   if(job.kind==='text'){
    const r=await graphRequest(e,encodeURIComponent(account.external_id)+'/feed',token,{message:p.text},'POST');
    if(!r.id)throw Error('META_MISSING_ID');return String(r.id);
+  }
+  if(Array.isArray(p.images)&&p.images.length){
+   const attachments=[];
+   // Stage every image unpublished; only the final feed call makes the album visible.
+   for(const image of normalizeImages(p.images)){
+    const fields=new FormData();fields.set('published','false');
+    if(image.kind==='upload')fields.set('source',new Blob([image.bytes],{type:image.mime}),image.name);
+    else fields.set('url',image.url);
+    const uploaded=await graphRequest(e,encodeURIComponent(account.external_id)+'/photos',token,fields,'POST');
+    if(!uploaded.id)throw Error('META_MISSING_PHOTO_ID');
+    attachments.push({media_fbid:String(uploaded.id)});
+   }
+   if(!attachments.length)throw Error('META_MISSING_PHOTO_ID');
+   const posted=await graphRequest(e,encodeURIComponent(account.external_id)+'/feed',token,{message:p.text,attached_media:JSON.stringify(attachments)},'POST');
+   if(!posted.id)throw Error('META_MISSING_ID');return String(posted.id);
   }
   const r=await graphRequest(e,encodeURIComponent(account.external_id)+'/photos',token,{url:p.photoUrl,caption:p.text},'POST');
   if(!r.post_id&&!r.id)throw Error('META_MISSING_ID');return String(r.post_id||r.id);

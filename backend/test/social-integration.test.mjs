@@ -154,3 +154,27 @@ test('publish-now operates the existing scheduled job and cannot duplicate it',a
   assert.equal((await f.request(owner,path,{method:'POST'})).data.job.status,'sent');assert.equal(sent,1);
  });
 });
+
+test('Facebook composer photo payload survives the real job route and idempotent replay never posts twice',async()=>{
+ const f=fixture(),owner=f.login('email:facebook@example.com');
+ const {encryptToken}=await import('../src/social.js');
+ const shop=(await f.request(owner,'/session')).data.shop.id;
+ await f.request(owner,'/channels/all/accounts');
+ const encrypted=await encryptToken(f.env,'synthetic-fb-page-token');
+ f.db.sqlite.prepare("INSERT INTO channels(id,shop_id,provider,name,external_id,token,token_iv,status,connected_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'connected',?,?,?)").run('fb-composer',shop,'facebook','Test page','123456',encrypted.cipher,encrypted.iv,'email:facebook@example.com',now(),now());
+ const images=['data:image/png;base64,iVBORw0KGgo=','data:image/jpeg;base64,/9j/AA=='];
+ const payload={accountId:'fb-composer',kind:'photo',text:'Long caption '.repeat(150),images};
+ const original=globalThis.fetch;let uploads=0,posts=0;
+ globalThis.fetch=async(url,init)=>{
+  assert.equal(new URL(url).hostname,'graph.facebook.com');
+  if(String(url).endsWith('/photos')){uploads++;assert.equal(init.body.get('published'),'false');return Response.json({id:String(uploads)});}
+  posts++;const body=new URLSearchParams(init.body);assert.equal(body.get('message'),payload.text);assert.equal(JSON.parse(body.get('attached_media')).length,2);return Response.json({id:'123456_999'});
+ };
+ try{
+  const first=await f.request(owner,'/channels/all/jobs',{method:'POST',shop,idem:'facebook-composer-test-key',body:payload});
+  assert.equal(first.status,200);assert.equal(first.data.job.status,'sent');assert.equal(first.data.url,'https://www.facebook.com/123456_999');
+  assert.deepEqual(JSON.parse(f.db.sqlite.prepare('SELECT payload FROM publish_jobs').get().payload).images,images);
+  const replay=await f.request(owner,'/channels/all/jobs',{method:'POST',shop,idem:'facebook-composer-test-key',body:payload});
+  assert.equal(replay.status,200);assert.equal(posts,1);assert.equal(uploads,2);
+ }finally{globalThis.fetch=original;f.db.sqlite.close();}
+});

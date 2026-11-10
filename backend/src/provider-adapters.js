@@ -14,8 +14,18 @@ export function validatePost(provider,p){
   return;
  }
  if(provider==='instagram'&&p.kind!=='photo')reject('instagram_requires_photo');
+ if(provider==='facebook'){
+  if(p.text.length>5000||(!p.text.trim()&&p.kind==='text'))reject('invalid_input');
+  if(p.kind==='photo'&&p.images!==undefined){
+   let images;try{images=normalizeImages(p.images);}catch(e){reject(e.message);}
+   if(!images.length||JSON.stringify(p.images).length>6*1024*1024)reject('invalid_photo');
+   if(images.some(i=>i.kind==='url'?!/^https:\/\//.test(i.url):!['image/jpeg','image/png','image/gif','image/webp'].includes(i.mime)))reject('invalid_photo');
+   return;
+  }
+  if(p.kind==='text')return;
+ }
  if(!['telegram','facebook','instagram'].includes(provider))reject('unsupported_provider');
- if(p.text.length>(p.kind==='photo'?1024:4096)||(!p.text.trim()&&p.kind==='text'))reject('invalid_input');
+ if(p.text.length>(provider==='facebook'?5000:p.kind==='photo'?1024:4096)||(!p.text.trim()&&p.kind==='text'))reject('invalid_input');
  if(p.kind==='photo'&&(typeof p.photoUrl!=='string'||!/^https:\/\/[^\s@/]+(?:\/[^\s]*)?$/.test(p.photoUrl)||p.photoUrl.length>2048))reject('invalid_photo');
 }
 export function retryDecision(e,attempt){

@@ -1,4 +1,5 @@
 import { handleSocial } from './social.js';
+import { cleanupGoogleData } from './google.js';
 import { drafts } from './drafts.js';
 import { handleAuth, loginResponse, normalizeEmail, sessionFromRequest } from './auth.js';
 import { INVITE_PATH, handleApi, resolveShop } from './shops.js';
@@ -63,7 +64,10 @@ export default {
   // Cron Trigger (xem triggers.crons trong wrangler.jsonc): quét lịch đăng đến giờ và đăng lên kênh thật.
   async scheduled(event, env, ctx) {
     if (!env.DB) return;
-    ctx.waitUntil(runDueScheduledPosts(env).then(result => console.info(JSON.stringify({event:'publish.cron',processed:result.processed}))).catch(() => console.error(JSON.stringify({event:'publish.cron',code:'scheduler_failed'}))));
+    ctx.waitUntil(Promise.all([
+      cleanupGoogleData(env).catch(() => console.error(JSON.stringify({event:'google.cleanup',code:'cleanup_failed'}))),
+      runDueScheduledPosts(env).then(result => console.info(JSON.stringify({event:'publish.cron',processed:result.processed}))).catch(() => console.error(JSON.stringify({event:'publish.cron',code:'scheduler_failed'})))
+    ]));
   },
   async fetch(request, env) {
     const origin = request.headers.get('Origin');

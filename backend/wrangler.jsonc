@@ -36,7 +36,8 @@
     "PLATFORM_ADMIN_EMAILS": "ct@pthub.vn",
     "EMAIL_LOGIN_DOMAINS": "pthub.vn,shoptrack.vn",
     "META_APP_ID": "1690219679401963",
-    "META_REDIRECT_URI": "https://shoppost.net/api/social/meta/callback"
+    "META_REDIRECT_URI": "https://shoppost.net/api/social/meta/callback",
+    "GOOGLE_REDIRECT_URI": "https://shoppost.net/api/social/google/callback"
   },
   "send_email": [
     {

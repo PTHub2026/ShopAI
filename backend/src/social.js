@@ -3,6 +3,7 @@ import {ensureChannelStore} from './channel-store.js';
 import {validatePost, retryDecision, publishFor} from './provider-adapters.js';
 import {resolveShop,audit} from './shops.js';
 import {handleMeta,publishMeta,metaDenied,metaConfigured} from './meta.js';
+import {handleGoogle} from './google.js';
 const now=()=>Math.floor(Date.now()/1000);
 export const SOCIAL_SCHEMA=["CREATE TABLE IF NOT EXISTS social_accounts (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, provider TEXT NOT NULL CHECK(provider IN ('telegram','facebook','instagram')), display_name TEXT NOT NULL, target_id TEXT NOT NULL, token_ciphertext TEXT NOT NULL, token_iv TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked','error')), connected_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(shop_id,provider,target_id));","CREATE INDEX IF NOT EXISTS social_accounts_shop ON social_accounts(shop_id,status);","CREATE TABLE IF NOT EXISTS publish_jobs (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, account_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('text','photo')), payload TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','sending','sent','retryable','unknown','failed')), attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0, remote_message_id TEXT, error_code TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(shop_id,idempotency_key));","CREATE INDEX IF NOT EXISTS publish_jobs_shop ON publish_jobs(shop_id,created_at DESC);"];
 const initialized=new WeakMap();
@@ -21,7 +22,7 @@ async function key(env){return crypto.subtle.importKey('raw',decodeKey(env),'AES
 export async function encryptToken(env,token){const iv=crypto.getRandomValues(new Uint8Array(12));const cipher=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},await key(env),new TextEncoder().encode(token)));return {cipher:b64(cipher),iv:b64(iv)};}
 export async function decryptToken(env,cipher,iv){return new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:un64(iv)},await key(env),un64(cipher)));}
 export async function callTelegram(token,method,body){
- const r=await fetch('https://api.telegram.org/bot'+token+'/'+method,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),redirect:'error',signal:AbortSignal.timeout(12000)});
+ const r=await fetch('https://api.telegram.org/bot'+token+'/'+method,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),redirect:'manual',signal:AbortSignal.timeout(12000)});
  const data=await r.json().catch(()=>({}));
  if(!r.ok||data.ok!==true){const e=Error('TELEGRAM_FAILED');e.status=r.status;e.retryAfter=Number(data.parameters?.retry_after)||0;throw e;}
  return data.result;
@@ -34,6 +35,7 @@ export async function handleSocial(req,env,who,json){
  if(!env.DB)return fail(json,503,'db_missing');
  try{decodeKey(env);}catch{return fail(json,503,'social_key_missing');}
  const [,,,section,resource,action]=new URL(req.url).pathname.split('/');
+ if(section==='google')return handleGoogle(req,env,who,json);
  if(section==='providers'&&!resource&&req.method==='GET'){
   const ctx=await resolveShop(env,who,req);if(ctx.error)return json({error:ctx.error,code:ctx.code},ctx.status);
   if(!ctx.can('channels.view'))return fail(json,403,'forbidden');

@@ -10,8 +10,11 @@ export async function ensureSocialSchema(db){
  if(initialized.has(db))return initialized.get(db);
  const pending=(async()=>{
   await db.batch(SOCIAL_SCHEMA.slice(2).map(s=>db.prepare(s)));await ensureChannelStore(db);
+  await db.prepare("CREATE TABLE IF NOT EXISTS channel_connection_generations(shop_id TEXT NOT NULL,provider TEXT NOT NULL,generation INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(shop_id,provider))").run();
   const hasURL=async()=> (await db.prepare('PRAGMA table_info(publish_jobs)').all()).results.some(c=>c.name==='result_url');
   if(!await hasURL())try{await db.prepare('ALTER TABLE publish_jobs ADD COLUMN result_url TEXT').run();}catch(e){if(!await hasURL())throw e;}
+  const hasContainer=async()=> (await db.prepare('PRAGMA table_info(publish_jobs)').all()).results.some(c=>c.name==='instagram_container_id');
+  if(!await hasContainer())try{await db.prepare('ALTER TABLE publish_jobs ADD COLUMN instagram_container_id TEXT').run();}catch(e){if(!await hasContainer())throw e;}
   await db.prepare('CREATE INDEX IF NOT EXISTS publish_jobs_due ON publish_jobs(status,next_attempt_at)').run();
  })();initialized.set(db,pending);try{await pending;}catch(e){initialized.delete(db);throw e;}
 }
@@ -57,11 +60,14 @@ export async function handleSocial(req,env,who,json){
   if(!ctx.can('channels.configure_token')||ctx.shop.status!=='active')return fail(json,403,'forbidden');
   const data=await input(req),token=data?.token,chat=data?.chatId;
   if(typeof token!=='string'||!/^\d{6,15}:[\w-]{25,80}$/.test(token)||typeof chat!=='string'||!/^(-?\d{5,22}|@[\w]{5,32})$/.test(chat))return fail(json,400,'invalid_input');
+  await db.prepare("INSERT OR IGNORE INTO channel_connection_generations(shop_id,provider,generation) VALUES(?,'telegram',0)").bind(shop).run();
+  const attempt=await db.prepare("SELECT generation FROM channel_connection_generations WHERE shop_id=? AND provider='telegram'").bind(shop).first();
   let bot,target;try{bot=await callTelegram(token,'getMe',{});target=await callTelegram(token,'getChat',{chat_id:chat});}catch{return fail(json,422,'telegram_verification_failed');}
   if(!bot?.is_bot||!target?.id)return fail(json,422,'telegram_verification_failed');
   const encrypted=await encryptToken(env,token),t=now(),id='sa_'+crypto.randomUUID(),targetId=String(target.id);
-  await db.prepare("INSERT INTO channels(id,shop_id,provider,name,external_id,token,token_iv,status,connected_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'connected',?,?,?) ON CONFLICT(shop_id,provider,external_id) DO UPDATE SET token=excluded.token,token_iv=excluded.token_iv,status='connected',updated_at=excluded.updated_at")
-   .bind(id,shop,'telegram',String(target.title||target.username||bot.username||'Telegram').slice(0,80),targetId,encrypted.cipher,encrypted.iv,who.owner,t,t).run();
+  const saved=await db.prepare("INSERT INTO channels(id,shop_id,provider,name,external_id,token,token_iv,status,connected_by,created_at,updated_at) SELECT ?,?,?,?,?,?,?,'connected',?,?,? WHERE EXISTS(SELECT 1 FROM channel_connection_generations WHERE shop_id=? AND provider='telegram' AND generation=?) ON CONFLICT(shop_id,provider,external_id) DO UPDATE SET token=excluded.token,token_iv=excluded.token_iv,status='connected',updated_at=excluded.updated_at WHERE EXISTS(SELECT 1 FROM channel_connection_generations WHERE shop_id=? AND provider='telegram' AND generation=?)")
+   .bind(id,shop,'telegram',String(target.title||target.username||bot.username||'Telegram').slice(0,80),targetId,encrypted.cipher,encrypted.iv,who.owner,t,t,shop,attempt.generation,shop,attempt.generation).run();
+  if(saved.meta.changes!==1)return fail(json,409,'connection_revoked');
   await audit(db,{shopId:shop,actor:who.owner,action:'social.connect',target:targetId,detail:{provider:'telegram'}});
   return json({ok:true,targetId},201);
  }
@@ -73,7 +79,12 @@ export async function handleSocial(req,env,who,json){
    const target=new URL(req.url);target.pathname='/channels/zalo';
    return handleChannels(new Request(target,{method:'DELETE',headers:req.headers}),env,who,json);
   }
-  const r=await db.prepare("UPDATE channels SET status='revoked',token='',token_iv='',updated_at=? WHERE id=? AND shop_id=? AND (?='all' OR provider=?)").bind(now(),resource,shop,provider,provider).run();
+  const fenceProvider=account.provider==='telegram'?'telegram':'meta';
+  const results=await db.batch([
+   db.prepare('INSERT INTO channel_connection_generations(shop_id,provider,generation) VALUES(?,?,1) ON CONFLICT(shop_id,provider) DO UPDATE SET generation=generation+1').bind(shop,fenceProvider),
+   db.prepare("UPDATE channels SET status='revoked',token='',token_iv='',updated_at=? WHERE id=? AND shop_id=? AND (?='all' OR provider=?)").bind(now(),resource,shop,provider,provider)
+  ]);
+  const r=results[1];
   if(r.meta.changes!==1)return fail(json,404,'not_found');
   await db.prepare("UPDATE publish_jobs SET status='failed',error_code='account_revoked',updated_at=? WHERE shop_id=? AND account_id=? AND status IN ('pending','retryable')").bind(now(),shop,resource).run();
   await audit(db,{shopId:shop,actor:who.owner,action:'channels.disconnect',target:resource});return json({ok:true});

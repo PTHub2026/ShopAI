@@ -33,3 +33,18 @@ test('runtime migration preserves both credential formats and never resurrects d
   assert.equal(db.sqlite.prepare('SELECT count(*) n FROM channels').get().n,0);
  }finally{db.sqlite.close();}
 });
+
+
+test('Instagram checkpoint migration preserves an existing job and runtime initialization is repeatable',async()=>{
+ const {sqliteDB}=await import('./sqlite-fixture.mjs');
+ const {ensureSocialSchema}=await import('../src/social.js');const db=sqliteDB();
+ const root=new URL('../migrations/',import.meta.url);
+ try{
+  for(const name of readdirSync(root).filter(f=>f.endsWith('.sql')&&f>='0004'&&f<'0014').sort())db.sqlite.exec(readFileSync(new URL(name,root),'utf8'));
+  db.sqlite.exec("INSERT INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at) VALUES('existing','shop','account','existing-key','photo','{}','retryable','actor',1,1)");
+  db.sqlite.exec(readFileSync(new URL('0014_instagram_container.sql',root),'utf8'));
+  await ensureSocialSchema(db);await ensureSocialSchema({prepare:db.prepare,batch:db.batch});
+  const row=db.sqlite.prepare("SELECT status,payload,instagram_container_id FROM publish_jobs WHERE id='existing'").get();
+  assert.equal(row.status,'retryable');assert.equal(row.payload,'{}');assert.equal(row.instagram_container_id,null);
+ }finally{db.sqlite.close();}
+});

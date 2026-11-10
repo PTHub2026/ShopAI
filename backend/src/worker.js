@@ -102,6 +102,8 @@ export default {
       if (origin && origin !== new URL(request.url).origin) return json({ error: 'Chỉ cho phép truy cập API từ cùng origin.' }, 403);
       if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
       const who = await identify(request, env);
+      // Facebook chuyển về callback (điều hướng cấp trang) khi phiên ShopPost đã hết hạn: đưa người dùng về ứng dụng thay vì hiện JSON thô.
+      if (!who && request.method === 'GET' && path === '/api/social/meta/callback') return new Response(null, { status: 302, headers: { Location: '/?meta_error=session_expired#accounts', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } });
       if (!who) return json({ error: LOGIN_REQUIRED }, 401);
       if (!who.owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
       const expectedScope = request.headers.get('X-ShopAI-User-Scope');

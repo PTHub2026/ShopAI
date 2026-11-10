@@ -111,3 +111,12 @@ test('Meta OAuth: lỗi callback trả trang HTML quay về ứng dụng, giữ 
  assert.equal(startJson.status,405);
  assert.match(startJson.headers.get('content-type'),/json/);
 });
+
+test('Meta OAuth: callback khi phiên ShopPost hết hạn chuyển về ứng dụng, không lộ JSON',async()=>{
+ const f=fixture();
+ const r=await worker.fetch(new Request(base+'/api/social/meta/callback?state=x&code=y'),f.env);
+ assert.equal(r.status,302);
+ assert.equal(r.headers.get('Location'),'/?meta_error=session_expired#accounts');
+ const post=await worker.fetch(new Request(base+'/api/social/meta/start',{method:'POST',headers:{Origin:base}}),f.env);
+ assert.equal(post.status,401);
+});

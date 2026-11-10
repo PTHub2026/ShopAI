@@ -65,12 +65,14 @@ export function normalizeImages(images) {
 }
 
 
+// Graph trả id dạng PAGEID_POSTID (bài văn bản) hoặc id số (ảnh); facebook.com/<id> chuyển tới đúng bài.
+export function facebookPostUrl(id){return /^\d{1,30}(_\d{1,30})?$/.test(String(id))?'https://www.facebook.com/'+id:null;}
 const publishers={
  async zalo(env,db,a,j){const p=JSON.parse(j.payload);const r=await publishZaloArticle(env,db,a,{content:p.text,title:p.title,images:p.images,author:p.author});return {id:String(r.id),url:r.url};},
  async telegram(env,db,a,j){const token=await decryptToken(env,a.token,a.token_iv),p=JSON.parse(j.payload);
  const r=j.kind==='text'?await callTelegram(token,'sendMessage',{chat_id:a.external_id,text:p.text}):await callTelegram(token,'sendPhoto',{chat_id:a.external_id,photo:p.photoUrl,caption:p.text});
  if(!Number.isSafeInteger(r?.message_id)||r.message_id<=0)throw Error('TELEGRAM_MISSING_MESSAGE_ID');return {id:String(r.message_id)};},
- async facebook(env,db,a,j){return {id:await publishMeta(env,a,j)};},
+ async facebook(env,db,a,j){const id=await publishMeta(env,a,j);return {id,url:facebookPostUrl(id)};},
  async instagram(env,db,a,j){return {id:await publishMeta(env,a,j)};}
 };
 export async function publishFor(provider,env,db,account,job){

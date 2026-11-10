@@ -405,7 +405,7 @@ test('published history uses the submitted snapshot while keeping edits made dur
 test('real connection inventory counts Facebook and YouTube and never counts configuration or revoked accounts',async()=>{
  const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop'");
  r.w.updateConnectionInventory({accounts:[{id:'fb',name:'ShopTrack',provider:'facebook',targetId:'123',status:'active'},{id:'old',name:'Old',provider:'facebook',targetId:'456',status:'revoked'},{id:'bad',name:'Missing identity',provider:'telegram',status:'active'}]},{channels:[],setup:{zalo:{configured:true}}},{configured:true,accounts:[{id:'yt',name:'My YouTube',targetId:'UCtest',status:'connected'}]},'shop');
- const card=r.w.connectionSummary();assert.match(card,/2 tài khoản đã kết nối thật/);assert.match(card,/Facebook/);assert.match(card,/YouTube/);assert.match(card,/Chưa kết nối/);assert.match(card,/Đã ngắt kết nối/);assert.match(card,/Cần cấp quyền lại/);assert.match(r.w.document.querySelector('#shop_box').textContent,/2 kênh đã kết nối thật/);
+ const card=r.w.connectionSummary();assert.match(card,/2 tài khoản đã kết nối thật/);assert.match(card,/Facebook/);assert.match(card,/YouTube/);r.read("CHANNEL_TAB='available'");const available=r.w.connectionSummary();assert.match(available,/Chưa kết nối/);assert.match(available,/Đã ngắt kết nối/);assert.match(card,/Cần cấp quyền lại/);assert.match(r.w.document.querySelector('#shop_box').textContent,/2 kênh đã kết nối thật/);
  }finally{r.close();}
 });
 test('connection status comes only from matching shop server data and incomplete reads never retain stale success',async()=>{
@@ -422,7 +422,7 @@ test('partial Zalo metadata stays visible as connected but is not publish select
 });
 
 test('account controls expose login logout and add-account without logging out on render',async()=>{
- const r=runtime();try{await settle();for(const id of ['login_btn','logout_btn','add_account_btn'])assert.ok(r.w.document.getElementById(id));assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);
+ const r=runtime();try{await settle();for(const id of ['login_btn','logout_btn','switch_account_btn'])assert.ok(r.w.document.getElementById(id));assert.equal(r.w.document.getElementById('login_btn').hidden,true);assert.equal(r.w.document.querySelector('header #add_account_btn'),null);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);
  r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.configure_token']");r.w.socialRequest=async()=>({facebook:{enabled:true}});r.w.cloudRequest=async()=>({setup:{zalo:{configured:true}}});r.w.googleRequest=async()=>({configured:true});await r.w.openAddAccount();assert.match(r.w.document.querySelector('#mbox').textContent,/Facebook/);assert.match(r.w.document.querySelector('#mbox').textContent,/YouTube/);assert.match(r.w.document.querySelector('#mbox').textContent,/Telegram/);assert.equal(r.requests.filter(x=>x.method==='POST').length,0);
  }finally{r.close();}
 });
@@ -436,4 +436,18 @@ test('add-account respects viewer permissions and refuses a stale shop action',a
 
 test('login recovery preserves draft and uses the normal authentication gate for an expired session',async()=>{
  const r=runtime();try{await settle();edit(r,'Preserve before login');r.w.cloudRequest=async()=>{throw Object.assign(Error('Session expired'),{status:401});};await r.w.openShopPostLogin();assert.equal(r.read('D.content'),'Preserve before login');assert.match(r.w.localStorage.getItem('pdk_draft_v1:'+scope),/Preserve before login/);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);}finally{r.close();}
+});
+
+test('channel tabs separate shop accounts from available platforms and management menus use exact actions',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.configure_token'];SHOP.name='My shop'");r.w.updateConnectionInventory({accounts:[{id:'fb',name:'ShopTrack',provider:'facebook',targetId:'123',status:'active'}]},{channels:[]},{accounts:[{id:'yt',name:'Channel',targetId:'UCtest',status:'connected'}]},'shop');
+ const html=r.w.connectionSummary();assert.match(html,/Kênh đăng bài/);assert.match(html,/Kết nối kênh/);assert.match(html,/Cấp lại quyền/);assert.match(html,/Ngắt kết nối/);assert.doesNotMatch(html,/Đăng nhập \/ Kết nối/);
+ r.read("CHANNEL_TAB='available'");const available=r.w.connectionSummary();assert.match(available,/Instagram/);assert.match(available,/Kết nối thêm/);assert.match(available,/Kết nối Zalo OA/);
+ }finally{r.close();}
+});
+test('account disclosure distinguishes expired login and closes on Escape without logging out',async()=>{
+ const r=runtime();try{await settle();r.w.cloudRequest=async()=>{throw Object.assign(Error('expired'),{status:401});};await r.w.refreshAccountMenu();assert.equal(r.w.document.getElementById('login_btn').hidden,false);assert.equal(r.w.document.getElementById('logout_btn').hidden,true);assert.equal(r.w.document.getElementById('switch_account_btn').hidden,true);const menu=r.w.document.getElementById('account_actions');menu.open=true;menu.dispatchEvent(new r.w.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(menu.open,false);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);}finally{r.close();}
+});
+
+test('channel tab activation keeps keyboard focus and a single tab stop',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.configure_token']");r.w.updateConnectionInventory({accounts:[]},{channels:[]},{accounts:[]},'shop');r.w.document.querySelector('#view').innerHTML=r.w.connectionSummary();r.w.document.getElementById('tab_available').click();assert.equal(r.w.document.activeElement.id,'tab_available');assert.equal(r.w.document.getElementById('tab_available').tabIndex,0);assert.equal(r.w.document.getElementById('tab_connected').tabIndex,-1);r.w.document.getElementById('tab_available').dispatchEvent(new r.w.KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));assert.equal(r.w.document.activeElement.id,'tab_connected');assert.equal(r.w.document.getElementById('tab_connected').tabIndex,0);}finally{r.close();}
 });

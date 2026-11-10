@@ -107,6 +107,7 @@ aside .nav a .badge{background:#eef2ff;color:#4f46e5}
 .app.sb-collapsed aside .nav a.child{padding-left:0}
 .app.sb-collapsed .sbtoggle{transform:rotate(180deg)}
 @media(max-width:900px){.app.sb-collapsed aside{display:none}.app.sb-collapsed main{margin-left:0}}
+@media(max-width:700px){header{height:auto;min-height:64px;flex-wrap:wrap;padding:10px 12px;gap:8px}#clock{display:none}#account_actions{gap:6px;flex-wrap:wrap}#account_actions .btn{font-size:12px;padding:7px 9px}}
 </style></head><body>
 <div class="app">
 <aside><div class="logorow"><div class="logo"><i>S</i><span class="logotext">Shoppost</span></div><button class="sbtoggle" onclick="toggleSidebar()" title="Thu gọn / mở rộng thanh bên" aria-label="Thu gọn thanh bên">«</button></div>
@@ -123,7 +124,56 @@ const GRP_COLOR={'NỘI DUNG':'c-purple','KHO':'c-amber','ĐĂNG BÀI':'c-blue',
 const svgIcon=p=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p||''}</svg>`;
 function toggleSidebar(){const a=document.querySelector('.app');if(!a)return;a.classList.toggle('sb-collapsed');try{LS.setItem('pdk_sb_collapsed',a.classList.contains('sb-collapsed')?'1':'0')}catch(e){}}
 function managedApp(){return !!document.querySelector('meta[name="shopai-ai-endpoint"]')?.content}
-function addLogoutButton(){const pf=document.querySelector('header .pf');if(!pf||document.getElementById('logout_btn'))return;const b=document.createElement('button');b.type='button';b.className='btn sm';b.id='logout_btn';b.title='Đăng xuất khỏi Shoppost';b.textContent='Đăng xuất';b.onclick=async()=>{b.disabled=true;let next='/';try{const r=await fetch('/auth/logout',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:'{}'});const j=r.ok?await r.json():null;if(j&&j.next==='/cdn-cgi/access/logout')next=j.next}catch{}location.href=next};pf.before(b)}
+function addLogoutButton(){
+ const pf=document.querySelector('header .pf');if(!pf||document.getElementById('account_actions'))return;
+ const actions=document.createElement('div');actions.id='account_actions';actions.className='row';actions.setAttribute('aria-label','Tài khoản ShopPost');
+ for(const [id,label,action] of [['login_btn','Đăng nhập',openShopPostLogin],['logout_btn','Đăng xuất',logoutShopPost],['add_account_btn','Thêm tài khoản',openAddAccount]]){
+  const button=document.createElement('button');button.type='button';button.className='btn sm'+(id==='add_account_btn'?' pri':'');button.id=id;button.textContent=label;button.onclick=action;actions.appendChild(button);
+ }
+ pf.before(actions);
+}
+let accountLogoutBusy=false;
+async function logoutShopPost(){
+ if(accountLogoutBusy||!managedApp())return;
+ if(!confirm('Đăng xuất khỏi ShopPost? Bản nháp trên trình duyệt được giữ lại. Các kênh đã kết nối của shop vẫn được giữ.'))return;
+ accountLogoutBusy=true;saveDraft();
+ const buttons=['login_btn','logout_btn','add_account_btn'].map(id=>document.getElementById(id)).filter(Boolean);buttons.forEach(b=>b.disabled=true);
+ try{
+  const r=await fetch('/auth/logout',{method:'POST',credentials:'same-origin',redirect:'error',headers:{'Content-Type':'application/json'},body:'{}'});
+  const data=await r.json().catch(()=>null);if(!r.ok||data?.ok!==true)throw Error(data?.error||'Chưa đăng xuất được. Vui lòng thử lại.');
+  stopJobWatch();location.assign(data.next==='/cdn-cgi/access/logout'?data.next:'/');
+ }catch(e){toast(e.message||'Không thể đăng xuất. Phiên hiện tại được giữ.');}
+ finally{accountLogoutBusy=false;buttons.forEach(b=>b.disabled=false);}
+}
+async function openShopPostLogin(){
+ if(!managedApp())return;
+ const viewAt=viewGeneration,modalAt=modalGeneration;
+ try{
+  const session=await cloudRequest('/session');
+  if(viewAt!==viewGeneration||modalAt!==modalGeneration)return;
+  if(session.userScope!==APP_SCOPE)return toast('Tài khoản đã thay đổi. Hãy tải lại trang.');
+  modal(`<h3>Đăng nhập ShopPost</h3><p>Bạn đang đăng nhập${session.account?.name?' bằng tài khoản <b>'+esc(session.account.name)+'</b>':''}.</p><p class="small muted">Để dùng tài khoản ShopPost khác, hãy đăng xuất rồi đăng nhập lại. Để thêm Facebook, YouTube hoặc Zalo OA cho shop, chọn Thêm tài khoản.</p><div class="row"><button class="btn pri" onclick="logoutShopPost()">Đăng nhập tài khoản khác</button><button class="btn" onclick="openAddAccount()">Thêm tài khoản nền tảng</button><button class="btn" onclick="closeModal()">Đóng</button></div>`);
+ }catch(e){if(viewAt!==viewGeneration||modalAt!==modalGeneration)return;if([401,403].includes(e.status)){saveDraft();location.assign('/');return;}toast(e.message||'Không tải được phiên đăng nhập.');}
+}
+async function openAddAccount(){
+ if(!managedApp()||!SHOP.ready)return toast('Hãy chọn shop trước khi thêm tài khoản.');
+ const shop=SHOP.id,viewAt=viewGeneration,modalAt=modalGeneration;
+ try{
+  const results=await Promise.allSettled([socialRequest('providers'),cloudRequest('/channels'),googleRequest('accounts')]);
+  if(SHOP.id!==shop||viewAt!==viewGeneration||modalAt!==modalGeneration)return;
+  const [meta,zalo,google]=results.map(r=>r.status==='fulfilled'?r.value:null),canConnect=shopCan('channels.configure_token');
+  const enabled={facebook:canConnect&&meta?.facebook?.enabled,instagram:canConnect&&meta?.instagram?.enabled,zalo:canConnect&&zalo?.setup?.zalo?.configured,youtube:canConnect&&google?.configured,telegram:canConnect&&meta?.telegram?.enabled};
+  modal(`<h3>Thêm tài khoản nền tảng</h3><p>Kết nối thêm kênh cho shop <b>${esc(SHOP.name)}</b>. Tài khoản đăng nhập ShopPost hiện tại được giữ.</p>${!canConnect?'<p role="status">Chỉ chủ shop hoặc quản lý có quyền kết nối tài khoản.</p>':''}<div class="grid">${['facebook','instagram','zalo','youtube','telegram'].map(provider=>{const count=CONNECTIONS?.shop===shop?CONNECTIONS.accounts.filter(a=>a.provider===provider&&a.state==='connected').length:0;return `<div class="ch">${pfIcon(provider)}<div style="flex:1"><b>${esc(PF[provider].n)}</b><div class="small muted">${count?count+' tài khoản đã kết nối thật':'Thêm tài khoản mới hoặc cấp lại quyền'}</div></div><button class="btn pri sm" ${enabled[provider]?'':'disabled title="Chưa đủ quyền hoặc cấu hình kết nối"'} onclick="connectAdditionalAccount('${provider}','${escAttr(shop)}')">Đăng nhập / Kết nối</button></div>`;}).join('')}</div><p class="small muted">Telegram dùng Bot Token và Chat ID. Các nền tảng còn lại mở trang cấp quyền chính thức.</p><button class="btn" onclick="closeModal()">Đóng</button>`);
+ }catch(e){toast('Chưa mở được danh sách tài khoản. Vui lòng thử lại.');}
+}
+async function connectAdditionalAccount(provider,expectedShop=SHOP.id){
+ if(SHOP.id!==expectedShop)return toast('Shop đã thay đổi. Hãy mở lại Thêm tài khoản.');
+ if(!shopCan('channels.configure_token'))return toast('Bạn chưa có quyền kết nối tài khoản.');
+ if(provider==='facebook'||provider==='instagram')return socialConnectMeta();
+ if(provider==='zalo')return zaloConnect();
+ if(provider==='youtube')return googleConnect();
+ if(provider==='telegram'){closeModal();if(route==='accounts')$('#tg_token')?.focus();else go('accounts');}
+}
 const APP_SCOPE=(()=>{const v=document.querySelector('meta[name="shopai-user-scope"]')?.content||'';return /^[a-f0-9]{64}$/.test(v)?v:''})();
 function demoAction(){if(window.QA_RUNNING||!managedApp())return true;toast('Chức năng kênh này chưa được kết nối. Chưa thực hiện thao tác trên nền tảng.');return false}
 function localKey(key){return key+(managedApp()?':'+(APP_SCOPE||'unverified'):'')}
@@ -841,7 +891,7 @@ function connectionSummary(){
  if(CONNECTIONS?.shop!==SHOP.id)return '<div class="card" role="status">Đang tải trạng thái kết nối…</div>';
  const {accounts,complete,checkedAt}=CONNECTIONS;
  const platforms=['facebook','instagram','zalo','telegram','youtube'];
- return `<div class="card" id="connection_summary"><div class="row" style="justify-content:space-between"><h3>${liveConnectionCount()} tài khoản đã kết nối thật</h3><button class="btn sm" onclick="channelsLoad()">Làm mới trạng thái</button></div><p class="small muted">${complete?'Cập nhật lúc '+new Date(checkedAt).toLocaleTimeString('vi-VN'):'Chưa xác nhận đủ trạng thái. Bấm Làm mới để kiểm tra lại.'}</p>${platforms.map(provider=>{const rows=accounts.filter(a=>a.provider===provider);return rows.length?rows.map(a=>`<div class="ch">${pfIcon(provider)}<div style="flex:1"><b>${esc(a.name)}</b><div class="small muted">${esc(PF[provider]?.n||provider)} · ${esc(a.targetId||'Chưa xác minh tài khoản')}</div></div>${connectionBadge(a.state)}</div>`).join(''):`<div class="ch">${pfIcon(provider)}<div style="flex:1">${esc(PF[provider]?.n||provider)}</div><span class="chip">${complete?'Chưa kết nối':'Chưa xác nhận'}</span></div>`;}).join('')}</div>`;
+ return `<div class="card" id="connection_summary"><div class="row" style="justify-content:space-between"><h3>${liveConnectionCount()} tài khoản đã kết nối thật</h3><div class="row"><button class="btn pri sm" onclick="openAddAccount()">Thêm tài khoản</button><button class="btn sm" onclick="channelsLoad()">Làm mới trạng thái</button></div></div><p class="small muted">${complete?'Cập nhật lúc '+new Date(checkedAt).toLocaleTimeString('vi-VN'):'Chưa xác nhận đủ trạng thái. Bấm Làm mới để kiểm tra lại.'}</p>${platforms.map(provider=>{const rows=accounts.filter(a=>a.provider===provider);return rows.length?rows.map(a=>`<div class="ch">${pfIcon(provider)}<div style="flex:1"><b>${esc(a.name)}</b><div class="small muted">${esc(PF[provider]?.n||provider)} · ${esc(a.targetId||'Chưa xác minh tài khoản')}</div></div>${connectionBadge(a.state)}</div>`).join(''):`<div class="ch">${pfIcon(provider)}<div style="flex:1">${esc(PF[provider]?.n||provider)}</div><span class="chip">${complete?'Chưa kết nối':'Chưa xác nhận'}</span></div>`;}).join('')}</div>`;
 }
 
 async function channelsLoad(){

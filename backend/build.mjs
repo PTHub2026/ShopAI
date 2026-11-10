@@ -32,4 +32,4 @@ console.log('Đã đóng gói giao diện từ repository cùng backend; không 
 await copyFile(new URL('src/social.js', root), new URL('dist/social.js', root));
 await copyFile(new URL('src/meta.js', root), new URL('dist/meta.js', root));
 
-for(const file of ['channel-store.js','provider-adapters.js','legal.js'])await copyFile(new URL('src/'+file,root),new URL('dist/'+file,root));
+for(const file of ['channel-store.js','provider-adapters.js','legal.js','google.js'])await copyFile(new URL('src/'+file,root),new URL('dist/'+file,root));

@@ -18,6 +18,8 @@ function runtime({hash='',shopResponse,handle,session={}}={}){
   w.fetch=async(url,options={})=>{
    const path=new URL(url,w.location.href).pathname,request={path,...options};requests.push(request);
    if(path==='/api/shops')return shopResponse?shopResponse.promise:Response.json(shops);
+   if(path==='/api/social/google/accounts')return Response.json({configured:false,accounts:[]});
+   if(path==='/api/social/google/uploads')return Response.json({uploads:[]});
    if(path.endsWith('/jobs/events'))return new Promise((resolve,reject)=>options.signal?.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));
    const custom=handle?.(request);if(custom)return custom;
    if(path==='/session')return Response.json({userScope:scope,capabilities:{drafts:true}});

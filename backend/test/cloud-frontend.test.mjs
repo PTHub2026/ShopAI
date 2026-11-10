@@ -21,6 +21,25 @@ function runtime({managed=true,fetchImpl,stored={},api,invite=''}={}) {
 }
 const settle=()=>new Promise(r=>setImmediate(r));
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
+test('YouTube UI distinguishes setup from connection and sends the chosen video as binary',async()=>{
+ const r=runtime();try{
+  await settle();r.read("SHOP.permissions=['channels.configure_token','channels.operate']");
+  const disabled=r.read("googleSection({configured:false,accounts:[]},{uploads:[]})");
+  assert.match(disabled,/disabled/);assert.match(disabled,/chưa|cần hoàn tất/i);
+  const section=r.read(`googleSection({configured:true,accounts:[{id:'yt-test',name:'<script>bad</script>',targetId:'UCtest',status:'connected'}]},{uploads:[]})`);
+  r.w.document.querySelector('#view').innerHTML=section;assert.equal(r.w.document.querySelector('#view script'),null);
+  const file=new r.w.File(['video'],'test.mp4',{type:'video/mp4'});
+  Object.defineProperty(r.w.document.querySelector('#yt_file'),'files',{value:[file]});
+  r.w.document.querySelector('#yt_title').value='My video';r.w.document.querySelector('#yt_kids').value='false';
+  r.w.confirm=()=>true;r.w.crypto.randomUUID=()=> 'test-video-idempotency-key';r.w.socialAccountsLive=()=>{};
+  let received;r.w.fetch=async(url,opts)=>{received={url,opts};return Response.json({videoId:'abcdefghijk'});};
+  await r.w.googleUpload();assert.equal(received.opts.body,file);assert.equal(received.opts.headers['Content-Type'],'video/mp4');assert.equal(received.opts.headers['Idempotency-Key'],'test-video-idempotency-key');assert.match(received.url,/privacy=private/);
+  assert.match(r.w.document.querySelector('#yt_status').textContent,/abcdefghijk/);
+  let counter=0;const keys=[];r.w.crypto.randomUUID=()=> 'retry-video-attempt-'+(++counter);
+  r.w.fetch=async(url,opts)=>{keys.push(opts.headers['Idempotency-Key']);return keys.length===1?Response.json({error:'youtube_upload_failed',status:'failed'},{status:502}):Response.json({videoId:'abcdefghijk'});};
+  await r.w.googleUpload();await r.w.googleUpload();assert.notEqual(keys[0],keys[1],'a confirmed pre-send failure allows a fresh attempt');
+ }finally{r.close();}
+});
 function edit(r,text='Bản nháp cần lưu') {r.w.document.querySelector('#ct').value=text;r.w.document.querySelector('#ct').dispatchEvent(new r.w.Event('input'));}
 
 test('Managed application starts empty and separates local state from demo',async()=>{

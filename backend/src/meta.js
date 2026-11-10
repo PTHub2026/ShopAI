@@ -84,6 +84,43 @@ async function saveAccount(db,env,who,shop,provider,item,token){
  .bind(id,shop,provider,String(item.name||item.username||provider).slice(0,80),String(item.id),secret.cipher,secret.iv,who.owner,t,t).run();
  await audit(db,{shopId:shop,actor:who.owner,action:'social.connect',target:String(item.id),detail:{provider}});
 }
+// Instagram can be linked to a Page after the Meta OAuth consent. Detect it from stored
+// Page tokens so the Chủ shop does not have to reconnect. Tokens never go into URLs:
+// debug_token is called with POST + method=GET, authenticated by the app token header.
+async function tokenScopes(e,token){
+ const r=await graphRequest(e,'debug_token',appId(e)+'|'+appSecret(e),{input_token:token,method:'GET'},'POST');
+ const d=r.data||{};
+ if(!d.is_valid)throw Object.assign(Error('META_TOKEN_INVALID'),{code:190});
+ return new Set(Array.isArray(d.scopes)?d.scopes.map(String):[]);
+}
+export async function syncInstagramFromPages(env,db,{shopId=null,actor=null,manual=false}={}){
+ const out={pages:0,linked:0,connected:0,alreadyConnected:0,missingPermission:0,errors:0};
+ if(!db||!metaConfigured(env))return out;
+ const {results}=await db.prepare("SELECT c.shop_id,c.external_id,c.token,c.token_iv,c.connected_by FROM channels c JOIN shops s ON s.id=c.shop_id WHERE c.provider='facebook' AND c.status='connected' AND c.token IS NOT NULL AND c.token<>'' AND s.status='active' AND (? IS NULL OR c.shop_id=?) ORDER BY c.updated_at DESC LIMIT 50").bind(shopId,shopId).all();
+ for(const page of results||[]){
+  if(!/^\d+$/.test(String(page.external_id||'')))continue;
+  out.pages++;
+  try{
+   const token=await decryptToken(env,page.token,page.token_iv);
+   const info=await graphRequest(env,encodeURIComponent(page.external_id),token,{fields:'instagram_business_account{id,username}'});
+   const ig=info.instagram_business_account;
+   if(!ig||!/^\d+$/.test(String(ig.id||'')))continue;
+   out.linked++;
+   const existing=await db.prepare("SELECT status FROM channels WHERE shop_id=? AND provider='instagram' AND external_id=?").bind(page.shop_id,String(ig.id)).first();
+   if(existing?.status==='connected'){out.alreadyConnected++;continue;}
+   // Background sync never revives a channel the Chủ shop disconnected; only an explicit click does.
+   if(existing&&!manual)continue;
+   const scopes=await tokenScopes(env,token);
+   if(!scopes.has('instagram_basic')||!scopes.has('instagram_content_publish')){out.missingPermission++;continue;}
+   await saveAccount(db,env,{owner:actor||page.connected_by||'system:meta-sync'},page.shop_id,'instagram',{id:ig.id,name:ig.username||'Instagram'},token);
+   out.connected++;
+  }catch(e){
+   out.errors++;
+   console.warn(JSON.stringify({event:'meta_ig_sync_failed',stage:String(e?.message||'unknown').slice(0,40),status:Number(e?.status)||0,code:Number(e?.code)||0}));
+  }
+ }
+ return out;
+}
 const error=(json,code,status=400)=>json({error:code,code},status);
 const CALLBACK_CODES=new Set(['meta_not_configured','db_missing','invalid_oauth_state','invalid_or_expired_state','oauth_state_used','oauth_declined','meta_scope_denied','meta_authorization_failed','forbidden','callback_origin_mismatch','method_not_allowed']);
 function callbackErrorPage(code,status){
@@ -103,7 +140,7 @@ async function handleMetaRequest(req,env,who,json){
  if(!metaConfigured(env))return error(json,'meta_not_configured',503);
  if(!env.DB)return error(json,'db_missing',503);
  const url=new URL(req.url),segments=url.pathname.split('/'),act=segments.at(-1);
- if(!['start','callback'].includes(act))return error(json,'not_found',404);
+ if(!['start','callback','sync'].includes(act))return error(json,'not_found',404);
  const db=env.DB;
  await db.batch(META_SCHEMA.map(s=>db.prepare(s)));
  let scopedRequest=req;
@@ -117,6 +154,11 @@ async function handleMetaRequest(req,env,who,json){
  }
  const ctx=await resolveShop(env,who,scopedRequest);
  if(ctx.error)return json({error:ctx.error,code:ctx.code},ctx.status);
+ if(act==='sync'){
+  if(req.method!=='POST')return error(json,'method_not_allowed',405);
+  if(!ctx.can('channels.configure_token')||ctx.shop.status!=='active')return error(json,'forbidden',403);
+  return json({ok:true,...await syncInstagramFromPages(env,db,{shopId:ctx.shop.id,actor:who.owner,manual:true})});
+ }
  if(act==='start'){
   if(req.method!=='POST')return error(json,'method_not_allowed',405);
   if(!ctx.can('channels.configure_token')||ctx.shop.status!=='active')return error(json,'forbidden',403);

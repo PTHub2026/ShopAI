@@ -6,6 +6,7 @@ import { INVITE_PATH, handleApi, resolveShop } from './shops.js';
 import { channels, zaloCallback, runDueScheduledPosts, publicZaloMedia } from './channels.js';
 import { isPlatformAdmin } from './permissions.js';
 import { legalResponse } from './legal.js';
+import { syncInstagramFromPages } from './meta.js';
 const INVITE_COOKIE = '__Host-shopai_invite';
 const LOGIN_REQUIRED = 'Phiên đăng nhập đã hết hạn hoặc chưa đăng nhập.';
 const TASKS = new Set(['generate', 'improve', 'adapt', 'reply']);
@@ -66,7 +67,9 @@ export default {
     if (!env.DB) return;
     ctx.waitUntil(Promise.all([
       cleanupGoogleData(env).catch(() => console.error(JSON.stringify({event:'google.cleanup',code:'cleanup_failed'}))),
-      runDueScheduledPosts(env).then(result => console.info(JSON.stringify({event:'publish.cron',processed:result.processed}))).catch(() => console.error(JSON.stringify({event:'publish.cron',code:'scheduler_failed'})))
+      runDueScheduledPosts(env).then(result => console.info(JSON.stringify({event:'publish.cron',processed:result.processed}))).catch(() => console.error(JSON.stringify({event:'publish.cron',code:'scheduler_failed'}))),
+      // Mỗi giờ một lần: tự phát hiện Instagram vừa được liên kết với Trang Facebook đã kết nối.
+      (new Date(event?.scheduledTime || Date.now()).getUTCMinutes() < 5 ? syncInstagramFromPages(env, env.DB).then(result => console.info(JSON.stringify({event:'meta.ig_sync',pages:result.pages,connected:result.connected}))) : Promise.resolve()).catch(() => console.error(JSON.stringify({event:'meta.ig_sync',code:'sync_failed'})))
     ]));
   },
   async fetch(request, env) {

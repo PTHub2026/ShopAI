@@ -37,10 +37,10 @@ Production đã được kiểm chứng trực tiếp ngày 08/11/2026: AI tạo
 ## Chưa xác minh hoặc chưa triển khai
 
 1. Hồ sơ, cài đặt, kho ảnh/video, hội thoại và tệp gốc vẫn ở thiết bị; chỉ bản nháp văn bản được lưu rõ ràng lên máy chủ.
-2. Mã OAuth Facebook và danh sách Trang đã được bổ sung trong đợt tiếp theo, **tắt mặc định**, chưa có grant/token cloud và chưa chứng minh kết nối Meta thật. Hướng dẫn: `FACEBOOK_SETUP.md`.
+2. Lịch sử adapter `facebook.js`: OAuth **tắt mặc định**. Chưa có grant/token cloud tại mốc này. Kết nối Meta thật chưa được kiểm chứng. `FACEBOOK_SETUP.md` lưu hướng dẫn cũ. Luồng hiện hành dùng `social.js`/`meta.js`. Xem cấu hình và nghiệm thu tại [META_STAGING.md](META_STAGING.md).
 3. App Meta ShopAI `1690219679401963` có Pages và Messenger, chế độ phát triển. Quan sát console: `pages_show_list` và `pages_manage_metadata` sẵn sàng thử nghiệm; `pages_manage_posts` và `pages_read_engagement` chưa thêm. Chưa xác minh quyền Messenger đầy đủ.
 4. Webhook, đăng bài, lịch đăng server, nhập hộp thư và gửi tin thật chưa triển khai. Không mở các thao tác mô phỏng trên server. Các adapter còn lại chưa có.
-5. Migration `0002_facebook.sql` cần áp dụng riêng trước khi bật OAuth. App Secret, khóa mã hóa, origin callback và config Login for Business chưa được thiết lập. Không đưa các bí mật này vào GitHub.
+5. Điều kiện lịch sử của adapter `facebook.js`: áp dụng migration `0002_facebook.sql` trước khi bật OAuth. App Secret chưa được thiết lập tại mốc này. Khóa mã hóa, origin callback và config Login for Business cũng chưa được thiết lập. Luồng hiện hành dùng checklist tại [META_STAGING.md](META_STAGING.md). Tài liệu đó quy định migration, bảng dữ liệu, khóa `SOCIAL_TOKEN_KEY` và callback `META_REDIRECT_URI`. Không đưa bí mật vào GitHub.
 
 ## Cổng phát hành
 

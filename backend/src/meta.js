@@ -68,7 +68,21 @@ async function saveAccount(db,env,who,shop,provider,item,token){
  await audit(db,{shopId:shop,actor:who.owner,action:'social.connect',target:String(item.id),detail:{provider}});
 }
 const error=(json,code,status=400)=>json({error:code,code},status);
+const CALLBACK_CODES=new Set(['meta_not_configured','db_missing','invalid_oauth_state','invalid_or_expired_state','oauth_state_used','oauth_declined','meta_scope_denied','meta_authorization_failed','forbidden','callback_origin_mismatch','method_not_allowed']);
+function callbackErrorPage(code,status){
+ const safe=CALLBACK_CODES.has(code)?code:'meta_authorization_failed';
+ const back='/?meta_error='+encodeURIComponent(safe)+'#accounts';
+ const html='<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url='+back+'"><title>Chưa kết nối được Facebook / Instagram</title></head><body><p>Chưa kết nối được Facebook / Instagram. Đang quay lại Shoppost…</p><p><a href="'+back+'">Quay lại Shoppost</a></p></body></html>';
+ return new Response(html,{status,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}});
+}
 export async function handleMeta(req,env,who,json){
+ const res=await handleMetaRequest(req,env,who,json);
+ const isCallback=new URL(req.url).pathname.endsWith('/callback')&&req.method==='GET';
+ if(!isCallback||res.status<400)return res;
+ const body=await res.clone().json().catch(()=>({}));
+ return callbackErrorPage(String(body.code||body.error||''),res.status);
+}
+async function handleMetaRequest(req,env,who,json){
  if(!metaConfigured(env))return error(json,'meta_not_configured',503);
  if(!env.DB)return error(json,'db_missing',503);
  const url=new URL(req.url),segments=url.pathname.split('/'),act=segments.at(-1);
@@ -120,13 +134,13 @@ export async function handleMeta(req,env,who,json){
   tokenUrl.search=new URLSearchParams({client_id:appId(env),client_secret:appSecret(env),redirect_uri:env.META_REDIRECT_URI,code}).toString();
   const tokenResp=await fetch(tokenUrl,{redirect:'manual',signal:AbortSignal.timeout(12000)});
   const tokenData=await tokenResp.json().catch(()=>({}));
-  if(!tokenResp.ok||typeof tokenData.access_token!=='string')throw Error('META_TOKEN_FAILED');
+  if(!tokenResp.ok||typeof tokenData.access_token!=='string'){const err=Error('META_TOKEN_FAILED');err.status=tokenResp.status;err.code=tokenData.error?.code;err.subcode=tokenData.error?.error_subcode;throw err;}
   // Exchange short-lived token before deriving page tokens.
   const longUrl=new URL(graph(env,'oauth/access_token'));
   longUrl.search=new URLSearchParams({grant_type:'fb_exchange_token',client_id:appId(env),client_secret:appSecret(env),fb_exchange_token:tokenData.access_token}).toString();
   const longResp=await fetch(longUrl,{redirect:'manual',signal:AbortSignal.timeout(12000)});
   const long=await longResp.json().catch(()=>({}));
-  if(!longResp.ok||typeof long.access_token!=='string')throw Error('META_LONG_TOKEN_FAILED');
+  if(!longResp.ok||typeof long.access_token!=='string'){const err=Error('META_LONG_TOKEN_FAILED');err.status=longResp.status;err.code=long.error?.code;err.subcode=long.error?.error_subcode;throw err;}
   const permissions=await graphRequest(env,'me/permissions',long.access_token,{limit:'100'});
   const granted=new Set((Array.isArray(permissions.data)?permissions.data:[]).filter(p=>p.status==='granted').map(p=>p.permission));
   if(!granted.has('pages_show_list')||!granted.has('pages_manage_posts'))throw Error('META_PAGE_SCOPE_DENIED');
@@ -144,7 +158,12 @@ export async function handleMeta(req,env,who,json){
    items.push(...pages.data);
   }
   pages={data:items,canUseInstagram};
- }catch{return error(json,'meta_authorization_failed',502);}
+ }catch(e){
+  // Safe diagnostics only: internal stage + Graph error numbers. Never codes, tokens or Graph bodies.
+  console.warn(JSON.stringify({event:'meta_oauth_failed',stage:String(e?.message||'unknown').slice(0,40),status:Number(e?.status)||0,code:Number(e?.code)||0,subcode:Number(e?.subcode)||0}));
+  if(e?.message==='META_PAGE_SCOPE_DENIED')return error(json,'meta_scope_denied',403);
+  return error(json,'meta_authorization_failed',502);
+ }
  const items=pages.data;
  let count=0;
  for(const page of items){

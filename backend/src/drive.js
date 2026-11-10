@@ -34,7 +34,15 @@ async function accessToken(env,row){
  if(typeof fresh.access_token!=='string'||!(fresh.expires_in>0))throw problem('drive_refresh_failed');
  const encrypted=await encryptToken(env,JSON.stringify({...token,accessToken:fresh.access_token,expiresAt:now()+Math.min(Number(fresh.expires_in),86400)}));
  const saved=await env.DB.prepare("UPDATE drive_connections SET credential=?,credential_iv=?,updated_at=? WHERE shop_id=? AND credential=? AND status='connected'").bind(encrypted.cipher,encrypted.iv,now(),row.shop_id,row.credential).run();
- if(saved.meta.changes!==1)throw problem('drive_connection_changed',409);
+ if(saved.meta.changes!==1){
+  // Another staff request may have refreshed this exact grant. A reconnect gets a new ID.
+  const current=await env.DB.prepare("SELECT * FROM drive_connections WHERE shop_id=? AND status='connected'").bind(row.shop_id).first();
+  if(current&&current.external_id===row.external_id){
+   const cached=JSON.parse(await decryptToken(env,current.credential,current.credential_iv));
+   if(token.connectionId&&cached.connectionId===token.connectionId&&cached.expiresAt>now()+90){row.credential=current.credential;row.credential_iv=current.credential_iv;return cached.accessToken;}
+  }
+  throw problem('drive_connection_changed',409);
+ }
  row.credential=encrypted.cipher;row.credential_iv=encrypted.iv;
  return fresh.access_token;
 }
@@ -90,7 +98,7 @@ export async function handleDrive(req,env,who,json){
    const about=await providerJSON('https://www.googleapis.com/drive/v3/about?fields=user(permissionId,displayName)',{headers:authHeaders(token.access_token)});
    if(typeof about.user?.permissionId!=='string'||!about.user.permissionId)throw problem('drive_identity_missing');
    ctx=await resolveShop(env,who,scoped);if(ctx.error||!ctx.can('channels.configure_token')||ctx.shop.status!=='active')throw problem('forbidden',403);
-   const encrypted=await encryptToken(env,JSON.stringify({accessToken:token.access_token,refreshToken:token.refresh_token,expiresAt:now()+Math.min(Number(token.expires_in),86400)}));
+   const encrypted=await encryptToken(env,JSON.stringify({connectionId:random(),accessToken:token.access_token,refreshToken:token.refresh_token,expiresAt:now()+Math.min(Number(token.expires_in),86400)}));
    const results=await db.batch([
     db.prepare(`INSERT INTO drive_connections(shop_id,external_id,name,credential,credential_iv,status,updated_at)
      SELECT ?,?,?,?,?,'connected',? WHERE EXISTS(SELECT 1 FROM drive_oauth_states WHERE state_hash=? AND shop_id=? AND actor=? AND status='exchanging' AND expires_at>?)

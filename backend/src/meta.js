@@ -4,6 +4,7 @@ import {resolveShop,audit} from './shops.js';
 import {encryptToken,decryptToken} from './social.js';
 export const META_SCHEMA = [
  "CREATE TABLE IF NOT EXISTS meta_oauth_states (state_hash TEXT PRIMARY KEY, shop_id TEXT NOT NULL, actor TEXT NOT NULL, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL)",
+ "CREATE TABLE IF NOT EXISTS meta_oauth_state_fences (state_hash TEXT PRIMARY KEY, shop_id TEXT NOT NULL, generation INTEGER NOT NULL)",
  "CREATE INDEX IF NOT EXISTS meta_oauth_expires ON meta_oauth_states(expires_at)"
 ];
 const stamp=()=>Math.floor(Date.now()/1000);
@@ -28,7 +29,13 @@ async function graphRequest(e,path,token,fields={},method='GET'){
  if(method==='GET'){uri.search=form(fields).toString();}
  else {init.headers['Content-Type']='application/x-www-form-urlencoded';init.body=form(fields).toString();}
  const r=await fetch(uri,init);const data=await r.json().catch(()=>({}));
- if(!r.ok||data.error){const err=Error('META_API_FAILED');err.status=r.status;err.code=data.error?.code;err.subcode=data.error?.error_subcode;throw err;}
+ if(!r.ok||data.error){
+  const err=Error('META_API_FAILED');err.status=r.status;err.code=data.error?.code;err.subcode=data.error?.error_subcode;
+  const retryHeader=r.headers.get('Retry-After');
+  const retryAfter=retryHeader===null?NaN:/^\d+$/.test(retryHeader)?Number(retryHeader):Math.ceil((Date.parse(retryHeader)-Date.now())/1000);
+  if(r.status===429&&Number.isFinite(retryAfter)&&retryAfter>0)err.retryAfter=retryAfter;
+  throw err;
+ }
  return data;
 }
 export async function publishMeta(e,account,job){
@@ -45,27 +52,38 @@ export async function publishMeta(e,account,job){
  if(account.provider==='instagram'){
   if(job.kind!=='photo')throw Error('IG_REQUIRES_PHOTO');
   // Container creation is not publishing; once the publish call starts, network uncertainty is not retried.
-  const container=await graphRequest(e,encodeURIComponent(account.external_id)+'/media',token,{image_url:p.photoUrl,caption:p.text},'POST');
-  if(!container.id)throw Error('META_MISSING_CONTAINER');
+  if(!e.DB||!job.id||!job.shop_id)throw Error('IG_JOB_STORAGE_REQUIRED');
+  let containerId=job.instagram_container_id;
+  if(!containerId){
+   const container=await graphRequest(e,encodeURIComponent(account.external_id)+'/media',token,{image_url:p.photoUrl,caption:p.text},'POST');
+   if(!container.id)throw Error('META_MISSING_CONTAINER');
+   containerId=String(container.id);
+   const saved=await e.DB.prepare("UPDATE publish_jobs SET instagram_container_id=? WHERE id=? AND shop_id=? AND account_id=? AND status='sending' AND instagram_container_id IS NULL").bind(containerId,job.id,job.shop_id,account.id).run();
+   if(saved.meta.changes!==1)throw Error('IG_CONTAINER_NOT_SAVED');
+  }
   // Instagram media creation can be asynchronous. Never publish an unready container.
-  const status=await graphRequest(e,encodeURIComponent(String(container.id)),token,{fields:'status_code'});
+  const status=await graphRequest(e,encodeURIComponent(containerId),token,{fields:'status_code'});
   if(status.status_code!=='FINISHED'){
    if(status.status_code==='IN_PROGRESS'){
     const wait=Error('IG_MEDIA_PROCESSING');wait.status=429;wait.retryAfter=30;throw wait;
    }
    throw Error('IG_MEDIA_UNAVAILABLE');
   }
-  const publish=await graphRequest(e,encodeURIComponent(account.external_id)+'/media_publish',token,{creation_id:String(container.id)},'POST');
+  let publish;
+  try{publish=await graphRequest(e,encodeURIComponent(account.external_id)+'/media_publish',token,{creation_id:containerId},'POST');}
+  catch(error){error.deliveryUncertain=true;throw error;}
   if(!publish.id)throw Error('META_MISSING_ID');return String(publish.id);
  }
  throw Error('UNSUPPORTED_PROVIDER');
 }
 export function metaDenied(e){return e?.status===401||e?.code===190||e?.code===10||e?.code===200;}
-async function saveAccount(db,env,who,shop,provider,item,token){
+async function saveAccount(db,env,who,shop,provider,item,token,generation){
  const t=stamp(),secret=await encryptToken(env,token),id='sa_'+crypto.randomUUID();
- await db.prepare("INSERT INTO channels(id,shop_id,provider,name,external_id,token,token_iv,status,connected_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'connected',?,?,?) ON CONFLICT(shop_id,provider,external_id) DO UPDATE SET name=excluded.name,token=excluded.token,token_iv=excluded.token_iv,status='connected',updated_at=excluded.updated_at")
- .bind(id,shop,provider,String(item.name||item.username||provider).slice(0,80),String(item.id),secret.cipher,secret.iv,who.owner,t,t).run();
+ const saved=await db.prepare("INSERT INTO channels(id,shop_id,provider,name,external_id,token,token_iv,status,connected_by,created_at,updated_at) SELECT ?,?,?,?,?,?,?,'connected',?,?,? WHERE EXISTS (SELECT 1 FROM channel_connection_generations WHERE shop_id=? AND provider='meta' AND generation=?) ON CONFLICT(shop_id,provider,external_id) DO UPDATE SET name=excluded.name,token=excluded.token,token_iv=excluded.token_iv,status='connected',updated_at=excluded.updated_at WHERE EXISTS (SELECT 1 FROM channel_connection_generations WHERE shop_id=? AND provider='meta' AND generation=?)")
+ .bind(id,shop,provider,String(item.name||item.username||provider).slice(0,80),String(item.id),secret.cipher,secret.iv,who.owner,t,t,shop,generation,shop,generation).run();
+ if(saved.meta.changes!==1)return false;
  await audit(db,{shopId:shop,actor:who.owner,action:'social.connect',target:String(item.id),detail:{provider}});
+ return true;
 }
 const error=(json,code,status=400)=>json({error:code,code},status);
 export async function handleMeta(req,env,who,json){
@@ -90,7 +108,13 @@ export async function handleMeta(req,env,who,json){
   if(req.method!=='POST')return error(json,'method_not_allowed',405);
   if(!ctx.can('channels.configure_token')||ctx.shop.status!=='active')return error(json,'forbidden',403);
   const state=random(),t=stamp();
-  await db.prepare('INSERT INTO meta_oauth_states(state_hash,shop_id,actor,expires_at,created_at) VALUES(?,?,?,?,?)').bind(await sha(state),ctx.shop.id,who.owner,t+600,t).run();
+  await db.prepare("INSERT OR IGNORE INTO channel_connection_generations(shop_id,provider,generation) VALUES(?,'meta',0)").bind(ctx.shop.id).run();
+  const current=await db.prepare("SELECT generation FROM channel_connection_generations WHERE shop_id=? AND provider='meta'").bind(ctx.shop.id).first();
+  const stateHash=await sha(state);
+  await db.batch([
+   db.prepare('INSERT INTO meta_oauth_states(state_hash,shop_id,actor,expires_at,created_at) VALUES(?,?,?,?,?)').bind(stateHash,ctx.shop.id,who.owner,t+600,t),
+   db.prepare('INSERT INTO meta_oauth_state_fences(state_hash,shop_id,generation) VALUES(?,?,?)').bind(stateHash,ctx.shop.id,current.generation)
+  ]);
   const auth=new URL('https://www.facebook.com/'+version(env)+'/dialog/oauth');
   // Business-type Meta apps use Facebook Login for Business: permissions come from a
   // Dashboard configuration (config_id) instead of the scope parameter.
@@ -110,9 +134,14 @@ export async function handleMeta(req,env,who,json){
  const hash=await sha(state);
  const row=await db.prepare('SELECT shop_id,actor,expires_at FROM meta_oauth_states WHERE state_hash=?').bind(hash).first();
  if(!row||row.actor!==who.owner||row.shop_id!==ctx.shop.id||row.expires_at<=stamp())return error(json,'invalid_or_expired_state',403);
+ const fence=await db.prepare('SELECT shop_id,generation FROM meta_oauth_state_fences WHERE state_hash=?').bind(hash).first();
+ if(!fence||fence.shop_id!==ctx.shop.id)return error(json,'invalid_or_expired_state',403);
  // Atomic consume before any outbound token exchange: callback replay is denied.
- const consumed=await db.prepare('DELETE FROM meta_oauth_states WHERE state_hash=? AND shop_id=? AND actor=? AND expires_at>?').bind(hash,ctx.shop.id,who.owner,stamp()).run();
- if(consumed.meta.changes!==1)return error(json,'oauth_state_used',403);
+ const consumed=await db.batch([
+  db.prepare('DELETE FROM meta_oauth_states WHERE state_hash=? AND shop_id=? AND actor=? AND expires_at>?').bind(hash,ctx.shop.id,who.owner,stamp()),
+  db.prepare('DELETE FROM meta_oauth_state_fences WHERE state_hash=?').bind(hash)
+ ]);
+ if(consumed[0].meta.changes!==1)return error(json,'oauth_state_used',403);
  if(!code||code.length>2048)return error(json,'oauth_declined',400);
  let pages;
  try {
@@ -149,9 +178,9 @@ export async function handleMeta(req,env,who,json){
  let count=0;
  for(const page of items){
   if(!/^\d+$/.test(String(page.id||''))||typeof page.access_token!=='string')continue;
-  await saveAccount(db,env,who,ctx.shop.id,'facebook',page,page.access_token);count++;
+  if(!await saveAccount(db,env,who,ctx.shop.id,'facebook',page,page.access_token,fence.generation))return error(json,'meta_connection_revoked',409);count++;
   const ig=page.instagram_business_account;
-  if(pages.canUseInstagram&&ig&&/^\d+$/.test(String(ig.id||''))){await saveAccount(db,env,who,ctx.shop.id,'instagram',{id:ig.id,name:ig.username||'Instagram'},page.access_token);count++;}
+  if(pages.canUseInstagram&&ig&&/^\d+$/.test(String(ig.id||''))){if(!await saveAccount(db,env,who,ctx.shop.id,'instagram',{id:ig.id,name:ig.username||'Instagram'},page.access_token,fence.generation))return error(json,'meta_connection_revoked',409);count++;}
  }
  await audit(db,{shopId:ctx.shop.id,actor:who.owner,action:'social.meta_oauth_complete',detail:{accountCount:count}});
  const redirect=new URL('/',url.origin);redirect.searchParams.set('meta_connected',String(count));redirect.hash='accounts';

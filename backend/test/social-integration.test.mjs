@@ -13,15 +13,15 @@ function fixture(){
  for(const file of ['0001_drafts.sql','0002_auth.sql'])sqlite.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'));
  const prepare=(sql,p=[])=>({bind:(...args)=>prepare(sql,args),async first(){return sqlite.prepare(sql).get(...p)||null;},async all(){return {results:sqlite.prepare(sql).all(...p)};},async run(){return {meta:{changes:Number(sqlite.prepare(sql).run(...p).changes)}};},exec(){return {meta:{changes:Number(sqlite.prepare(sql).run(...p).changes)}};}});
  const db={sqlite,prepare:sql=>prepare(sql),async batch(stmts){sqlite.exec('BEGIN');try{const out=stmts.map(s=>s.exec());sqlite.exec('COMMIT');return out;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
- const env={DB:db,ACCESS_TEAM_DOMAIN:'test-team.cloudflareaccess.com',ACCESS_AUD:'test',AI:{},AI_RATE_LIMITER:{},SOCIAL_TOKEN_KEY:Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64')};
+ const env={DB:db,ACCESS_TEAM_DOMAIN:'test-team.cloudflareaccess.com',ACCESS_AUD:'test',AI:{},AI_RATE_LIMITER:{limit:async()=>({success:true})},SOCIAL_TOKEN_KEY:Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64')};
  function login(owner){
   const token=Buffer.from(owner+':'+crypto.randomUUID()).toString('base64url').slice(0,43).padEnd(43,'A');
   db.sqlite.prepare('INSERT OR IGNORE INTO auth_identities(owner,provider,created_at,last_login_at) VALUES(?,?,?,?)').run(owner,'email',now(),now());
   db.sqlite.prepare('INSERT INTO auth_sessions(token_hash,owner,provider,created_at,expires_at) VALUES(?,?,?,?,?)').run(hash(token),owner,'email',now(),now()+3600);
   return SESSION_COOKIE+'='+token;
  }
- async function request(cookie,path,{method='GET',body,shop,idem}={}){
-  const r=await worker.fetch(new Request(base+path,{method,headers:{Cookie:cookie,Origin:base,...(body?{'Content-Type':'application/json'}:{}),...(shop?{'X-ShopPost-Shop':shop}:{}),...(idem?{'Idempotency-Key':idem}:{})},...(body?{body:JSON.stringify(body)}:{})}),env);
+ async function request(cookie,path,{method='GET',body,shop,idem,userScope}={}){
+  const r=await worker.fetch(new Request(base+path,{method,headers:{Cookie:cookie,Origin:base,...(body?{'Content-Type':'application/json'}:{}),...(shop?{'X-ShopPost-Shop':shop}:{}),...(idem?{'Idempotency-Key':idem}:{}),...(userScope?{'X-ShopAI-User-Scope':userScope}:{})},...(body?{body:JSON.stringify(body)}:{})}),env);
   return {status:r.status,data:await r.json()};
  }
  return {db,env,login,request};
@@ -153,4 +153,120 @@ test('publish-now operates the existing scheduled job and cannot duplicate it',a
   assert.equal((await f.request(owner,path,{method:'POST'})).data.job.status,'sent');
   assert.equal((await f.request(owner,path,{method:'POST'})).data.job.status,'sent');assert.equal(sent,1);
  });
+});
+
+test('Retry audit records the current manager and preserves the job creator',async()=>{
+ const f=fixture(),owner=f.login('email:creator@example.com'),manager=f.login('email:manager@example.com');
+ try{await fakeTelegram(()=>Response.json({ok:true,result:{message_id:71}}),async()=>{
+  await connect(f.request,owner);
+  const shop=(await f.request(owner,'/session')).data.shop.id;
+  f.db.sqlite.prepare('INSERT INTO shop_members(shop_id,user_id,role,can_publish,created_at) VALUES(?,?,?,?,?)').run(shop,'email:manager@example.com','manager',1,now());
+  const account=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
+  const result=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'audit-current-actor-123',body:{accountId:account.id,kind:'text',text:'Audit'}});
+  const id=result.data.job.id;
+  f.db.sqlite.prepare("UPDATE publish_jobs SET status='retryable',next_attempt_at=0 WHERE id=?").run(id);
+  assert.equal((await f.request(manager,'/api/social/jobs/'+id+'/retry',{method:'POST',shop})).status,200);
+  assert.deepEqual(f.db.sqlite.prepare("SELECT actor FROM audit_log WHERE action='social.publish' AND target=? ORDER BY id").all(id).map(r=>r.actor),['email:creator@example.com','email:manager@example.com']);
+  assert.equal(f.db.sqlite.prepare('SELECT created_by FROM publish_jobs WHERE id=?').get(id).created_by,'email:creator@example.com');
+ });}finally{f.db.sqlite.close();}
+});
+test('Social writes share the API limiter and stop before provider calls or state changes',async()=>{
+ const f=fixture(),owner=f.login('email:limited@example.com');
+ try{
+  await f.request(owner,'/session');
+  f.env.AI_RATE_LIMITER={limit:async()=>({success:false})};
+  for(const path of ['/api/social/accounts','/api/social/jobs','/api/social/meta/start']){
+   const r=await f.request(owner,path,{method:'POST',body:{token:botToken,chatId:'@testchannel'}});
+   assert.equal(r.status,429,path);
+  }
+  assert.equal((await f.request(owner,'/api/social/accounts')).status,200);
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) AS n FROM channels').get().n,0);
+  f.env.AI_RATE_LIMITER={limit:async()=>{throw Error('unavailable');}};
+  assert.equal((await f.request(owner,'/api/social/accounts',{method:'DELETE'})).status,503);
+ }finally{f.db.sqlite.close();}
+});
+
+
+test('a stale social tab cannot publish under another member cookie of the same shop',async()=>{
+ const f=fixture(),owner=f.login('email:scope-owner@example.com'),manager=f.login('email:scope-manager@example.com');let sends=0;
+ try{await fakeTelegram(()=>{sends++;return Response.json({ok:true,result:{message_id:1}});},async()=>{
+  await connect(f.request,owner);const shop=(await f.request(owner,'/session')).data.shop.id;
+  f.db.sqlite.prepare('INSERT INTO shop_members(shop_id,user_id,role,can_publish,created_at) VALUES(?,?,?,?,?)').run(shop,'email:scope-manager@example.com','manager',1,now());
+  const account=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
+  const r=await f.request(manager,'/channels/telegram/publish',{method:'POST',shop,userScope:hash('email:scope-owner@example.com'),idem:'stale-social-tab-123',body:{accountId:account.id,kind:'text',text:'Stale tab'}});
+  assert.equal(r.status,403);assert.equal(r.data.code,'ACCOUNT_CHANGED');assert.equal(sends,0);
+ });}finally{f.db.sqlite.close();}
+});
+test('Telegram verification cannot restore credentials after disconnect',async()=>{
+ const f=fixture(),owner=f.login('email:telegram-race@example.com'),original=globalThis.fetch;
+ let pause=false,enteredResolve,releaseResolve;
+ const entered=new Promise(r=>{enteredResolve=r;}),release=new Promise(r=>{releaseResolve=r;});
+ globalThis.fetch=async url=>{
+  if(String(url).endsWith('/getMe')){if(pause){enteredResolve();await release;}return Response.json({ok:true,result:{is_bot:true,username:'test_bot'}});}
+  return Response.json({ok:true,result:{id:-1001000123456,title:'Test channel'}});
+ };
+ try{
+  assert.equal((await connect(f.request,owner)).status,201);
+  const account=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
+  pause=true;const pending=connect(f.request,owner);await entered;
+  assert.equal((await f.request(owner,'/api/social/accounts/'+account.id,{method:'DELETE'})).status,200);
+  releaseResolve();assert.equal((await pending).status,409);
+  const row=f.db.sqlite.prepare('SELECT status,token,token_iv FROM channels WHERE id=?').get(account.id);
+  assert.equal(row.status,'revoked');assert.equal(row.token,'');assert.equal(row.token_iv,'');
+  pause=false;assert.equal((await connect(f.request,owner)).status,201);
+ }finally{releaseResolve();globalThis.fetch=original;f.db.sqlite.close();}
+});
+test('Instagram processing retry reuses its persisted container after a new request',async()=>{
+ const {encryptToken}=await import('../src/social.js');
+ const f=fixture(),owner=f.login('email:instagram@example.com');
+ const previous=globalThis.fetch;const calls=[];let polls=0;
+ try{
+  const shop=(await f.request(owner,'/session')).data.shop.id;
+  await f.request(owner,'/api/social/accounts');
+  const token=await encryptToken(f.env,'synthetic-ig-token');
+  f.db.sqlite.prepare("INSERT INTO channels(id,shop_id,provider,external_id,name,token,token_iv,status) VALUES(?,?,'instagram','987654','IG',?,?,'connected')").run('ig-account',shop,token.cipher,token.iv);
+  globalThis.fetch=async(url,options)=>{
+   const path=new URL(url).pathname.split('/').at(-1);calls.push(path);
+   if(path==='media')return Response.json({id:'persisted-container'});
+   if(path==='persisted-container')return Response.json({status_code:++polls===1?'IN_PROGRESS':'FINISHED'});
+   if(path==='media_publish'){
+    assert.equal(new URLSearchParams(options.body).get('creation_id'),'persisted-container');
+    return Response.json({id:'published-media'});
+   }
+   throw Error('Unexpected endpoint');
+  };
+  const first=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'instagram-persist-123',body:{accountId:'ig-account',kind:'photo',text:'Caption',photoUrl:'https://example.com/image.jpg'}});
+  assert.equal(first.status,429);const id=first.data.job.id;
+  f.db.sqlite.prepare('UPDATE publish_jobs SET next_attempt_at=0 WHERE id=?').run(id);
+  f.env.DB={prepare:f.db.prepare,batch:f.db.batch};
+  const retries=await Promise.all([f.request(owner,'/api/social/jobs/'+id+'/retry',{method:'POST'}),f.request(owner,'/api/social/jobs/'+id+'/retry',{method:'POST'})]);
+  assert.deepEqual(retries.map(r=>r.status).sort(),[200,409]);
+  assert.equal(retries.find(r=>r.status===200).data.job.remoteMessageId,'published-media');
+  assert.deepEqual(calls,['media','persisted-container','persisted-container','media_publish']);
+  assert.equal(f.db.sqlite.prepare('SELECT instagram_container_id FROM publish_jobs WHERE id=?').get(id).instagram_container_id,'persisted-container');
+ }finally{globalThis.fetch=previous;f.db.sqlite.close();}
+});
+
+test('Instagram uncertain publish keeps its container and refuses a second publish',async()=>{
+ const {encryptToken}=await import('../src/social.js');
+ const f=fixture(),owner=f.login('email:ig-unknown@example.com');
+ const previous=globalThis.fetch;const calls=[];
+ try{
+  const shop=(await f.request(owner,'/session')).data.shop.id;
+  await f.request(owner,'/api/social/accounts');
+  const token=await encryptToken(f.env,'synthetic-ig-token');
+  f.db.sqlite.prepare("INSERT INTO channels(id,shop_id,provider,external_id,name,token,token_iv,status) VALUES(?,?,'instagram','987654','IG',?,?,'connected')").run('ig-account',shop,token.cipher,token.iv);
+  globalThis.fetch=async(url)=>{
+   const path=new URL(url).pathname.split('/').at(-1);calls.push(path);
+   if(path==='media')return Response.json({id:'uncertain-container'});
+   if(path==='uncertain-container')return Response.json({status_code:'FINISHED'});
+   throw Error('network response lost after publish');
+  };
+  const first=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'instagram-uncertain-123',body:{accountId:'ig-account',kind:'photo',text:'Caption',photoUrl:'https://example.com/image.jpg'}});
+  assert.equal(first.status,502);assert.equal(first.data.job.status,'unknown');
+  const id=first.data.job.id;
+  assert.equal(f.db.sqlite.prepare('SELECT instagram_container_id FROM publish_jobs WHERE id=?').get(id).instagram_container_id,'uncertain-container');
+  assert.equal((await f.request(owner,'/api/social/jobs/'+id+'/retry',{method:'POST'})).status,409);
+  assert.deepEqual(calls,['media','uncertain-container','media_publish']);
+ }finally{globalThis.fetch=previous;f.db.sqlite.close();}
 });

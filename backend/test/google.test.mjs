@@ -8,7 +8,7 @@ const base='https://shoppost.example';
 const scopes='https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/youtube.upload';
 function fixture(){
  const DB=sqliteDB(),now=Math.floor(Date.now()/1000);
- const env={DB,AI:{},AI_RATE_LIMITER:{},ACCESS_TEAM_DOMAIN:'test.cloudflareaccess.com',ACCESS_AUD:'test',SOCIAL_TOKEN_KEY:Buffer.alloc(32,7).toString('base64'),GOOGLE_CLIENT_ID:'test.apps.googleusercontent.com',GOOGLE_CLIENT_SECRET:'test-secret',GOOGLE_REDIRECT_URI:base+'/api/social/google/callback'};
+ const env={DB,AI:{},AI_RATE_LIMITER:{limit:async()=>({success:true})},ACCESS_TEAM_DOMAIN:'test.cloudflareaccess.com',ACCESS_AUD:'test',SOCIAL_TOKEN_KEY:Buffer.alloc(32,7).toString('base64'),GOOGLE_CLIENT_ID:'test.apps.googleusercontent.com',GOOGLE_CLIENT_SECRET:'test-secret',GOOGLE_REDIRECT_URI:base+'/api/social/google/callback'};
  function login(owner){const t=Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');DB.sqlite.prepare('INSERT INTO auth_sessions(token_hash,owner,provider,created_at,expires_at) VALUES(?,?,?,?,?)').run(createHash('sha256').update(t).digest('hex'),owner,'email',now,now+3600);return SESSION_COOKIE+'='+t;}
  const owner=login('email:owner@example.com'),other=login('email:other@example.com');
  async function req(path,method='GET',body,extra={},cookie=owner){return worker.fetch(new Request(base+'/api/social/google/'+path,{method,headers:{Cookie:cookie,Origin:base,...(body?{'Content-Type':'application/json'}:{}),...extra},...(body?{body:typeof body==='string'?body:JSON.stringify(body)}:{})}),env);}

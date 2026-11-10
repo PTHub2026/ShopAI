@@ -13,7 +13,7 @@ function fixture(){
  for(const file of ['0001_drafts.sql','0002_auth.sql'])sqlite.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'));
  const stmt=(sql,p=[])=>({bind:(...a)=>stmt(sql,a),async first(){return sqlite.prepare(sql).get(...p)||null;},async all(){return {results:sqlite.prepare(sql).all(...p)};},async run(){return {meta:{changes:Number(sqlite.prepare(sql).run(...p).changes)}};},exec(){return {meta:{changes:Number(sqlite.prepare(sql).run(...p).changes)}};}});
  const DB={sqlite,prepare:s=>stmt(s),async batch(stmts){sqlite.exec('BEGIN');try{const v=stmts.map(x=>x.exec());sqlite.exec('COMMIT');return v;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
- const env={DB,AI:{},AI_RATE_LIMITER:{},ACCESS_TEAM_DOMAIN:'test-team.cloudflareaccess.com',ACCESS_AUD:'test',SOCIAL_TOKEN_KEY:Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64'),META_APP_ID:'1234567890',META_APP_SECRET:'not-a-real-secret',META_REDIRECT_URI:base+'/api/social/meta/callback',META_GRAPH_VERSION:'v26.0'};
+ const env={DB,AI:{},AI_RATE_LIMITER:{limit:async()=>({success:true})},ACCESS_TEAM_DOMAIN:'test-team.cloudflareaccess.com',ACCESS_AUD:'test',SOCIAL_TOKEN_KEY:Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64'),META_APP_ID:'1234567890',META_APP_SECRET:'not-a-real-secret',META_REDIRECT_URI:base+'/api/social/meta/callback',META_GRAPH_VERSION:'v26.0'};
  function login(owner){
   const t=Buffer.from(owner+':'+crypto.randomUUID()).toString('base64url').slice(0,43).padEnd(43,'A');
   sqlite.prepare('INSERT OR IGNORE INTO auth_identities(owner,provider,created_at,last_login_at) VALUES(?,?,?,?)').run(owner,'email',now(),now());
@@ -76,6 +76,47 @@ test('Meta OAuth: one-use state, same actor, scoped accounts, encrypted Page tok
   assert.deepEqual(calls.map(p=>p.split('/').at(-1)),['access_token','access_token','permissions','accounts','accounts']);
  }finally{globalThis.fetch=previous;f.sqlite.close();}
 });
+test('Meta OAuth callback cannot restore an account disconnected while provider calls are pending',async()=>{
+ const f=fixture(),owner=f.login('email:owner@example.com'),previous=globalThis.fetch;
+ let pauseExchange=false,enteredResolve,releaseResolve;
+ const entered=new Promise(resolve=>{enteredResolve=resolve;}),release=new Promise(resolve=>{releaseResolve=resolve;});
+ globalThis.fetch=async input=>{
+  const u=new URL(String(input));
+  if(u.pathname.endsWith('/oauth/access_token')){
+   if(u.searchParams.has('code')){
+    if(pauseExchange){pauseExchange=false;enteredResolve();await release;}
+    return Response.json({access_token:'short-lived'});
+   }
+   if(u.searchParams.get('grant_type')==='fb_exchange_token')return Response.json({access_token:'long-lived'});
+  }
+  if(u.pathname.endsWith('/me/permissions'))return Response.json({data:['pages_show_list','pages_manage_posts'].map(permission=>({permission,status:'granted'}))});
+  if(u.pathname.endsWith('/me/accounts'))return Response.json({data:[{id:'111111',name:'Test Page',access_token:'PAGE_SECRET'}]});
+  throw Error('Unexpected Graph call');
+ };
+ const start=async()=>{
+  const response=await f.req(owner,'/api/social/meta/start','POST');
+  return new URL((await response.json()).authorizationUrl).searchParams.get('state');
+ };
+ const callback=state=>'/api/social/meta/callback?state='+encodeURIComponent(state)+'&code=FAKE_CODE_FOR_TEST';
+ try{
+  assert.equal((await f.req(owner,callback(await start()))).status,303);
+  const account=f.sqlite.prepare("SELECT id FROM channels WHERE provider='facebook' AND external_id='111111'").get();
+  const pendingState=await start();
+  pauseExchange=true;
+  const pendingCallback=f.req(owner,callback(pendingState));
+  await entered;
+  assert.equal((await f.req(owner,'/api/social/accounts/'+account.id,'DELETE')).status,200);
+  releaseResolve();
+  const result=await pendingCallback;
+  assert.equal(result.status,409);
+  assert.equal((await result.json()).code,'meta_connection_revoked');
+  const revoked=f.sqlite.prepare('SELECT status,token,token_iv FROM channels WHERE id=?').get(account.id);
+  assert.equal(revoked.status,'revoked');
+  assert.equal(revoked.token,'');
+  assert.equal(revoked.token_iv,'');
+ }finally{globalThis.fetch=previous;f.sqlite.close();}
+});
+
 test('Meta OAuth: META_LOGIN_CONFIG_ID dùng config_id (Facebook Login for Business) thay cho scope',async()=>{
  const f=fixture();
  const owner=f.login('email:cfg@example.com');

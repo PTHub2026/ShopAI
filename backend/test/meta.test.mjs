@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
-import {encryptToken} from '../src/social.js';
+import {sqliteDB} from './sqlite-fixture.mjs';
+import {encryptToken,ensureSocialSchema} from '../src/social.js';
 import {publishMeta,metaConfigured,META_SCHEMA,handleMeta} from '../src/meta.js';
 if(!globalThis.crypto)globalThis.crypto=webcrypto;
 const token='EAAX-SYNTHETIC-ONLY',env=()=>({SOCIAL_TOKEN_KEY:Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64'),META_APP_ID:'1234567890',META_APP_SECRET:'test-placeholder',META_REDIRECT_URI:'https://shoppost.example/api/social/meta/callback',META_GRAPH_VERSION:'v26.0'});
@@ -35,11 +36,28 @@ test('Facebook Pages text and photo publish; Instagram requires an image and pub
  try{
   assert.equal(await publishMeta(e,a,{kind:'text',payload:JSON.stringify({text:'A test text'})}),'post_1');
   assert.equal(await publishMeta(e,a,{kind:'photo',payload:JSON.stringify({text:'Caption',photoUrl:'https://example.com/photo.jpg'})}),'post_2');
-  const ig={...a,provider:'instagram',external_id:'987654'};
+  const ig={...a,id:'ig-account',provider:'instagram',external_id:'987654'};
   await assert.rejects(publishMeta(e,ig,{kind:'text',payload:JSON.stringify({text:'No picture'})}),/IG_REQUIRES_PHOTO/);
-  assert.equal(await publishMeta(e,ig,{kind:'photo',payload:JSON.stringify({text:'Caption',photoUrl:'https://example.com/photo.jpg'})}),'ig_1');
+  e.DB=sqliteDB();await ensureSocialSchema(e.DB);
+  const j=photoJob(e.DB);
+  assert.equal(await publishMeta(e,ig,j),'ig_1');
   assert.deepEqual(requests.map(x=>x.u.pathname.split('/').at(-1)),['feed','photos','media','container_1','media_publish']);
- }finally{globalThis.fetch=fetch0;}
+ }finally{globalThis.fetch=fetch0;e.DB?.sqlite.close();}
+});
+test('Meta rate limits preserve Retry-After for the shared retry engine',async()=>{
+ const e=env(),enc=await encryptToken(e,token),a={provider:'facebook',external_id:'123456',token:enc.cipher,token_iv:enc.iv};
+ const original=globalThis.fetch;
+ const {retryDecision}=await import('../src/provider-adapters.js');
+ try{
+  for(const header of ['3600',new Date(Date.now()+3600000).toUTCString()]){
+   globalThis.fetch=async()=>Response.json({error:{code:4}},{status:429,headers:{'Retry-After':header}});
+   await assert.rejects(publishMeta(e,a,{kind:'text',payload:JSON.stringify({text:'Rate limited'})}),error=>{
+    assert.ok(error.retryAfter>=3599);
+    assert.ok(retryDecision(error,1).delay>=error.retryAfter);
+    return true;
+   });
+  }
+ }finally{globalThis.fetch=original;}
 });
 test('OAuth callback refuses missing configuration before touching database',async()=>{
  const r=await handleMeta(new Request('https://shoppost.example/api/social/meta/callback'),{...env(),META_APP_SECRET:''},{owner:'user'},(v,s=200)=>Response.json(v,{status:s}));
@@ -47,7 +65,7 @@ test('OAuth callback refuses missing configuration before touching database',asy
 });
 
 test('Instagram never calls media_publish until container reaches FINISHED',async()=>{
- const e=env(),enc=await encryptToken(e,token),account={provider:'instagram',external_id:'987654',token:enc.cipher,token_iv:enc.iv};
+ const e=env(),enc=await encryptToken(e,token),account={id:'ig-account',provider:'instagram',external_id:'987654',token:enc.cipher,token_iv:enc.iv};
  const original=globalThis.fetch,called=[];
  globalThis.fetch=async(url)=>{
   const path=new URL(url).pathname.split('/').at(-1);called.push(path);
@@ -56,7 +74,26 @@ test('Instagram never calls media_publish until container reaches FINISHED',asyn
   throw Error('Unexpected publish');
  };
  try{
-  await assert.rejects(publishMeta(e,account,{kind:'photo',payload:JSON.stringify({text:'Caption',photoUrl:'https://example.com/img.jpg'})}),e=>e.message==='IG_MEDIA_PROCESSING'&&e.status===429&&e.retryAfter===30);
+  e.DB=sqliteDB();await ensureSocialSchema(e.DB);
+  await assert.rejects(publishMeta(e,account,photoJob(e.DB)),e=>e.message==='IG_MEDIA_PROCESSING'&&e.status===429&&e.retryAfter===30);
   assert.deepEqual(called,['media','container_1']);
- }finally{globalThis.fetch=original;}
+ }finally{globalThis.fetch=original;e.DB?.sqlite.close();}
+});
+
+function photoJob(db){
+ db.sqlite.prepare("INSERT INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at) VALUES('ig-job','shop','ig-account','ig-unit-job','photo',?,'sending','actor',1,1)").run(JSON.stringify({text:'Caption',photoUrl:'https://example.com/photo.jpg'}));
+ return db.sqlite.prepare("SELECT * FROM publish_jobs WHERE id='ig-job'").get();
+}
+
+test('Instagram stops before status or publish if the container checkpoint cannot be saved',async()=>{
+ const e=env();e.DB=sqliteDB();await ensureSocialSchema(e.DB);
+ const job=photoJob(e.DB),secret=await encryptToken(e,token);
+ const account={id:'different-account',provider:'instagram',external_id:'987654',token:secret.cipher,token_iv:secret.iv};
+ const previous=globalThis.fetch,calls=[];
+ globalThis.fetch=async url=>{calls.push(new URL(url).pathname.split('/').at(-1));return Response.json({id:'orphan-container'});};
+ try{
+  await assert.rejects(publishMeta(e,account,job),/IG_CONTAINER_NOT_SAVED/);
+  assert.deepEqual(calls,['media']);
+  assert.equal(e.DB.sqlite.prepare('SELECT instagram_container_id FROM publish_jobs').get().instagram_container_id,null);
+ }finally{globalThis.fetch=previous;e.DB.sqlite.close();}
 });

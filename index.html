@@ -387,11 +387,11 @@ const roleLabel=r=>SHOP.roles[r]||r||'—';
 const STATUS_VI={draft:'Bản nháp',pending_review:'Chờ duyệt',approved:'Đã duyệt'};
 const cloudReadOnly=()=>SHOP.ready&&!shopCan('drafts.create')&&!shopCan('drafts.edit_own')&&!shopCan('drafts.edit_any');
 function shopUse(s){SHOP.id=s.id;SHOP.name=s.name;SHOP.role=s.role;SHOP.roleLabel=typeof s.roleLabel==='string'&&s.roleLabel?s.roleLabel:roleLabel(s.role);SHOP.canPublish=s.canPublish===true;SHOP.permissions=Array.isArray(s.permissions)?s.permissions.filter(x=>typeof x==='string'):[];SHOP.status=typeof s.status==='string'?s.status:'active';try{LS.setItem('pdk_shop:'+(APP_SCOPE||'unverified'),s.id)}catch(e){}}
-function shopRefresh(){stopJobWatch();REALCH=[];syncRealChannels();startJobWatch();channelsLoad();SHOP.members=[];SHOP.invites=[];SHOP.lastInvite=null;CLOUD.items=[];CLOUD.nextCursor=null;shopMenu();renderShopBox();render(route)}
+function shopRefresh(){stopJobWatch();CONNECTIONS=null;REALCH=[];syncRealChannels();startJobWatch();channelsLoad();SHOP.members=[];SHOP.invites=[];SHOP.lastInvite=null;CLOUD.items=[];CLOUD.nextCursor=null;shopMenu();renderShopBox();render(route)}
 function shopMenu(){const cfg=MENU.find(g=>g[0]==='KHÁC');if(!cfg)return;const has=cfg[1].some(m=>m[0]==='admin');if(SHOP.admin&&!has)cfg[1].push(['admin','🧭','Quản trị nền tảng']);if(!SHOP.admin&&has)cfg[1]=cfg[1].filter(m=>m[0]!=='admin');navRender()}
 function renderShopBox(){const box=$('#shop_box'),m=$('#mshop');if(!box)return;if(!managedApp()){box.hidden=true;return}box.hidden=false;const opts=SHOP.shops.map(s=>`<option value="${esc(s.id)}" ${s.id===SHOP.id?'selected':''}>${esc(s.name)}</option>`).join('');
-const nm=esc(SHOP.name||'Shop'),av=esc(((SHOP.name||'S').trim().charAt(0))||'S'),chCount=(S.channels||[]).filter(c=>c.connected).length,isOwner=SHOP.role==='owner',crown='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 7l4 4 5-6 5 6 4-4v10H3Z"/></svg>';
-box.innerHTML=SHOP.ready?`<div class="profile"><div class="prow"><span class="av">${av}</span><div class="txt"><div class="nm">${nm}</div><div class="sub">${chCount} kênh đang kết nối</div></div></div><span class="ownerbadge${isOwner?'':' alt'}" title="Vai trò của bạn trong shop này">${isOwner?crown:''}${esc(SHOP.roleLabel)}</span><div class="shoprow"><select id="shop_sel" onchange="shopSwitch(this.value)" title="Shop đang làm việc" aria-label="Shop đang làm việc">${opts}</select><button class="mk" onclick="shopCreate()" title="Tạo shop mới" aria-label="Tạo shop mới">＋</button></div></div>`:`<span class="small muted">${esc(SHOP.error||'Đang tải shop...')}</span>`;
+const nm=esc(SHOP.name||'Shop'),av=esc(((SHOP.name||'S').trim().charAt(0))||'S'),chCount=managedApp()?liveConnectionCount():(S.channels||[]).filter(c=>c.connected).length,isOwner=SHOP.role==='owner',crown='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 7l4 4 5-6 5 6 4-4v10H3Z"/></svg>';
+box.innerHTML=SHOP.ready?`<div class="profile"><div class="prow"><span class="av">${av}</span><div class="txt"><div class="nm">${nm}</div><div class="sub">${managedApp()?(CONNECTIONS?.shop===SHOP.id?(CONNECTIONS.complete?(chCount+' kênh đã kết nối thật'):(chCount+' kênh đã xác nhận · cần kiểm tra lại')):'Đang tải trạng thái kênh…'):(chCount+' kênh đang kết nối')}</div></div></div><span class="ownerbadge${isOwner?'':' alt'}" title="Vai trò của bạn trong shop này">${isOwner?crown:''}${esc(SHOP.roleLabel)}</span><div class="shoprow"><select id="shop_sel" onchange="shopSwitch(this.value)" title="Shop đang làm việc" aria-label="Shop đang làm việc">${opts}</select><button class="mk" onclick="shopCreate()" title="Tạo shop mới" aria-label="Tạo shop mới">＋</button></div></div>`:`<span class="small muted">${esc(SHOP.error||'Đang tải shop...')}</span>`;
 if(m){m.classList.toggle('on',SHOP.ready&&SHOP.shops.length>0);m.innerHTML=opts}}
 function shopSwitch(id){const s=SHOP.shops.find(x=>x.id===id);if(!s||s.id===SHOP.id)return;shopUse(s);shopRefresh();toast('Đang làm việc trong shop “'+s.name+'”')}
 function shopFail(e,fallback){if(e&&e.code==='reauth_required')return reauthModal(e.message);toast((e&&e.message)||fallback||'Thao tác chưa hoàn tất. Vui lòng thử lại.')}
@@ -490,7 +490,7 @@ ${D.when==='later'?`<input type="date" style="width:auto" value="${D.date}" onch
 let improveInFlight=false;
 function upd(){saveDraft();renderGrpBar();$('#cnt').textContent=D.content.length+'/5000'+(draftDirty()?' · nháp tự lưu':'');const words=D.content.trim().split(/\s+/).filter(Boolean).length;const b=$('#impBtn');b.disabled=improveInFlight||words<15;b.title=words<15?'Cần tối thiểu 15 từ':'';renderCh();renderPv();renderScore();$('#sub').disabled=(typeof composerPublishing!=='undefined'&&composerPublishing)||!D.channels.some(id=>!validity(chById(id)))}
 function renderCh(){const conn=S.channels.filter(c=>c.connected);if(!conn.length){$('#chlist').innerHTML='<p class="muted">Chưa có kênh. <a href="#accounts">Kết nối kênh</a></p>';return}
-$('#chlist').innerHTML=conn.map(c=>{const bad=validity(c);const on=D.channels.includes(c.id);const cu=D.custom[c.id];return `<div class="ch" style="flex-wrap:wrap;${bad?'opacity:.6':''}"><input type="checkbox" style="width:auto" ${on&&!bad?'checked':''} ${bad?'disabled':''} onchange="togCh('${escAttr(c.id)}',this.checked)">${pfIcon(c.pf)}<div style="flex:1;min-width:150px"><b>${esc(c.name)}</b><div class="small muted">${esc(c.handle)} · ${PF[c.pf].n}${bad?` · <span style="color:var(--red)">${bad}</span>`:''}</div></div><button class="btn sm" onclick="togCustom('${escAttr(c.id)}')">${cu?'Ẩn tùy chỉnh':'Tùy chỉnh'}</button>${cu?`<div style="width:100%"><label>Nội dung riêng cho ${PF[c.pf].n} (để trống = dùng nội dung chung)</label><textarea style="min-height:80px" oninput="D.custom['${escAttr(c.id)}'].text=this.value;renderPv();$('#sub').disabled=(typeof composerPublishing!=='undefined'&&composerPublishing)||!D.channels.some(id=>!validity(chById(id)))">${esc(cu.text)}</textarea><button class="btn sm" style="margin-top:6px" onclick="aiAdapt('${escAttr(c.id)}')">✨ AI chuyển thể cho ${PF[c.pf].n}</button><label>Bình luận đầu tiên</label><textarea style="min-height:60px" oninput="D.custom['${escAttr(c.id)}'].first=this.value">${esc(cu.first)}</textarea></div>`:''}</div>`}).join('')}
+$('#chlist').innerHTML=conn.map(c=>{const bad=validity(c);const on=D.channels.includes(c.id);const cu=D.custom[c.id];return `<div class="ch" style="flex-wrap:wrap;${bad?'opacity:.6':''}"><input type="checkbox" style="width:auto" ${on&&!bad?'checked':''} ${bad?'disabled':''} onchange="togCh('${escAttr(c.id)}',this.checked)">${pfIcon(c.pf)}<div style="flex:1;min-width:150px"><b>${esc(c.name)}</b> ${c.real?connectionBadge('connected'):'<span class="chip">Mô phỏng</span>'}<div class="small muted">${esc(c.handle)} · ${PF[c.pf].n}${bad?` · <span style="color:var(--red)">${bad}</span>`:''}</div></div><button class="btn sm" onclick="togCustom('${escAttr(c.id)}')">${cu?'Ẩn tùy chỉnh':'Tùy chỉnh'}</button>${cu?`<div style="width:100%"><label>Nội dung riêng cho ${PF[c.pf].n} (để trống = dùng nội dung chung)</label><textarea style="min-height:80px" oninput="D.custom['${escAttr(c.id)}'].text=this.value;renderPv();$('#sub').disabled=(typeof composerPublishing!=='undefined'&&composerPublishing)||!D.channels.some(id=>!validity(chById(id)))">${esc(cu.text)}</textarea><button class="btn sm" style="margin-top:6px" onclick="aiAdapt('${escAttr(c.id)}')">✨ AI chuyển thể cho ${PF[c.pf].n}</button><label>Bình luận đầu tiên</label><textarea style="min-height:60px" oninput="D.custom['${escAttr(c.id)}'].first=this.value">${esc(cu.first)}</textarea></div>`:''}</div>`}).join('')}
 function togCh(id,v){D.channels=v?[...new Set([...D.channels,id])]:D.channels.filter(x=>x!==id);upd()}
 function togCustom(id){if(D.custom[id])delete D.custom[id];else D.custom[id]={text:'',first:''};renderCh()}
 function selAll(v){D.channels=v?S.channels.filter(c=>c.connected&&!validity(c)).map(c=>c.id):[];upd()}
@@ -668,18 +668,19 @@ async function socialRequest(path,options={}){
  return data;
 }
 async function socialAccountsLive(){
+ const connectionSequence=++CONNECTION_SEQUENCE,shopAtStart=SHOP.id;
  const root=$('#view');
  root.innerHTML='<div class="card"><h3>Kênh đa nền tảng</h3><p>Đang tải kết nối từ máy chủ...</p></div>';
  try {
-  const shopAtStart=SHOP.id;
   const [accounts,jobs,providers,zalo,google,uploads]=await Promise.all([socialRequest('accounts'),socialRequest('jobs'),socialRequest('providers'),cloudRequest('/channels'),googleRequest('accounts'),googleRequest('uploads')]);
-  if(location.hash!=='#accounts'||SHOP.id!==shopAtStart)return;
-  root.innerHTML=`<div class="card"><h3>Zalo OA</h3><p class="small muted">Đăng nhập tài khoản Zalo đang quản trị OA, chọn OA và xác nhận cấp quyền. Hệ thống tự lưu và làm mới phiên kết nối; không cần sao chép token.</p><button class="btn pri" onclick="zaloConnect()" ${zalo.setup?.zalo?.configured&&zalo.setup?.zalo?.canConnect?'':'disabled'}>Kết nối / cấp lại quyền Zalo OA</button>${!zalo.setup?.zalo?.configured?'<p class="small muted">Kết nối Zalo đang được quản trị viên cấu hình.</p>':''}${!zalo.setup?.zalo?.canConnect?'<p class="small muted">Chỉ chủ shop hoặc quản lý được kết nối OA.</p>':''}<p class="small muted">Nếu Zalo báo -14068, tài khoản hiện tại không có OA phù hợp. <a href="https://oa.zalo.me/manage/oa" target="_blank" rel="noopener">Kiểm tra OA của tôi</a> rồi đăng nhập tài khoản quản trị OA để kết nối lại.</p>${(zalo.channels||[]).some(c=>c.provider==='zalo')&&zalo.setup?.zalo?.canConnect?'<button class="btn danger" onclick="zaloDisconnect()">Ngắt kết nối Zalo OA</button>':''}<p>${(zalo.channels||[]).filter(c=>c.provider==='zalo').map(c=>esc(c.name||'Zalo OA')+' · '+(c.needsReconnect?'Cần cấp quyền lại':c.status==='connected'?'Đã kết nối':'Chưa kết nối')).join(', ')||'Chưa có OA được kết nối cho shop này.'}</p></div><div class="card"><h3>Kết nối Facebook & Instagram</h3><p class="small muted">Ủy quyền qua Meta để cấp quyền đăng bài lên Facebook Page và Instagram Professional đã liên kết Page. Không hỗ trợ đăng trang cá nhân.</p><button class="btn pri" onclick="socialConnectMeta()" ${providers.facebook.enabled?"":"disabled title=\"Meta App chưa được cấu hình ở backend\""}>Kết nối Facebook / Instagram</button>${providers.facebook.enabled?"":"<p class=\"small muted\">Kết nối Facebook / Instagram đang được quản trị viên cấu hình.</p>"}</div>${googleSection(google,uploads)}<div class="card"><h3>Kết nối Telegram Bot thật</h3><p class="small muted">Bot phải được cấp quyền đăng trong nhóm hoặc kênh. Token chỉ gửi tới máy chủ và không hiển thị lại.</p>
+  if(location.hash!=='#accounts'||SHOP.id!==shopAtStart||connectionSequence!==CONNECTION_SEQUENCE)return;
+  updateConnectionInventory(accounts,zalo,google,shopAtStart);
+  root.innerHTML=`${connectionSummary()}<div class="card"><h3>Zalo OA</h3><p class="small muted">Đăng nhập tài khoản Zalo đang quản trị OA, chọn OA và xác nhận cấp quyền. Hệ thống tự lưu và làm mới phiên kết nối; không cần sao chép token.</p><button class="btn pri" onclick="zaloConnect()" ${zalo.setup?.zalo?.configured&&zalo.setup?.zalo?.canConnect?'':'disabled'}>Kết nối / cấp lại quyền Zalo OA</button>${!zalo.setup?.zalo?.configured?'<p class="small muted">Kết nối Zalo đang được quản trị viên cấu hình.</p>':''}${!zalo.setup?.zalo?.canConnect?'<p class="small muted">Chỉ chủ shop hoặc quản lý được kết nối OA.</p>':''}<p class="small muted">Nếu Zalo báo -14068, tài khoản hiện tại không có OA phù hợp. <a href="https://oa.zalo.me/manage/oa" target="_blank" rel="noopener">Kiểm tra OA của tôi</a> rồi đăng nhập tài khoản quản trị OA để kết nối lại.</p>${(zalo.channels||[]).some(c=>c.provider==='zalo')&&zalo.setup?.zalo?.canConnect?'<button class="btn danger" onclick="zaloDisconnect()">Ngắt kết nối Zalo OA</button>':''}<p>${(zalo.channels||[]).filter(c=>c.provider==='zalo').map(c=>esc(c.name||'Zalo OA')+' · '+(c.needsReconnect?'Cần cấp quyền lại':c.status==='connected'?'Đã kết nối':'Chưa kết nối')).join(', ')||'Chưa có OA được kết nối cho shop này.'}</p></div><div class="card"><h3>Kết nối Facebook & Instagram</h3><p class="small muted">Ủy quyền qua Meta để cấp quyền đăng bài lên Facebook Page và Instagram Professional đã liên kết Page. Không hỗ trợ đăng trang cá nhân.</p><button class="btn pri" onclick="socialConnectMeta()" ${providers.facebook.enabled?"":"disabled title=\"Meta App chưa được cấu hình ở backend\""}>Kết nối Facebook / Instagram</button>${providers.facebook.enabled?"":"<p class=\"small muted\">Kết nối Facebook / Instagram đang được quản trị viên cấu hình.</p>"}</div>${googleSection(google,uploads)}<div class="card"><h3>Kết nối Telegram Bot thật</h3><p class="small muted">Bot phải được cấp quyền đăng trong nhóm hoặc kênh. Token chỉ gửi tới máy chủ và không hiển thị lại.</p>
   <label>Telegram Bot Token</label><input id="tg_token" type="password" autocomplete="off" placeholder="Bot Token từ BotFather">
   <label>Chat ID hoặc @channelusername</label><input id="tg_chat" placeholder="@kenh_cua_ban">
   <div class="row" style="margin-top:10px"><button class="btn pri" onclick="socialConnectTelegram()">Kết nối Telegram</button><button class="btn" onclick="socialAccountsLive()">Làm mới</button></div></div>
-  <div class="card"><h3>Kênh đã kết nối (${accounts.accounts.length})</h3>
-  ${accounts.accounts.map(a=>`<div class="ch"><div style="flex:1"><b>${esc(a.name)}</b><div class="small muted">${esc(a.targetId)} · ${esc(a.status)}</div></div>${a.status==='active'?`<button class="btn sm danger" onclick="socialDisconnectTelegram('${escAttr(a.id)}')">Ngắt kết nối</button>`:''}</div>`).join('')||'<p>Chưa có kết nối kênh thật.</p>'}</div>
+  <div class="card"><h3>Tài khoản nền tảng (${accounts.accounts.length})</h3>
+  ${accounts.accounts.map(a=>`<div class="ch"><div style="flex:1"><b>${esc(a.name)}</b><div class="small muted">${esc(PF[a.provider]?.n||a.provider)} · ${esc(a.targetId)} · ${connectionBadge(connectionState(a.status,a.targetId))}</div></div>${a.status==='active'?`<button class="btn sm danger" onclick="socialDisconnectTelegram('${escAttr(a.id)}')">Ngắt kết nối</button>`:''}</div>`).join('')||'<p>Chưa có kết nối kênh thật.</p>'}</div>
   <div class="card"><h3>Đăng bài đa kênh</h3><label>Kênh</label><select id="tg_account">${accounts.accounts.filter(a=>a.status==='active').map(a=>`<option value="${escAttr(a.id)}" data-provider="${escAttr(a.provider)}">${esc(a.provider)} · ${esc(a.name)}</option>`).join('')}</select>
   <label>Nội dung</label><textarea id="tg_text" placeholder="Nội dung đăng thử nghiệm"></textarea>
   <label>Ảnh HTTPS công khai (không bắt buộc)</label><input id="tg_photo" placeholder="https://example.com/image.jpg">
@@ -687,7 +688,7 @@ async function socialAccountsLive(){
   <p class="small muted">Zalo và Instagram yêu cầu ảnh HTTPS. Facebook Page có thể đăng văn bản hoặc ảnh. Chỉ đăng sau khi bạn xác nhận, không có đăng tự động.</p></div>
   <div class="card"><h3>Lịch sử đăng bài</h3><div id="live_job_history">${jobHistoryHtml(jobs.jobs)}</div></div>
   <div class="card small muted">TikTok, Threads, LinkedIn và X chưa có kết nối đăng bài trong bản này. Google/YouTube dùng phần tải video riêng ở trên.</div>`;
- }catch(e){if(location.hash==='#accounts')root.innerHTML='<div class="card"><h3>Không tải được kênh thật</h3><p>'+esc(e.message)+'</p><button class="btn" onclick="socialAccountsLive()">Thử lại</button></div>';}
+ }catch(e){if(SHOP.id!==shopAtStart||connectionSequence!==CONNECTION_SEQUENCE)return;updateConnectionInventory(null,null,null,shopAtStart);if(location.hash==='#accounts')root.innerHTML='<div class="card"><h3>Không tải được kênh thật</h3><p>'+esc(e.message)+'</p><button class="btn" onclick="socialAccountsLive()">Thử lại</button></div>';}
 }
 async function zaloDisconnect(){
  if(!confirm('Ngắt kết nối Zalo OA và hủy các bài đang chờ đăng?'))return;
@@ -740,7 +741,7 @@ function googleSection(google,history){
  <button class="btn pri" onclick="googleConnect()" ${google.configured&&canConnect?'':'disabled'}>Kết nối Google / YouTube</button>
  ${!google.configured?'<p class="small muted">Quản trị viên cần hoàn tất cấu hình Google OAuth và bật YouTube Data API trước khi kết nối.</p>':''}
  <p class="small muted"><a href="/privacy" target="_blank" rel="noopener">Quyền riêng tư</a> · <a href="/terms" target="_blank" rel="noopener">Điều khoản sử dụng</a> · <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Quản lý quyền trên Google</a></p>
- ${google.accounts.map(a=>`<div class="ch"><div style="flex:1"><b>${esc(a.name)}</b><div class="small muted">YouTube · ${esc(a.targetId)} · ${esc(a.status==='connected'?'Đã kết nối':a.status==='revoked'?'Đã ngắt kết nối':'Cần cấp quyền lại')}</div></div>${a.status!=='revoked'&&canConnect?`<button class="btn sm danger" onclick="googleDisconnect('${escAttr(a.id)}')">Ngắt kết nối YouTube</button>`:''}</div>`).join('')||'<p>Chưa có kênh YouTube được kết nối.</p>'}
+ ${google.accounts.map(a=>`<div class="ch"><div style="flex:1"><b>${esc(a.name)}</b><div class="small muted">YouTube · ${esc(a.targetId)} · ${connectionBadge(connectionState(a.status,a.targetId))}</div></div>${a.status!=='revoked'&&canConnect?`<button class="btn sm danger" onclick="googleDisconnect('${escAttr(a.id)}')">Ngắt kết nối YouTube</button>`:''}</div>`).join('')||'<p>Chưa có kênh YouTube được kết nối.</p>'}
  ${connected.length&&canUpload?`<h3>Tải video lên YouTube</h3><label>Kênh YouTube</label><select id="yt_account">${connected.map(a=>`<option value="${escAttr(a.id)}">${esc(a.name)}</option>`).join('')}</select>
  <label>Tiêu đề video</label><input id="yt_title" maxlength="100" placeholder="Tiêu đề video">
  <label>Mô tả video</label><textarea id="yt_description" maxlength="5000"></textarea>
@@ -805,16 +806,40 @@ V.accounts=()=>{if(managedApp()){socialAccountsLive();return;}const con=S.channe
 function setConn(id,v){if(!demoAction())return;chById(id).connected=v;if(!v)D.channels=D.channels.filter(x=>x!==id);save();V.accounts();toast(v?'Đã kết nối (mô phỏng)':'Đã ngắt kết nối')}
 function connectPf(pf){if(managedApp()&&pf==='zalo')return zaloConnect();if(!demoAction())return;if(!PF[pf])return;S.channels.push({id:'c'+uid(),pf,name:PF[pf].n,handle:'',connected:true});save();V.accounts();toast('Đã kết nối (mô phỏng)')}
 // ===== Kênh THẬT (hiện có Zalo OA). REALCH giữ danh sách kênh đã kết nối thật lấy từ máy chủ. =====
-let REALCH=[];
+let REALCH=[],CONNECTIONS=null,CONNECTION_SEQUENCE=0;
+function connectionState(status,target){
+ if(status==='revoked')return 'revoked';
+ if(['reauth_required','error','expired'].includes(status))return 'reauth_required';
+ if(['active','connected'].includes(status))return target?'connected':'reauth_required';
+ return 'unknown';
+}
+function connectionBadge(status){const text={connected:'Đã kết nối thật',reauth_required:'Cần cấp quyền lại',revoked:'Đã ngắt kết nối',unknown:'Chưa xác nhận'};return '<span class="chip '+(status==='connected'?'ok':'warn')+'">'+esc(text[status]||text.unknown)+'</span>';}
+function updateConnectionInventory(social,zalo,google,shop){
+ if(SHOP.id!==shop)return;
+ const accounts=[];
+ for(const a of social?.accounts||[]){if(!['facebook','instagram','telegram'].includes(a.provider))continue;accounts.push({...a,state:connectionState(a.status,a.targetId)});}
+ for(const a of zalo?.channels||[]){if(a.provider!=='zalo')continue;const id=(social?.accounts||[]).find(c=>c.provider==='zalo'&&String(c.targetId)===String(a.external_id||a.oa_id))?.id;accounts.push({id,provider:'zalo',name:a.name||'Zalo OA',targetId:a.external_id||a.oa_id,state:connectionState(a.needsReconnect?'reauth_required':a.status,a.external_id||a.oa_id)});}
+ for(const a of google?.accounts||[])accounts.push({...a,provider:'youtube',state:connectionState(a.status,a.targetId)});
+ CONNECTIONS={shop,accounts,complete:Boolean(Array.isArray(social?.accounts)&&Array.isArray(zalo?.channels)&&Array.isArray(google?.accounts)),checkedAt:Date.now()};
+ REALCH=accounts.filter(a=>a.state==='connected'&&a.id&&a.provider!=='youtube').map(a=>({...a,status:'connected',external_id:a.targetId}));syncRealChannels();
+ renderShopBox();
+}
+function liveConnectionCount(){return CONNECTIONS?.shop===SHOP.id?CONNECTIONS.accounts.filter(a=>a.state==='connected').length:0;}
+function connectionSummary(){
+ if(CONNECTIONS?.shop!==SHOP.id)return '<div class="card" role="status">Đang tải trạng thái kết nối…</div>';
+ const {accounts,complete,checkedAt}=CONNECTIONS;
+ const platforms=['facebook','instagram','zalo','telegram','youtube'];
+ return `<div class="card" id="connection_summary"><div class="row" style="justify-content:space-between"><h3>${liveConnectionCount()} tài khoản đã kết nối thật</h3><button class="btn sm" onclick="channelsLoad()">Làm mới trạng thái</button></div><p class="small muted">${complete?'Cập nhật lúc '+new Date(checkedAt).toLocaleTimeString('vi-VN'):'Chưa xác nhận đủ trạng thái. Bấm Làm mới để kiểm tra lại.'}</p>${platforms.map(provider=>{const rows=accounts.filter(a=>a.provider===provider);return rows.length?rows.map(a=>`<div class="ch">${pfIcon(provider)}<div style="flex:1"><b>${esc(a.name)}</b><div class="small muted">${esc(PF[provider]?.n||provider)} · ${esc(a.targetId||'Chưa xác minh tài khoản')}</div></div>${connectionBadge(a.state)}</div>`).join(''):`<div class="ch">${pfIcon(provider)}<div style="flex:1">${esc(PF[provider]?.n||provider)}</div><span class="chip">${complete?'Chưa kết nối':'Chưa xác nhận'}</span></div>`;}).join('')}</div>`;
+}
+
 async function channelsLoad(){
  if(!managedApp()||!APP_SCOPE||!SHOP.ready)return;
- const shop=SHOP.id;
- try{
-  const [zalo,social]=await Promise.all([cloudRequest('/channels'),socialRequest('accounts')]);
-  if(SHOP.id!==shop)return;
-  REALCH=[...(zalo.channels||[]).filter(c=>c.provider==='zalo'&&c.status==='connected').map(c=>({...c,id:(social.accounts||[]).find(a=>a.provider==='zalo'&&String(a.targetId)===String(c.external_id||c.oa_id))?.id})),...(social.accounts||[]).filter(c=>['facebook','instagram','telegram'].includes(c.provider)&&c.status==='active').map(c=>({...c,status:'connected',external_id:c.targetId}))];
- }catch(e){if(SHOP.id!==shop)return;REALCH=[];toast('Chưa tải được kênh đăng bài: '+e.message);}
- syncRealChannels();if(route==='accounts'||route==='create')render();
+ const shop=SHOP.id,connectionSequence=++CONNECTION_SEQUENCE;
+ const results=await Promise.allSettled([cloudRequest('/channels'),socialRequest('accounts'),googleRequest('accounts')]);
+ if(SHOP.id!==shop||connectionSequence!==CONNECTION_SEQUENCE)return;
+ const [zalo,social,google]=results.map(r=>r.status==='fulfilled'?r.value:null);
+ updateConnectionInventory(social,zalo,google,shop);
+ if(route==='accounts'||route==='create')render();
 }
 function syncRealChannels(){
  S.channels=S.channels.filter(c=>!(c&&c.real));

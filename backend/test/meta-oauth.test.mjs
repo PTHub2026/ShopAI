@@ -92,3 +92,22 @@ test('Meta OAuth: META_LOGIN_CONFIG_ID dùng config_id (Facebook Login for Busin
  assert.equal(url2.searchParams.has('config_id'),false);
  assert.match(url2.searchParams.get('scope'),/pages_manage_posts/);
 });
+test('Meta OAuth: lỗi callback trả trang HTML quay về ứng dụng, giữ mã trạng thái',async()=>{
+ const f=fixture();
+ const owner=f.login('email:cb@example.com');
+ const start=await f.req(owner,'/api/social/meta/start','POST');
+ const state=new URL((await start.json()).authorizationUrl).searchParams.get('state');
+ const declined=await f.req(owner,'/api/social/meta/callback?state='+encodeURIComponent(state)+'&error=access_denied');
+ assert.equal(declined.status,400);
+ assert.match(declined.headers.get('content-type'),/text\/html/);
+ const html=await declined.text();
+ assert.match(html,/meta_error=oauth_declined#accounts/);
+ assert.doesNotMatch(html,/<script/i);
+ assert.match(declined.headers.get('content-security-policy'),/default-src 'none'/);
+ const bad=await f.req(owner,'/api/social/meta/callback?state=khong-hop-le&code=x');
+ assert.equal(bad.status,400);
+ assert.match(await bad.text(),/meta_error=invalid_oauth_state/);
+ const startJson=await f.req(owner,'/api/social/meta/start','GET');
+ assert.equal(startJson.status,405);
+ assert.match(startJson.headers.get('content-type'),/json/);
+});

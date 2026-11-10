@@ -343,3 +343,93 @@ test('immediate Zalo rate-limit responses retain the common job for later succes
  r.w.applyPublishJobs([{id:'pj_retry',status:'sent',kind:'photo',attempts:2}],'shop');assert.equal(r.read('S.posts[0].status'),'published');
  }finally{r.close();}
 });
+
+const channelFixture=(extra={})=>({accounts:[],jobs:[],channels:[],facebook:{enabled:false},setup:{zalo:{configured:false,canConnect:false}},...extra});
+test('social requests carry account scope; accounts waits for shops and ignores obsolete loads',async()=>{
+ const r=runtime();try{
+  await settle();r.w.eval("go('accounts')");await settle();
+  assert.equal(r.requests.filter(x=>x.path==='/channels/all/accounts').length,0);
+  const slow=deferred();let pending=true;
+  r.w.fetch=async(url,options)=>{assert.equal(options.headers['X-ShopAI-User-Scope'],scope);return pending?slow.promise:Response.json(channelFixture())};
+  r.w.eval("SHOP.ready=true;SHOP.id='shop_old';socialAccountsLive()");
+  r.w.eval("SHOP.id='shop_new'");pending=false;await r.w.socialAccountsLive();
+  const current=r.w.document.querySelector('#view').innerHTML;
+  slow.resolve(Response.json(channelFixture({accounts:[{id:'old',name:'Stale',status:'error'}]})));await settle();await settle();
+  assert.equal(r.w.document.querySelector('#view').innerHTML,current);
+  r.w.eval("go('settings')");const settings=r.w.document.querySelector('#view').innerHTML;await r.w.socialAccountsLive();assert.equal(r.w.document.querySelector('#view').innerHTML,settings);
+ }finally{r.close()}
+});
+test('social pending keys belong to shop and immutable content, and history retires sent jobs',async()=>{
+ const r=runtime();try{await settle();r.w.confirm=()=>true;let first=true;const keys=[];
+ r.w.fetch=async(url,options)=>{const path=String(url);if(path.endsWith('/retry'))return Response.json({job:{id:'job1',status:'sent'}});keys.push(options.headers['Idempotency-Key']);if(first){first=false;return Response.json({error:'rate_limited',job:{id:'job1',status:'retryable'}},{status:429})}return Response.json({job:{id:'job2',status:'sent',remoteMessageId:'2'}})};
+ r.w.eval("SHOP.ready=true;SHOP.id='shop1'");
+ const form=text=>{r.w.document.querySelector('#view').innerHTML='<select id="tg_account"><option value="a">A</option></select><textarea id="tg_text"></textarea><input id="tg_photo">';r.w.document.querySelector('#tg_text').value=text};
+ form('one');await r.w.socialPublishTelegram();form('two');await r.w.socialPublishTelegram();assert.notEqual(keys[0],keys[1]);
+ await r.w.socialRetryTelegram('job1');form('one');await r.w.socialPublishTelegram();assert.notEqual(keys[0],keys[2]);
+ }finally{r.close()}
+});
+
+test('social history retires keys after a lost response and keeps error accounts disconnectable',async()=>{
+ const r=runtime();try{await settle();r.w.eval("SHOP.ready=true;SHOP.id='shop1'");r.w.confirm=()=>true;let key;
+ r.w.fetch=async(url,options)=>{key=options.headers['Idempotency-Key'];throw Error('response lost')};
+ r.w.document.querySelector('#view').innerHTML='<select id="tg_account"><option value="a">A</option></select><textarea id="tg_text">Lost</textarea><input id="tg_photo">';
+ await r.w.socialPublishTelegram();assert.equal(r.read('socialPending.size'),1);
+ r.w.fetch=async url=>Response.json(channelFixture({accounts:[{id:'a',name:'Denied',status:'error',targetId:'1'}],jobs:[{id:'sent',status:'sent',idempotencyKey:key,kind:'text',attempts:1}]}));
+ r.w.eval("go('accounts')");await settle();await settle();
+ assert.equal(r.read('socialPending.size'),0);assert.ok(r.w.document.querySelector('[onclick="socialDisconnectTelegram(\'a\')"]'));
+ }finally{r.close()}
+});
+
+test('accounts initialization restores the saved shop and stale errors cannot replace another view',async()=>{
+ const init=deferred();const saved='s_'+'b'.repeat(32),fallback='s_'+'a'.repeat(32);const calls=[];
+ const r=runtime({stored:{['pdk_shop:'+scope]:saved},api:async()=>init.promise,fetchImpl:async(path,options)=>{if(path.startsWith('/channels/'))calls.push(options.headers['X-ShopPost-Shop']);return Response.json(channelFixture())}});
+ try{r.w.localStorage.setItem('pdk_shop:'+scope,saved);r.w.eval("go('accounts')");assert.equal(calls.length,0);init.resolve(Response.json({shops:[{id:fallback,name:'Default',role:'owner'},{id:saved,name:'Saved',role:'owner'}],defaultShopId:fallback}));await settle();await settle();assert.ok(calls.length>=4);assert.ok(calls.every(id=>id===saved));
+ const slow=deferred();r.w.fetch=()=>slow.promise;r.w.socialAccountsLive();r.w.eval("go('settings')");const page=r.w.document.querySelector('#view').innerHTML;slow.resolve(Response.json({error:'old error'},{status:500}));await settle();await settle();assert.equal(r.w.document.querySelector('#view').innerHTML,page);
+ }finally{r.close()}
+});
+
+test('late social mutation completion preserves a newer accounts form',async()=>{
+ const r=runtime();try{await settle();r.w.eval("SHOP.ready=true;SHOP.id='shop1';go('accounts')");await settle();
+ const slow=deferred();r.w.fetch=(url,options)=>options.method==='POST'?slow.promise:Promise.resolve(Response.json(channelFixture()));r.w.document.querySelector('#view').innerHTML='<input id="tg_token" value="token"><input id="tg_chat" value="@channel">';
+ const saving=r.w.socialConnectTelegram();r.w.eval("go('settings');go('accounts')");await settle();await settle();r.w.document.querySelector('#view').innerHTML='<textarea id="tg_text">New unsaved form</textarea>';
+ slow.resolve(Response.json({ok:true}));await saving;await settle();assert.equal(r.w.document.querySelector('#tg_text')?.value,'New unsaved form');
+ }finally{r.close()}
+});
+
+test('pending submissions isolate identical content by shop and live history retires lost responses',async()=>{
+ const r=runtime();try{await settle();r.w.confirm=()=>true;const keys=[];
+ r.w.fetch=async(url,options)=>{keys.push(options.headers['Idempotency-Key']);throw Error('lost')};
+ const form=()=>{r.w.document.querySelector('#view').innerHTML='<select id="tg_account"><option value="a" data-provider="zalo">A</option></select><textarea id="tg_text">Same</textarea><input id="tg_photo" value="https://example.com/a.jpg">'};
+ r.read("SHOP.ready=true;SHOP.id='one'");form();await r.w.socialPublishTelegram();
+ r.read("SHOP.id='two'");form();await r.w.socialPublishTelegram();assert.notEqual(keys[0],keys[1]);
+ r.read("SHOP.id='one'");form();await r.w.socialPublishTelegram();assert.equal(keys[2],keys[0]);
+ r.w.applyPublishJobs([{id:'lost',status:'sent',idempotencyKey:keys[0],kind:'photo',attempts:1}],'one');
+ form();await r.w.socialPublishTelegram();assert.notEqual(keys[3],keys[0]);assert.equal(r.read('socialPending.size'),2);
+ }finally{r.close()}
+});
+test('same-shop obsolete loads and channel initialization cannot erase current accounts input',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='one';go('accounts')");await settle();
+ const slow=deferred();let waiting=true;
+ r.w.fetch=async()=>waiting?slow.promise:Response.json(channelFixture({accounts:[{id:'new',name:'Newest',status:'active'}]}));
+ const old=r.w.socialAccountsLive();waiting=false;await r.w.socialAccountsLive();
+ assert.match(r.w.document.querySelector('#view').textContent,/Newest/);
+ slow.resolve(Response.json(channelFixture({accounts:[{id:'old',name:'Obsolete',status:'active'}]})));await old;
+ assert.doesNotMatch(r.w.document.querySelector('#view').textContent,/Obsolete/);
+ const channel=deferred();r.w.fetch=()=>channel.promise;const loading=r.w.channelsLoad();
+ r.w.document.querySelector('#tg_text').value='Keep this';channel.resolve(Response.json(channelFixture()));await loading;
+ assert.equal(r.w.document.querySelector('#tg_text').value,'Keep this');
+ }finally{r.close()}
+});
+
+test('switching shops refreshes composer channel controls without replacing the draft',async()=>{
+ const r=runtime();try{await settle();const pending=deferred();
+ r.w.fetch=async url=>new URL(url,r.w.location.href).pathname==='/channels'?pending.promise:Response.json({error:'stop polling'},{status:403});
+ r.read("SHOP.ready=true;SHOP.id='one';SHOP.shops=[{id:'one',name:'One',role:'owner'},{id:'two',name:'Two',role:'owner'}];go('create');shopSwitch('two');stopJobWatch()");
+ const editor=r.w.document.querySelector('#ct');editor.value='Keep my draft';editor.dispatchEvent(new r.w.Event('input'));r.read("D.channels=['real_zalo']");
+ assert.doesNotMatch(r.w.document.querySelector('#chlist').textContent,/New OA/);
+ pending.resolve(Response.json({channels:[{provider:'zalo',status:'connected',name:'New OA',oa_id:'12345'}]}));await settle();await settle();
+ assert.match(r.w.document.querySelector('#chlist').textContent,/New OA/);
+ assert.equal(r.w.document.querySelector('#ct'),editor);assert.equal(editor.value,'Keep my draft');
+ assert.equal(r.w.document.querySelector('#sub').disabled,false);
+ }finally{r.close()}
+});

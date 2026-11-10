@@ -1,7 +1,7 @@
 import {channels as handleChannels} from './channels.js';
 import {ensureChannelStore} from './channel-store.js';
 import {validatePost, retryDecision, publishFor} from './provider-adapters.js';
-import {resolveShop,audit} from './shops.js';
+import {resolveShop,audit,writeLimit} from './shops.js';
 import {handleMeta,publishMeta,metaDenied,metaConfigured} from './meta.js';
 const now=()=>Math.floor(Date.now()/1000);
 export const SOCIAL_SCHEMA=["CREATE TABLE IF NOT EXISTS social_accounts (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, provider TEXT NOT NULL CHECK(provider IN ('telegram','facebook','instagram')), display_name TEXT NOT NULL, target_id TEXT NOT NULL, token_ciphertext TEXT NOT NULL, token_iv TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked','error')), connected_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(shop_id,provider,target_id));","CREATE INDEX IF NOT EXISTS social_accounts_shop ON social_accounts(shop_id,status);","CREATE TABLE IF NOT EXISTS publish_jobs (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, account_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('text','photo')), payload TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','sending','sent','retryable','unknown','failed')), attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0, remote_message_id TEXT, error_code TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(shop_id,idempotency_key));","CREATE INDEX IF NOT EXISTS publish_jobs_shop ON publish_jobs(shop_id,created_at DESC);"];
@@ -28,9 +28,13 @@ export async function callTelegram(token,method,body){
 }
 async function input(req){if(!(req.headers.get('content-type')||'').startsWith('application/json'))return null;const s=await req.text();if(s.length>8*1024*1024)return null;try{const j=JSON.parse(s);return j&&typeof j==='object'&&!Array.isArray(j)?j:null;}catch{return null;}}
 const view=a=>({id:a.id,name:a.name,provider:a.provider,targetId:a.external_id,status:a.status==='connected'?'active':a.status});
-const jobView=j=>({provider:j.provider,url:j.result_url||null,nextAttemptAt:j.next_attempt_at||0,id:j.id,accountId:j.account_id,status:j.status,kind:j.kind,attempts:j.attempts,remoteMessageId:j.remote_message_id,errorCode:j.error_code});
+const jobView=j=>({provider:j.provider,url:j.result_url||null,nextAttemptAt:j.next_attempt_at||0,id:j.id,accountId:j.account_id,idempotencyKey:j.idempotency_key,status:j.status,kind:j.kind,attempts:j.attempts,remoteMessageId:j.remote_message_id,errorCode:j.error_code});
 const fail=(json,status,code)=>json({error:code,code},status);
 export async function handleSocial(req,env,who,json){
+ if(!['GET','HEAD'].includes(req.method)){
+  if(req.headers.get('Origin')!==new URL(req.url).origin)return fail(json,403,'forbidden');
+  const limited=await writeLimit(env,who.owner);if(limited)return json({error:limited.error},limited.status,limited.status===429?{'Retry-After':'60'}:{});
+ }
  if(!env.DB)return fail(json,503,'db_missing');
  try{decodeKey(env);}catch{return fail(json,503,'social_key_missing');}
  const [,,,section,resource,action]=new URL(req.url).pathname.split('/');
@@ -108,7 +112,7 @@ export async function handleSocial(req,env,who,json){
   const j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND idempotency_key=?').bind(shop,idem).first();
   if(j.account_id!==a.id||j.kind!==data.kind||j.payload!==payload||(scheduled&&j.next_attempt_at!==Math.floor(data.runAt)))return fail(json,409,'idempotency_conflict');
   if(scheduled)return json({ok:true,id:j.id,runAt:j.next_attempt_at,status:'scheduled',job:jobView(j)},201);
-  return deliver(j,db,env,shop,json);
+  return deliver(j,db,env,shop,json,who.owner);
  }
  if(section==='jobs'&&resource&&['retry','run'].includes(action)&&req.method==='POST'){
   if(!ctx.can('channels.operate')&&!ctx.can('drafts.publish'))return fail(json,403,'forbidden');
@@ -127,12 +131,12 @@ export async function handleSocial(req,env,who,json){
    }
   }
   if(action==='run'&&j.status==='pending'){await db.prepare("UPDATE publish_jobs SET next_attempt_at=0,updated_at=? WHERE shop_id=? AND id=? AND status='pending'").bind(now(),shop,j.id).run();j.next_attempt_at=0;}
-  return deliver(j,db,env,shop,json);
+  return deliver(j,db,env,shop,json,who.owner);
  }
  return fail(json,404,'not_found');
 }
-async function deliver(j,db,env,shop,json){
- if(j.next_attempt_at>now())return json({job:jobView(j),retryAfter:j.next_attempt_at-now()},429);
+async function deliver(j,db,env,shop,json,actor=j.created_by){
+ if(j.next_attempt_at>now()){const remaining=j.next_attempt_at-now();return json({job:jobView(j),retryAfter:remaining},429,{'Retry-After':String(remaining)});}
  if(!['pending','retryable'].includes(j.status))return json({ok:j.status==='sent',id:j.remote_message_id,url:j.result_url||null,job:jobView(j)},j.status==='sent'?200:409);
  const c=await db.prepare("UPDATE publish_jobs SET status='sending',attempts=attempts+1,updated_at=? WHERE shop_id=? AND id=? AND status IN ('pending','retryable') AND next_attempt_at<=?").bind(now(),shop,j.id,now()).run();
  if(c.meta.changes!==1)return fail(json,409,'in_progress');
@@ -147,8 +151,8 @@ async function deliver(j,db,env,shop,json){
 
  await db.prepare('UPDATE publish_jobs SET status=?,remote_message_id=?,error_code=?,updated_at=?,next_attempt_at=?,result_url=? WHERE id=? AND shop_id=?').bind(status,remote,error,now(),nextAttempt,resultUrl,j.id,shop).run();
  console.info(JSON.stringify({event:'publish.result',provider:a.provider,status,code:error,attempt:j.attempts+1}));
- await audit(db,{shopId:shop,actor:j.created_by,action:'social.publish',target:j.id,detail:{status,error}});
- return json({ok:status==='sent',id:remote,url:resultUrl,job:{...jobView(j),status,attempts:j.attempts+1,remoteMessageId:remote,errorCode:error}},status==='sent'?200:status==='retryable'?429:502);
+ await audit(db,{shopId:shop,actor,action:'social.publish',target:j.id,detail:{status,error}});
+ return json({ok:status==='sent',id:remote,url:resultUrl,job:{...jobView(j),status,attempts:j.attempts+1,remoteMessageId:remote,errorCode:error}},status==='sent'?200:status==='retryable'?429:502,status==='retryable'?{'Retry-After':String(Math.max(1,nextAttempt-now()))}:{});
 }
 
 export async function runDuePublishJobs(env){
@@ -163,7 +167,7 @@ export async function runDuePublishJobs(env){
 }
 
 async function listJobs(db,shop,provider){
- const {results}=await db.prepare("SELECT j.id,j.account_id,j.status,j.kind,j.attempts,j.remote_message_id,j.error_code,j.result_url,j.next_attempt_at,c.provider FROM publish_jobs j LEFT JOIN channels c ON c.id=j.account_id AND c.shop_id=j.shop_id WHERE j.shop_id=? AND (?='all' OR c.provider=?) ORDER BY j.updated_at DESC,j.id DESC LIMIT 200").bind(shop,provider,provider).all();
+ const {results}=await db.prepare("SELECT j.id,j.account_id,j.idempotency_key,j.status,j.kind,j.attempts,j.remote_message_id,j.error_code,j.result_url,j.next_attempt_at,c.provider FROM publish_jobs j LEFT JOIN channels c ON c.id=j.account_id AND c.shop_id=j.shop_id WHERE j.shop_id=? AND (?='all' OR c.provider=?) ORDER BY j.updated_at DESC,j.id DESC LIMIT 200").bind(shop,provider,provider).all();
  return results.map(jobView);
 }
 

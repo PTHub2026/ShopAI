@@ -135,7 +135,7 @@ const NOT_FOUND = { error: 'Không tìm thấy shop hoặc bạn không phải t
 
 const shopView = (row, membership) => ({ ...shopRow(row), role: membership.role, roleLabel: ROLE_LABELS[membership.role], canPublish: membership.can_publish, permissions: allowedActions(membership) });
 
-async function writeLimit(env, owner) {
+export async function writeLimit(env, owner) {
   try {
     const limit = await env.AI_RATE_LIMITER?.limit({ key: 'api-write:' + owner });
     if (!limit || typeof limit.success !== 'boolean') throw new Error('RATE_LIMIT_UNAVAILABLE');

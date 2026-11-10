@@ -356,9 +356,9 @@ test('Zalo publishing preserves the idempotency header and caller cancellation s
  }finally{r.close();}
 });
 test('immediate Zalo rate-limit responses retain the common job for later successful reconciliation',async()=>{
- const r=runtime({fetchImpl:async(path)=>path==='/channels/zalo/publish'?Response.json({job:{id:'pj_retry',status:'retryable',kind:'photo',attempts:1},retryAfter:30},{status:429}):Response.json(session)});
- try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';S.channels=[{id:'real_zalo',pf:'zalo',real:true,provider:'zalo',connected:true}];D.content='Queued content';D.channels=['real_zalo'];D.media=[{type:'image/jpeg',thumb:'data:image/jpeg;base64,/9j/AA==',name:'cover',size:4}]");
- await r.w.submitPostReal(['real_zalo']);assert.equal(r.read('S.posts[0].schedId'),'pj_retry');assert.equal(r.read('S.posts[0].status'),'scheduled');
+ const r=runtime({fetchImpl:async(path)=>path==='/channels/all/jobs'?Response.json({job:{id:'pj_retry',status:'retryable',kind:'photo',attempts:1},retryAfter:30},{status:429}):Response.json(session)});
+ try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.operate'];S.channels=[{id:'real_zalo',accountId:'zalo-a',name:'OA',pf:'zalo',real:true,provider:'zalo',connected:true}];D.content='Queued content';D.channels=['real_zalo'];D.media=[{type:'image/jpeg',thumb:'data:image/jpeg;base64,/9j/AA==',name:'cover',size:4}]");
+ r.w.confirm=()=>true;await r.w.submitPostReal(['real_zalo']);assert.equal(r.read('S.posts[0].schedId'),'pj_retry');assert.equal(r.read('S.posts[0].status'),'scheduled');
  r.w.applyPublishJobs([{id:'pj_retry',status:'sent',kind:'photo',attempts:2}],'shop');assert.equal(r.read('S.posts[0].status'),'published');
  }finally{r.close();}
 });

@@ -109,8 +109,8 @@ export async function handleSocial(req,env,who,json){
   await db.prepare("INSERT OR IGNORE INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at,next_attempt_at) VALUES(?,?,?,?,?,?,'pending',?,?,?,?)").bind('pj_'+crypto.randomUUID(),shop,a.id,idem,data.kind,payload,who.owner,t,t,scheduled?Math.floor(data.runAt):0).run();
   const j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND idempotency_key=?').bind(shop,idem).first();
   if(j.account_id!==a.id||j.kind!==data.kind||j.payload!==payload||(scheduled&&j.next_attempt_at!==Math.floor(data.runAt)))return fail(json,409,'idempotency_conflict');
-  if(scheduled)return json({ok:true,id:j.id,runAt:j.next_attempt_at,status:'scheduled',job:jobView(j)},201);
-  return deliver(j,db,env,shop,json);
+  if(scheduled)return json({ok:true,id:j.id,runAt:j.next_attempt_at,status:'scheduled',job:jobView({...j,provider:a.provider})},201);
+  return deliver({...j,provider:a.provider},db,env,shop,json);
  }
  if(section==='jobs'&&resource&&['retry','run'].includes(action)&&req.method==='POST'){
   if(!ctx.can('channels.operate')&&!ctx.can('drafts.publish'))return fail(json,403,'forbidden');
@@ -129,7 +129,8 @@ export async function handleSocial(req,env,who,json){
    }
   }
   if(action==='run'&&j.status==='pending'){await db.prepare("UPDATE publish_jobs SET next_attempt_at=0,updated_at=? WHERE shop_id=? AND id=? AND status='pending'").bind(now(),shop,j.id).run();j.next_attempt_at=0;}
-  return deliver(j,db,env,shop,json);
+  // Propagate provider from channels into j so jobView() returns a complete job object.
+  return deliver({...j,provider:account?.provider},db,env,shop,json);
  }
  return fail(json,404,'not_found');
 }

@@ -420,3 +420,20 @@ test('partial Zalo metadata stays visible as connected but is not publish select
  r.w.updateConnectionInventory({accounts:[{id:'zalo-a',provider:'zalo',targetId:'123',status:'active'}]},{channels:[{provider:'zalo',name:'OA',external_id:'123',status:'connected'}]},{accounts:[]},'shop');assert.equal(r.read('S.channels[0].accountId'),'zalo-a');
  }finally{r.close();}
 });
+
+test('account controls expose login logout and add-account without logging out on render',async()=>{
+ const r=runtime();try{await settle();for(const id of ['login_btn','logout_btn','add_account_btn'])assert.ok(r.w.document.getElementById(id));assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);
+ r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.configure_token']");r.w.socialRequest=async()=>({facebook:{enabled:true}});r.w.cloudRequest=async()=>({setup:{zalo:{configured:true}}});r.w.googleRequest=async()=>({configured:true});await r.w.openAddAccount();assert.match(r.w.document.querySelector('#mbox').textContent,/Facebook/);assert.match(r.w.document.querySelector('#mbox').textContent,/YouTube/);assert.match(r.w.document.querySelector('#mbox').textContent,/Telegram/);assert.equal(r.requests.filter(x=>x.method==='POST').length,0);
+ }finally{r.close();}
+});
+test('logout failures retain the session and re-enable the controls, cancellation sends nothing',async()=>{
+ const r=runtime({fetchImpl:async(path)=>path==='/auth/logout'?Response.json({error:'Try later'},{status:503}):Response.json(session)});try{await settle();r.w.confirm=()=>false;await r.w.logoutShopPost();assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);r.w.confirm=()=>true;await r.w.logoutShopPost();assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,1);assert.equal(r.w.document.getElementById('logout_btn').disabled,false);assert.equal(r.w.location.pathname,'/');assert.match(r.w.document.querySelector('#toast').textContent,/Try later/);}finally{r.close();}
+});
+
+test('add-account respects viewer permissions and refuses a stale shop action',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=[]");r.w.socialRequest=async()=>({facebook:{enabled:true},instagram:{enabled:true},telegram:{enabled:true}});r.w.cloudRequest=async()=>({setup:{zalo:{configured:true}}});r.w.googleRequest=async()=>({configured:true});await r.w.openAddAccount();const buttons=[...r.w.document.querySelectorAll('#mbox button[onclick^="connectAdditionalAccount"]')];assert.equal(buttons.length,5);assert.ok(buttons.every(b=>b.disabled));r.read("SHOP.permissions=['channels.configure_token'];SHOP.id='other'");let calls=0;r.w.socialConnectMeta=()=>calls++;await r.w.connectAdditionalAccount('facebook','shop');assert.equal(calls,0);}finally{r.close();}
+});
+
+test('login recovery preserves draft and uses the normal authentication gate for an expired session',async()=>{
+ const r=runtime();try{await settle();edit(r,'Preserve before login');r.w.cloudRequest=async()=>{throw Object.assign(Error('Session expired'),{status:401});};await r.w.openShopPostLogin();assert.equal(r.read('D.content'),'Preserve before login');assert.match(r.w.localStorage.getItem('pdk_draft_v1:'+scope),/Preserve before login/);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);}finally{r.close();}
+});

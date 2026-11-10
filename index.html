@@ -488,9 +488,9 @@ ${D.when==='later'?`<input type="date" style="width:auto" value="${D.date}" onch
 <button class="btn pri" id="sub" onclick="submitPost()">${D.when==='later'?'Lên lịch':'Đăng bài'}</button></div>${D.when==='later'?'<div class="small muted" style="width:100%;text-align:right">Thời gian dựa trên múi giờ trình duyệt của bạn</div>':''}</div></div>
 <div><div class="card"><h3>Xem trước</h3><div id="pv"></div></div><div class="card"><h3>📈 Điểm chất lượng nội dung</h3><div id="score"></div></div></div></div>`;renderThumbs();upd()}
 let improveInFlight=false;
-function upd(){saveDraft();renderGrpBar();$('#cnt').textContent=D.content.length+'/5000'+(draftDirty()?' · nháp tự lưu':'');const words=D.content.trim().split(/\s+/).filter(Boolean).length;const b=$('#impBtn');b.disabled=improveInFlight||words<15;b.title=words<15?'Cần tối thiểu 15 từ':'';renderCh();renderPv();renderScore();$('#sub').disabled=!D.channels.some(id=>!validity(chById(id)))}
+function upd(){saveDraft();renderGrpBar();$('#cnt').textContent=D.content.length+'/5000'+(draftDirty()?' · nháp tự lưu':'');const words=D.content.trim().split(/\s+/).filter(Boolean).length;const b=$('#impBtn');b.disabled=improveInFlight||words<15;b.title=words<15?'Cần tối thiểu 15 từ':'';renderCh();renderPv();renderScore();$('#sub').disabled=(typeof composerPublishing!=='undefined'&&composerPublishing)||!D.channels.some(id=>!validity(chById(id)))}
 function renderCh(){const conn=S.channels.filter(c=>c.connected);if(!conn.length){$('#chlist').innerHTML='<p class="muted">Chưa có kênh. <a href="#accounts">Kết nối kênh</a></p>';return}
-$('#chlist').innerHTML=conn.map(c=>{const bad=validity(c);const on=D.channels.includes(c.id);const cu=D.custom[c.id];return `<div class="ch" style="flex-wrap:wrap;${bad?'opacity:.6':''}"><input type="checkbox" style="width:auto" ${on&&!bad?'checked':''} ${bad?'disabled':''} onchange="togCh('${escAttr(c.id)}',this.checked)">${pfIcon(c.pf)}<div style="flex:1;min-width:150px"><b>${esc(c.name)}</b><div class="small muted">${esc(c.handle)} · ${PF[c.pf].n}${bad?` · <span style="color:var(--red)">${bad}</span>`:''}</div></div><button class="btn sm" onclick="togCustom('${escAttr(c.id)}')">${cu?'Ẩn tùy chỉnh':'Tùy chỉnh'}</button>${cu?`<div style="width:100%"><label>Nội dung riêng cho ${PF[c.pf].n} (để trống = dùng nội dung chung)</label><textarea style="min-height:80px" oninput="D.custom['${escAttr(c.id)}'].text=this.value;renderPv();$('#sub').disabled=!D.channels.some(id=>!validity(chById(id)))">${esc(cu.text)}</textarea><button class="btn sm" style="margin-top:6px" onclick="aiAdapt('${escAttr(c.id)}')">✨ AI chuyển thể cho ${PF[c.pf].n}</button><label>Bình luận đầu tiên</label><textarea style="min-height:60px" oninput="D.custom['${escAttr(c.id)}'].first=this.value">${esc(cu.first)}</textarea></div>`:''}</div>`}).join('')}
+$('#chlist').innerHTML=conn.map(c=>{const bad=validity(c);const on=D.channels.includes(c.id);const cu=D.custom[c.id];return `<div class="ch" style="flex-wrap:wrap;${bad?'opacity:.6':''}"><input type="checkbox" style="width:auto" ${on&&!bad?'checked':''} ${bad?'disabled':''} onchange="togCh('${escAttr(c.id)}',this.checked)">${pfIcon(c.pf)}<div style="flex:1;min-width:150px"><b>${esc(c.name)}</b><div class="small muted">${esc(c.handle)} · ${PF[c.pf].n}${bad?` · <span style="color:var(--red)">${bad}</span>`:''}</div></div><button class="btn sm" onclick="togCustom('${escAttr(c.id)}')">${cu?'Ẩn tùy chỉnh':'Tùy chỉnh'}</button>${cu?`<div style="width:100%"><label>Nội dung riêng cho ${PF[c.pf].n} (để trống = dùng nội dung chung)</label><textarea style="min-height:80px" oninput="D.custom['${escAttr(c.id)}'].text=this.value;renderPv();$('#sub').disabled=(typeof composerPublishing!=='undefined'&&composerPublishing)||!D.channels.some(id=>!validity(chById(id)))">${esc(cu.text)}</textarea><button class="btn sm" style="margin-top:6px" onclick="aiAdapt('${escAttr(c.id)}')">✨ AI chuyển thể cho ${PF[c.pf].n}</button><label>Bình luận đầu tiên</label><textarea style="min-height:60px" oninput="D.custom['${escAttr(c.id)}'].first=this.value">${esc(cu.first)}</textarea></div>`:''}</div>`}).join('')}
 function togCh(id,v){D.channels=v?[...new Set([...D.channels,id])]:D.channels.filter(x=>x!==id);upd()}
 function togCustom(id){if(D.custom[id])delete D.custom[id];else D.custom[id]={text:'',first:''};renderCh()}
 function selAll(v){D.channels=v?S.channels.filter(c=>c.connected&&!validity(c)).map(c=>c.id):[];upd()}
@@ -698,7 +698,12 @@ function applyPublishJobs(jobs,shop){
  if(SHOP.id!==shop)return;
  const history=$('#live_job_history');if(history)history.innerHTML=jobHistoryHtml(jobs);
  const byId=new Map(jobs.map(j=>[j.id,j]));let changed=false;
- for(const post of S.posts){const j=byId.get(post.schedId);if(!j)continue;
+ for(const post of S.posts){
+  if(post.jobs?.length){
+   let updated=false;post.jobs=post.jobs.map(j=>{const fresh=byId.get(j.id);if(!fresh)return j;updated=true;return {...j,...fresh};});
+   if(updated){post.status=socialPostStatus(post.jobs);post.url=post.jobs.find(j=>j.url)?.url||post.url;post.error=post.jobs.filter(j=>j.errorCode).map(j=>j.errorCode).join('; ')||null;changed=true;}continue;
+  }
+  const j=byId.get(post.schedId);if(!j)continue;
   const status=({sent:'published',pending:'scheduled',retryable:'scheduled',sending:'processing',unknown:'unknown',failed:'failed'})[j.status];
   if(status&&post.status!==status){post.status=status;post.error=j.errorCode||null;if(j.url)post.url=j.url;changed=true;}
  }
@@ -801,17 +806,93 @@ function setConn(id,v){if(!demoAction())return;chById(id).connected=v;if(!v)D.ch
 function connectPf(pf){if(managedApp()&&pf==='zalo')return zaloConnect();if(!demoAction())return;if(!PF[pf])return;S.channels.push({id:'c'+uid(),pf,name:PF[pf].n,handle:'',connected:true});save();V.accounts();toast('Đã kết nối (mô phỏng)')}
 // ===== Kênh THẬT (hiện có Zalo OA). REALCH giữ danh sách kênh đã kết nối thật lấy từ máy chủ. =====
 let REALCH=[];
-async function channelsLoad(){if(!managedApp()||!APP_SCOPE||!SHOP.ready)return;try{const shop=SHOP.id;const r=await cloudRequest('/channels');if(SHOP.id!==shop)return;REALCH=Array.isArray(r&&r.channels)?r.channels.filter(c=>c&&c.status==='connected'):[]}catch(e){REALCH=[]}syncRealChannels();if(route==='accounts'||route==='create')render()}
-function syncRealChannels(){S.channels=S.channels.filter(c=>!(c&&c.real));for(const rc of REALCH){if(rc.provider!=='zalo')continue;S.channels.push({id:'real_'+rc.provider,pf:rc.provider,name:rc.name||(PF[rc.provider]&&PF[rc.provider].n)||'Zalo OA',handle:rc.oa_id?('OA ID: '+rc.oa_id):'',connected:true,real:true,provider:rc.provider,status:rc.status})}}
+async function channelsLoad(){
+ if(!managedApp()||!APP_SCOPE||!SHOP.ready)return;
+ const shop=SHOP.id;
+ try{
+  const [zalo,social]=await Promise.all([cloudRequest('/channels'),socialRequest('accounts')]);
+  if(SHOP.id!==shop)return;
+  REALCH=[...(zalo.channels||[]).filter(c=>c.provider==='zalo'&&c.status==='connected').map(c=>({...c,id:(social.accounts||[]).find(a=>a.provider==='zalo'&&String(a.targetId)===String(c.external_id||c.oa_id))?.id})),...(social.accounts||[]).filter(c=>['facebook','instagram','telegram'].includes(c.provider)&&c.status==='active').map(c=>({...c,status:'connected',external_id:c.targetId}))];
+ }catch(e){if(SHOP.id!==shop)return;REALCH=[];toast('Chưa tải được kênh đăng bài: '+e.message);}
+ syncRealChannels();if(route==='accounts'||route==='create')render();
+}
+function syncRealChannels(){
+ S.channels=S.channels.filter(c=>!(c&&c.real));
+ for(const rc of REALCH){if(!PF[rc.provider])continue;S.channels.push({id:rc.provider==='zalo'?'real_zalo':'real_'+rc.provider+'_'+rc.id,accountId:rc.id,pf:rc.provider,name:rc.name||PF[rc.provider].n,handle:rc.external_id||rc.oa_id||'',connected:true,real:true,provider:rc.provider,status:rc.status});}
+}
 function zaloConnect(){if(!managedApp())return demoAction();if(!SHOP.ready||!SHOP.id)return toast('Hãy chọn shop trước khi kết nối kênh.');toast('Đang chuyển sang Zalo để cấp quyền...');location.href='/channels/zalo/connect?shop='+encodeURIComponent(SHOP.id)}
 async function zaloPublishDraft(content,title,images,key){const idem=key||D.publishKey||(D.publishKey=crypto.randomUUID());if(!key)saveDraft();return cloudRequest('/channels/zalo/publish',{method:'POST',headers:{'Idempotency-Key':idem},body:JSON.stringify({content,title:title||'',images:images||[]})})}
 async function zaloScheduleDraft(content,images,runAt){D.scheduleKey=D.scheduleKey||crypto.randomUUID();saveDraft();return cloudRequest('/channels/zalo/schedule',{method:'POST',headers:{'Idempotency-Key':D.scheduleKey||(D.scheduleKey=crypto.randomUUID())},body:JSON.stringify({content,title:'',images:images||[],runAt})})}
 // Ảnh gửi tới backend: lấy bản thu nhỏ (data URL JPEG < 1MB) của media ảnh trong bản nháp/bài, tối đa 4 ảnh.
 function realImages(media){return (media||[]).filter(m=>m&&(m.type||'').startsWith('image')&&m.thumb).map(m=>m.thumb).slice(0,4)}
-async function submitPostReal(chs){const content=(D.content||'').trim();const realChs=chs.filter(id=>{const c=chById(id);return c&&c.real&&c.provider==='zalo'});const images=realImages(D.media);if(!images.length)return toast('Bài viết Zalo cần ảnh bìa. Hãy thêm ảnh vào bài viết.');const mediaMeta=D.media.map(({name,type,size,thumb,assetId})=>({name,type,size,thumb,assetId}));const custom={};chs.forEach(id=>{if(D.custom[id])custom[id]={...D.custom[id]}});
+let composerPublishing=false;
+function socialPostStatus(items){
+ if(items.every(j=>j.status==='sent'))return 'published';
+ if(items.some(j=>j.status==='unknown'))return 'unknown';
+ if(items.some(j=>j.status==='failed'))return 'failed';
+ if(items.some(j=>j.status==='sending'))return 'processing';
+ return 'scheduled';
+}
+function composerPayload(channel,draft,runAt){
+ const text=((draft.custom[channel.id]||{}).text||draft.content||'').trim();
+ if(draft.custom[channel.id]?.first)throw Error('Bình luận đầu tiên chưa được hỗ trợ khi đăng thật. Hãy bỏ phần này trước khi đăng.');
+ if(draft.media.some(m=>!m.type?.startsWith('image/')))throw Error('Màn hình này hỗ trợ bài văn bản và ảnh. Video YouTube được tải tại mục Kênh.');
+ const images=draft.media.map(m=>m.thumb||(/^https:\/\//.test(m.url||'')?m.url:null));
+ if(images.some(i=>!i))throw Error('Ảnh chưa xử lý xong hoặc không đọc được. Hãy đợi hoặc chọn lại ảnh.');
+ if(images.length>6)throw Error('Mỗi bài hỗ trợ tối đa 6 ảnh.');
+ if(channel.provider==='zalo'&&(!text||!images.length))throw Error('Zalo OA cần nội dung và ảnh bìa.');
+ if(!text&&!images.length)throw Error('Nhập nội dung hoặc thêm ảnh.');
+ const payload={accountId:channel.accountId,kind:images.length?'photo':'text',text,...(runAt?{runAt}:{} )};
+ if(!payload.accountId)throw Error('Kênh chưa tải xong. Hãy tải lại danh sách kênh.');
+ if(['facebook','zalo'].includes(channel.provider)){if(images.length)payload.images=images;}
+ else if(images.length){
+  if(images.length!==1||!/^https:\/\//.test(images[0]))throw Error(PF[channel.provider].n+' hiện cần một đường dẫn ảnh HTTPS công khai.');
+  payload.photoUrl=images[0];
+ }
+ if(channel.provider==='instagram'&&!images.length)throw Error('Instagram cần ảnh.');
+ return payload;
+}
+async function submitSocialDraft(chs){
+ if(composerPublishing)return;
+ const editor=D,shop=SHOP.id,channels=chs.map(chById);
+ if(!SHOP.ready||!shop||channels.some(c=>!c?.connected||!c.real))return toast('Hãy chọn kênh đã kết nối của shop hiện tại.');
+ let runAt=0,payloads;
+ try{
+  if(D.when==='later'){
+   runAt=Math.floor(new Date(D.date+'T'+D.time).getTime()/1000);
+   if(!D.date||!D.time||!(runAt>Date.now()/1000))throw Error('Chọn ngày và giờ đăng trong tương lai.');
+  }
+  payloads=channels.map(c=>composerPayload(c,editor,runAt));
+ }catch(e){return toast(e.message);}
+ const signature=JSON.stringify({shop,payloads});
+ if(!confirm((runAt?'Lên lịch đăng':'Đăng bài thật')+' lên '+channels.map(c=>c.name+' ('+PF[c.pf].n+')').join(', ')+' với '+editor.media.length+' ảnh?'))return;
+ if(SHOP.id!==shop||D!==editor)return;
+ if(editor.socialAttempt?.signature!==signature)editor.socialAttempt={signature,keys:payloads.map(()=>crypto.randomUUID())};
+ saveDraft();composerPublishing=true;const button=$('#sub');if(button){button.disabled=true;button.textContent='Đang gửi…';}
+ const items=[],snapshot=JSON.stringify(editor),submitted=JSON.parse(snapshot),attemptKeys=[...editor.socialAttempt.keys];
+ try{
+  for(let i=0;i<payloads.length;i++){
+   if(SHOP.id!==shop)break;
+   try{
+    const r=await socialRequest('jobs',{method:'POST',headers:{'Idempotency-Key':attemptKeys[i],...(runAt?{'X-Channel-Schedule':'1'}:{})},body:JSON.stringify(payloads[i])});
+    items.push({...r.job,channelId:channels[i].id,url:r.url||r.job?.url,status:r.job?.status||(r.ok?'sent':'unknown')});
+   }catch(e){items.push({...e.job,channelId:channels[i].id,status:e.job?.status||'unknown',errorCode:e.message});}
+  }
+  if(SHOP.id!==shop)return;
+  const ids=items.map(j=>j.id).filter(Boolean),prior=S.posts.find(p=>p.socialAttemptId===attemptKeys.join(':'));
+  const media=submitted.media.map(({name,type,size,thumb,assetId})=>({name,type,size,thumb,assetId}));
+  const post=prior||{id:uid(),type:'post',content:submitted.content,media,channels:[...chs],custom:submitted.custom,metrics:{},time:runAt?runAt*1000:Date.now(),createdBy:'Bạn',socialAttemptId:attemptKeys.join(':')};
+  Object.assign(post,{jobs:items,schedId:ids[0],status:socialPostStatus(items),url:items.find(j=>j.url)?.url,error:items.filter(j=>j.errorCode).map(j=>j.errorCode).join('; ')||null});
+  if(!prior)S.posts.unshift(post);save();
+  const accepted=items.length===channels.length&&items.every(j=>j.id&&['sent','pending','retryable','sending'].includes(j.status));
+  if(accepted&&D===editor&&JSON.stringify(D)===snapshot){post.assets=syncDraftToKho();save();const more=D.more;D=newDraft();D.more=more;saveDraft();more?V.create():go('posts');}
+  toast(post.status==='published'?'Nền tảng đã xác nhận bài đăng.':accepted?'Đã lưu vào hàng đợi đăng bài.':'Chưa hoàn tất đăng bài. Bản nháp được giữ; kiểm tra lịch sử trước khi gửi lại.');
+ }finally{composerPublishing=false;const current=$('#sub');if(current){current.textContent=D.when==='later'?'Lên lịch':'Đăng bài';upd();}}
+}
+async function submitPostReal(chs){if(chs.some(id=>chById(id)?.provider!=='zalo'))return submitSocialDraft(chs);const content=(D.content||'').trim();const realChs=chs.filter(id=>{const c=chById(id);return c&&c.real&&c.provider==='zalo'});const images=realImages(D.media);if(!images.length)return toast('Bài viết Zalo cần ảnh bìa. Hãy thêm ảnh vào bài viết.');const mediaMeta=D.media.map(({name,type,size,thumb,assetId})=>({name,type,size,thumb,assetId}));const custom={};chs.forEach(id=>{if(D.custom[id])custom[id]={...D.custom[id]}});
 if(D.when==='later'){if(!D.date||!D.time)return toast('Chọn ngày và giờ đăng');const t=new Date(D.date+'T'+D.time).getTime();if(!(t>Date.now()))return toast('Thời gian lên lịch phải ở tương lai');if(!content)return toast('Kênh Zalo OA cần nội dung văn bản để lên lịch.');toast('Đang tạo lịch đăng Zalo OA...');let schedId=null,lastErr='';try{const r=await zaloScheduleDraft(content,images,Math.floor(t/1000));if(r&&r.ok&&r.id)schedId=r.id;else lastErr='Không tạo được lịch đăng.'}catch(e){lastErr=(e&&e.message)||'Không tạo được lịch đăng.'}const assetIds=syncDraftToKho();const p={id:uid(),type:D.media.some(m=>m.type.startsWith('video'))?'video':'post',content:D.content,media:mediaMeta,assets:assetIds,channels:chs,custom,status:schedId?'scheduled':'failed',error:schedId?null:lastErr,time:t,metrics:{},createdBy:'Bạn'};if(schedId)p.schedId=schedId;S.posts.unshift(p);save();toast(schedId?('Đã lên lịch đăng Zalo OA lúc '+fmtT(t)):('Lên lịch thất bại: '+lastErr));const more=D.more;D=newDraft();D.more=more;saveDraft();more?V.create():go('posts');return}
 if(!content)return toast('Kênh Zalo OA cần nội dung văn bản để đăng.');toast('Đang đăng lên Zalo OA...');let okCount=0,lastErr='',lastJob=null;for(const id of realChs){const text=((D.custom[id]&&D.custom[id].text)||content).trim();try{const r=await zaloPublishDraft(text,'',images);if(r?.job)lastJob=r.job;if(r&&r.ok)okCount++;else lastErr='Zalo không xác nhận bài viết.'}catch(e){if(e.job)lastJob=e.job;lastErr=(e&&e.message)||'Đăng thất bại.'}}const assetIds=syncDraftToKho();const p={id:uid(),type:D.media.some(m=>m.type.startsWith('video'))?'video':'post',content:D.content,media:mediaMeta,assets:assetIds,channels:chs,custom,status:okCount?'published':lastJob?.status==='retryable'?'scheduled':lastJob?.status==='unknown'?'unknown':'failed',error:okCount?null:lastErr,time:Date.now(),metrics:{},createdBy:'Bạn'};if(lastJob?.id)p.schedId=lastJob.id;if(D.publishKey)p.publishKey=D.publishKey;if(okCount)realChs.forEach(id=>{p.metrics[id]={views:0,likes:0,comments:0,shares:0}});S.posts.unshift(p);save();if(okCount&&!lastErr)toast('Đã đăng bài lên Zalo OA.');else if(okCount)toast('Đã đăng '+okCount+'/'+realChs.length+' kênh Zalo. '+lastErr);else toast(lastJob?.status==='retryable'?'Đã lưu hàng đợi; hệ thống sẽ thử lại.':lastJob?.status==='unknown'?'Chưa xác định kết quả. Kiểm tra OA trước khi đăng lại.':'Đăng Zalo thất bại: '+lastErr);const more=D.more;D=newDraft();D.more=more;saveDraft();more?V.create():go('posts')}
-async function pubNowReal(p){if(p.schedId){try{const r=await socialRequest('jobs/'+encodeURIComponent(p.schedId)+'/run',{method:'POST'});if(r.job)applyPublishJobs([r.job],SHOP.id);toast(r.job?.status==='sent'?'Đã đăng bài.':'Đã cập nhật hàng đợi.');}catch(e){if(e.job)applyPublishJobs([e.job],SHOP.id);toast(e.message);}return;}const realChs=p.channels.filter(id=>{const c=chById(id);return c&&c.real&&c.provider==='zalo'});if(!realChs.length)return;const content=(p.content||'').trim();if(!content){p.status='failed';p.error='Thiếu nội dung văn bản để đăng';save();render();return toast('Đăng thất bại: thiếu nội dung.')}const images=realImages(p.media);toast('Đang đăng lên Zalo OA...');let okCount=0,lastErr='';for(const id of realChs){const text=((p.custom&&p.custom[id]&&p.custom[id].text)||content).trim();try{const r=await zaloPublishDraft(text,'',images,p.publishKey||(p.publishKey=crypto.randomUUID()));if(r&&r.ok)okCount++;else lastErr='Zalo không xác nhận bài viết.'}catch(e){lastErr=(e&&e.message)||'Đăng thất bại.'}}if(okCount){p.status='published';p.error=null;p.time=Date.now();realChs.forEach(id=>{if(!p.metrics[id])p.metrics[id]={views:0,likes:0,comments:0,shares:0}});toast(lastErr?('Đã đăng '+okCount+'/'+realChs.length+' kênh Zalo. '+lastErr):'Đã đăng bài lên Zalo OA.')}else{p.status='failed';p.error=lastErr;toast('Đăng Zalo thất bại: '+lastErr)}save();render()}
+async function pubNowReal(p){if(p.jobs?.length){for(const j of p.jobs){if(!j.id||!['pending','retryable','failed'].includes(j.status))continue;try{const r=await socialRequest('jobs/'+encodeURIComponent(j.id)+'/run',{method:'POST'});if(r.job)applyPublishJobs([r.job],SHOP.id);}catch(e){if(e.job)applyPublishJobs([e.job],SHOP.id);toast(e.message);}}return;}if(p.schedId){try{const r=await socialRequest('jobs/'+encodeURIComponent(p.schedId)+'/run',{method:'POST'});if(r.job)applyPublishJobs([r.job],SHOP.id);toast(r.job?.status==='sent'?'Đã đăng bài.':'Đã cập nhật hàng đợi.');}catch(e){if(e.job)applyPublishJobs([e.job],SHOP.id);toast(e.message);}return;}const realChs=p.channels.filter(id=>{const c=chById(id);return c&&c.real&&c.provider==='zalo'});if(!realChs.length)return;const content=(p.content||'').trim();if(!content){p.status='failed';p.error='Thiếu nội dung văn bản để đăng';save();render();return toast('Đăng thất bại: thiếu nội dung.')}const images=realImages(p.media);toast('Đang đăng lên Zalo OA...');let okCount=0,lastErr='';for(const id of realChs){const text=((p.custom&&p.custom[id]&&p.custom[id].text)||content).trim();try{const r=await zaloPublishDraft(text,'',images,p.publishKey||(p.publishKey=crypto.randomUUID()));if(r&&r.ok)okCount++;else lastErr='Zalo không xác nhận bài viết.'}catch(e){lastErr=(e&&e.message)||'Đăng thất bại.'}}if(okCount){p.status='published';p.error=null;p.time=Date.now();realChs.forEach(id=>{if(!p.metrics[id])p.metrics[id]={views:0,likes:0,comments:0,shares:0}});toast(lastErr?('Đã đăng '+okCount+'/'+realChs.length+' kênh Zalo. '+lastErr):'Đã đăng bài lên Zalo OA.')}else{p.status='failed';p.error=lastErr;toast('Đăng Zalo thất bại: '+lastErr)}save();render()}
 // Đồng bộ trạng thái lịch đăng thật từ máy chủ (cron đã đăng/thất bại) vào các bài local mang schedId.
 async function scheduledLoad(){if(!managedApp()||!APP_SCOPE||!SHOP.ready)return;let list=[];try{const r=await cloudRequest('/channels/scheduled');list=Array.isArray(r&&r.scheduled)?r.scheduled:[]}catch(e){return}const byId={};list.forEach(s=>{if(s&&s.id)byId[s.id]=s});let ch=false;S.posts.forEach(p=>{if(!p.schedId)return;const s=byId[p.schedId];if(!s)return;if(s.status==='posted'&&p.status!=='published'){p.status='published';p.error=null;if(s.url)p.url=s.url;(p.channels||[]).forEach(id=>{const c=chById(id);if(c&&c.real&&!p.metrics[id])p.metrics[id]={views:0,likes:0,comments:0,shares:0}});ch=true}else if(s.status==='failed'&&p.status!=='failed'){p.status='failed';p.error=s.error||'Đăng theo lịch thất bại.';ch=true}else if(s.status==='scheduled'&&p.status!=='scheduled'&&p.status!=='published'){p.status='scheduled';ch=true}});if(ch){save();if(route==='posts'||route==='calendar')render()}}
 V.hashtags=()=>{$('#view').innerHTML=`<div class="card"><h3>Tạo bộ hashtag</h3><div class="grid g2"><div><label>Tên bộ</label><input id="hs_n" placeholder="VD: Đại lý cước"></div><div><label>Hashtag (cách nhau bởi dấu cách)</label><input id="hs_t" placeholder="#ootd #fashion"></div></div><div style="margin-top:10px"><button class="btn pri" onclick="addHs()">Thêm bộ hashtag</button></div></div>${S.hashtags.map(h=>`<div class="card row" style="justify-content:space-between"><div><b>${esc(h.name)}</b><div>${h.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div></div><button class="btn sm danger" onclick="S.hashtags=S.hashtags.filter(x=>x.id!=='${h.id}');save();V.hashtags()">Xóa</button></div>`).join('')}`}

@@ -362,3 +362,42 @@ test('immediate Zalo rate-limit responses retain the common job for later succes
  r.w.applyPublishJobs([{id:'pj_retry',status:'sent',kind:'photo',attempts:2}],'shop');assert.equal(r.read('S.posts[0].status'),'published');
  }finally{r.close();}
 });
+
+test('composer loads connected Facebook channels without overwriting the draft and enables publishing',async()=>{
+ const r=runtime({fetchImpl:async(path)=>path==='/channels'?Response.json({channels:[]}):path==='/channels/all/accounts'?Response.json({accounts:[{id:'fb-a',provider:'facebook',name:'ShopTrack',targetId:'123',status:'active'},{id:'fb-old',provider:'facebook',name:'Revoked',status:'revoked'}]}):Response.json(session)});
+ try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';D.content='Keep my draft';D.media=[{type:'image/png',thumb:'data:image/png;base64,iVBORw0KGgo='}]");await r.w.channelsLoad();
+ assert.equal(r.read('D.content'),'Keep my draft');assert.equal(r.read('D.media.length'),1);
+ assert.equal(r.read('S.channels.filter(c=>c.connected&&c.pf===\"facebook\").length'),1);
+ r.w.selAll(1);assert.equal(r.w.document.querySelector('#sub').disabled,false);assert.match(r.w.document.querySelector('#chlist').textContent,/ShopTrack/);
+ }finally{r.close();}
+});
+test('Facebook composer confirms exact channel and sends all photos with stable idempotency while blocking double clicks',async()=>{
+ const pending=deferred(),sent=[];let confirmations=0;
+ const r=runtime({fetchImpl:async(path,opts)=>{if(path==='/channels/all/jobs'&&opts.method==='POST'){sent.push(opts);await pending.promise;return Response.json({ok:true,job:{id:'pj_fb',status:'sent',url:'https://www.facebook.com/123_9'},url:'https://www.facebook.com/123_9'});}return Response.json(session);}});
+ try{await settle();r.w.crypto.randomUUID=()=> 'stable-facebook-composer-key';r.w.confirm=msg=>{confirmations++;assert.match(msg,/ShopTrack/);return true;};
+ r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.operate'];S.channels=[{id:'real_fb',accountId:'fb-a',pf:'facebook',provider:'facebook',real:true,name:'ShopTrack',connected:true}];D.content='Caption';D.channels=['real_fb'];D.media=[{type:'image/png',thumb:'data:image/png;base64,iVBORw0KGgo='},{type:'image/jpeg',thumb:'data:image/jpeg;base64,/9j/AA=='}]");
+ const first=r.w.submitPostReal(['real_fb']);await settle();await r.w.submitPostReal(['real_fb']);assert.equal(sent.length,1);assert.equal(confirmations,1);
+ const payload=JSON.parse(sent[0].body);assert.equal(payload.accountId,'fb-a');assert.equal(payload.images.length,2);assert.equal(payload.text,'Caption');assert.equal(sent[0].headers['Idempotency-Key'],'stable-facebook-composer-key');
+ pending.resolve();await first;assert.equal(r.read('S.posts[0].status'),'published');assert.equal(r.read('S.posts[0].url'),'https://www.facebook.com/123_9');assert.equal(r.read('D.content'),'');
+ }finally{r.close();}
+});
+
+test('channel loading from a previous shop never clears the new shop connections',async()=>{
+ const pending=deferred(),r=runtime({fetchImpl:async(path)=>path==='/channels'?pending.promise:Response.json({accounts:[]})});
+ try{await settle();r.read("SHOP.ready=true;SHOP.id='shop-a'");const load=r.w.channelsLoad();r.read("SHOP.id='shop-b';REALCH=[{id:'fb-b',name:'New shop',provider:'facebook',status:'connected'}];syncRealChannels()");pending.resolve(Response.json({channels:[]}));await load;assert.equal(r.read('S.channels[0].name'),'New shop');}finally{r.close();}
+});
+test('a declined confirmation and unsupported video never send a composer job',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';S.channels=[{id:'fb',accountId:'a',pf:'facebook',provider:'facebook',name:'Page',connected:true,real:true}];D.content='Keep';D.channels=['fb']");r.w.confirm=()=>false;await r.w.submitPostReal(['fb']);r.read("D.media=[{type:'video/mp4',thumb:'poster'}]");r.w.confirm=()=>true;await r.w.submitPostReal(['fb']);assert.equal(r.requests.filter(x=>x.path==='/channels/all/jobs'&&x.method==='POST').length,0);assert.equal(r.read('D.content'),'Keep');}finally{r.close();}
+});
+test('partial channel delivery never marks a multi-channel post fully published',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.id='shop';S.posts=[{id:'post',jobs:[{id:'one',status:'pending'},{id:'two',status:'pending'}],status:'scheduled'}]");r.w.applyPublishJobs([{id:'one',status:'sent',url:'https://example.com/post'}],'shop');assert.equal(r.read('S.posts[0].status'),'scheduled');r.w.applyPublishJobs([{id:'two',status:'unknown'}],'shop');assert.equal(r.read('S.posts[0].status'),'unknown');r.w.applyPublishJobs([{id:'two',status:'sent'}],'shop');assert.equal(r.read('S.posts[0].status'),'published');}finally{r.close();}
+});
+
+test('mixed Facebook and Zalo composer channels retain both backend account IDs',async()=>{
+ const r=runtime({fetchImpl:async(path)=>path==='/channels'?Response.json({channels:[{provider:'zalo',external_id:'456',status:'connected',name:'OA'}]}):path==='/channels/all/accounts'?Response.json({accounts:[{id:'zalo-a',provider:'zalo',targetId:'456',status:'active'},{id:'fb-a',provider:'facebook',name:'Page',targetId:'123',status:'active'}]}):Response.json(session)});
+ try{await settle();r.read("SHOP.ready=true;SHOP.id='shop'");await r.w.channelsLoad();assert.equal(r.read('S.channels.find(c=>c.pf===\"zalo\").accountId'),'zalo-a');assert.equal(r.read('S.channels.find(c=>c.pf===\"facebook\").accountId'),'fb-a');}finally{r.close();}
+});
+test('published history uses the submitted snapshot while keeping edits made during delivery',async()=>{
+ const pending=deferred(),r=runtime({fetchImpl:async(path,opts)=>path==='/channels/all/jobs'&&opts.method==='POST'?pending.promise:Response.json(session)});
+ try{await settle();r.w.confirm=()=>true;r.w.crypto.randomUUID=()=> 'immutable-submission-test-key';r.read("SHOP.ready=true;SHOP.id='shop';S.channels=[{id:'fb',accountId:'a',pf:'facebook',provider:'facebook',name:'Page',connected:true,real:true}];D.content='Submitted';D.channels=['fb']");const send=r.w.submitPostReal(['fb']);await settle();r.read("D.content='New unsent edit';D.media=[{type:'image/png',thumb:'new-photo'}]");pending.resolve(Response.json({ok:true,job:{id:'sent-snapshot',status:'sent'}}));await send;assert.equal(r.read('S.posts[0].content'),'Submitted');assert.equal(r.read('S.posts[0].media.length'),0);assert.equal(r.read('D.content'),'New unsent edit');assert.equal(r.read('D.media.length'),1);}finally{r.close();}
+});

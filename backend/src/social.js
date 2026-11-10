@@ -105,7 +105,7 @@ export async function handleSocial(req,env,who,json){
   try{validatePost(a.provider,data);}catch(e){return fail(json,e.status||400,e.code||'invalid_input');}
   const scheduled=req.headers.get('X-Channel-Schedule')==='1';
   if(scheduled&&(!Number.isFinite(data.runAt)||Math.floor(data.runAt)<=now()))return fail(json,400,'invalid_schedule');
-  const payload=JSON.stringify({externalId:a.external_id,text:data.text,photoUrl:data.kind==='photo'?(data.photoUrl||null):null,...(a.provider==='zalo'?{title:data.title||'',images:data.images||[],author:data.author||ctx.shop.name}:{} )}),t=now();
+  const payload=JSON.stringify({externalId:a.external_id,text:data.text,photoUrl:data.kind==='photo'?(data.photoUrl||null):null,...(a.provider==='facebook'&&data.kind==='photo'&&data.images!==undefined?{images:data.images}:{}),...(a.provider==='zalo'?{title:data.title||'',images:data.images||[],author:data.author||ctx.shop.name}:{} )}),t=now();
   await db.prepare("INSERT OR IGNORE INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at,next_attempt_at) VALUES(?,?,?,?,?,?,'pending',?,?,?,?)").bind('pj_'+crypto.randomUUID(),shop,a.id,idem,data.kind,payload,who.owner,t,t,scheduled?Math.floor(data.runAt):0).run();
   const j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND idempotency_key=?').bind(shop,idem).first();
   if(j.account_id!==a.id||j.kind!==data.kind||j.payload!==payload||(scheduled&&j.next_attempt_at!==Math.floor(data.runAt)))return fail(json,409,'idempotency_conflict');

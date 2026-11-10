@@ -672,9 +672,9 @@ async function socialAccountsLive(){
  root.innerHTML='<div class="card"><h3>Kênh đa nền tảng</h3><p>Đang tải kết nối từ máy chủ...</p></div>';
  try {
   const shopAtStart=SHOP.id;
-  const [accounts,jobs,providers,zalo]=await Promise.all([socialRequest('accounts'),socialRequest('jobs'),socialRequest('providers'),cloudRequest('/channels')]);
+  const [accounts,jobs,providers,zalo,google,uploads]=await Promise.all([socialRequest('accounts'),socialRequest('jobs'),socialRequest('providers'),cloudRequest('/channels'),googleRequest('accounts'),googleRequest('uploads')]);
   if(location.hash!=='#accounts'||SHOP.id!==shopAtStart)return;
-  root.innerHTML=`<div class="card"><h3>Zalo OA</h3><p class="small muted">Đăng nhập tài khoản Zalo đang quản trị OA, chọn OA và xác nhận cấp quyền. Hệ thống tự lưu và làm mới phiên kết nối; không cần sao chép token.</p><button class="btn pri" onclick="zaloConnect()" ${zalo.setup?.zalo?.configured&&zalo.setup?.zalo?.canConnect?'':'disabled'}>Kết nối / cấp lại quyền Zalo OA</button>${!zalo.setup?.zalo?.configured?'<p class="small muted">Kết nối Zalo đang được quản trị viên cấu hình.</p>':''}${!zalo.setup?.zalo?.canConnect?'<p class="small muted">Chỉ chủ shop hoặc quản lý được kết nối OA.</p>':''}<p class="small muted">Nếu Zalo báo -14068, tài khoản hiện tại không có OA phù hợp. <a href="https://oa.zalo.me/manage/oa" target="_blank" rel="noopener">Kiểm tra OA của tôi</a> rồi đăng nhập tài khoản quản trị OA để kết nối lại.</p>${(zalo.channels||[]).some(c=>c.provider==='zalo')&&zalo.setup?.zalo?.canConnect?'<button class="btn danger" onclick="zaloDisconnect()">Ngắt kết nối Zalo OA</button>':''}<p>${(zalo.channels||[]).filter(c=>c.provider==='zalo').map(c=>esc(c.name||'Zalo OA')+' · '+(c.needsReconnect?'Cần cấp quyền lại':c.status==='connected'?'Đã kết nối':'Chưa kết nối')).join(', ')||'Chưa có OA được kết nối cho shop này.'}</p></div><div class="card"><h3>Kết nối Facebook & Instagram</h3><p class="small muted">Ủy quyền qua Meta để cấp quyền đăng bài lên Facebook Page và Instagram Professional đã liên kết Page. Không hỗ trợ đăng trang cá nhân.</p><button class="btn pri" onclick="socialConnectMeta()" ${providers.facebook.enabled?"":"disabled title=\"Meta App chưa được cấu hình ở backend\""}>Kết nối Facebook / Instagram</button>${providers.facebook.enabled?"":"<p class=\"small muted\">Kết nối Facebook / Instagram đang được quản trị viên cấu hình.</p>"}</div><div class="card"><h3>Kết nối Telegram Bot thật</h3><p class="small muted">Bot phải được cấp quyền đăng trong nhóm hoặc kênh. Token chỉ gửi tới máy chủ và không hiển thị lại.</p>
+  root.innerHTML=`<div class="card"><h3>Zalo OA</h3><p class="small muted">Đăng nhập tài khoản Zalo đang quản trị OA, chọn OA và xác nhận cấp quyền. Hệ thống tự lưu và làm mới phiên kết nối; không cần sao chép token.</p><button class="btn pri" onclick="zaloConnect()" ${zalo.setup?.zalo?.configured&&zalo.setup?.zalo?.canConnect?'':'disabled'}>Kết nối / cấp lại quyền Zalo OA</button>${!zalo.setup?.zalo?.configured?'<p class="small muted">Kết nối Zalo đang được quản trị viên cấu hình.</p>':''}${!zalo.setup?.zalo?.canConnect?'<p class="small muted">Chỉ chủ shop hoặc quản lý được kết nối OA.</p>':''}<p class="small muted">Nếu Zalo báo -14068, tài khoản hiện tại không có OA phù hợp. <a href="https://oa.zalo.me/manage/oa" target="_blank" rel="noopener">Kiểm tra OA của tôi</a> rồi đăng nhập tài khoản quản trị OA để kết nối lại.</p>${(zalo.channels||[]).some(c=>c.provider==='zalo')&&zalo.setup?.zalo?.canConnect?'<button class="btn danger" onclick="zaloDisconnect()">Ngắt kết nối Zalo OA</button>':''}<p>${(zalo.channels||[]).filter(c=>c.provider==='zalo').map(c=>esc(c.name||'Zalo OA')+' · '+(c.needsReconnect?'Cần cấp quyền lại':c.status==='connected'?'Đã kết nối':'Chưa kết nối')).join(', ')||'Chưa có OA được kết nối cho shop này.'}</p></div><div class="card"><h3>Kết nối Facebook & Instagram</h3><p class="small muted">Ủy quyền qua Meta để cấp quyền đăng bài lên Facebook Page và Instagram Professional đã liên kết Page. Không hỗ trợ đăng trang cá nhân.</p><button class="btn pri" onclick="socialConnectMeta()" ${providers.facebook.enabled?"":"disabled title=\"Meta App chưa được cấu hình ở backend\""}>Kết nối Facebook / Instagram</button>${providers.facebook.enabled?"":"<p class=\"small muted\">Kết nối Facebook / Instagram đang được quản trị viên cấu hình.</p>"}</div>${googleSection(google,uploads)}<div class="card"><h3>Kết nối Telegram Bot thật</h3><p class="small muted">Bot phải được cấp quyền đăng trong nhóm hoặc kênh. Token chỉ gửi tới máy chủ và không hiển thị lại.</p>
   <label>Telegram Bot Token</label><input id="tg_token" type="password" autocomplete="off" placeholder="Bot Token từ BotFather">
   <label>Chat ID hoặc @channelusername</label><input id="tg_chat" placeholder="@kenh_cua_ban">
   <div class="row" style="margin-top:10px"><button class="btn pri" onclick="socialConnectTelegram()">Kết nối Telegram</button><button class="btn" onclick="socialAccountsLive()">Làm mới</button></div></div>
@@ -686,7 +686,7 @@ async function socialAccountsLive(){
   <button class="btn pri" onclick="socialPublishTelegram()">Đăng lên kênh đã chọn</button>
   <p class="small muted">Zalo và Instagram yêu cầu ảnh HTTPS. Facebook Page có thể đăng văn bản hoặc ảnh. Chỉ đăng sau khi bạn xác nhận, không có đăng tự động.</p></div>
   <div class="card"><h3>Lịch sử đăng bài</h3><div id="live_job_history">${jobHistoryHtml(jobs.jobs)}</div></div>
-  <div class="card small muted">TikTok và các mạng khác chưa được cấp API đăng bài thật; không hiển thị kết nối giả.</div>`;
+  <div class="card small muted">TikTok, Threads, LinkedIn và X chưa có kết nối đăng bài trong bản này. Google/YouTube dùng phần tải video riêng ở trên.</div>`;
  }catch(e){if(location.hash==='#accounts')root.innerHTML='<div class="card"><h3>Không tải được kênh thật</h3><p>'+esc(e.message)+'</p><button class="btn" onclick="socialAccountsLive()">Thử lại</button></div>';}
 }
 async function zaloDisconnect(){
@@ -723,6 +723,50 @@ async function startJobWatch(){
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)stopJobWatch();else startJobWatch();});
 window.addEventListener('pagehide',stopJobWatch);
+
+async function googleRequest(path,options={}){
+ const r=await fetch('/api/social/google/'+path,{credentials:'same-origin',redirect:'error',signal:AbortSignal.timeout(90000),...options,headers:{...shopHeaders(),'X-ShopAI-User-Scope':APP_SCOPE,...(options.body&&!(options.body instanceof Blob)?{'Content-Type':'application/json'}:{}),...(options.headers||{})}});
+ const data=await r.json().catch(()=>({}));
+ if(!r.ok){const e=Error(data.error||'Không thực hiện được kết nối Google');e.status=r.status;e.deliveryStatus=data.status;throw e;}return data;
+}
+function googleSection(google,history){
+ const connected=google.accounts.filter(a=>a.status==='connected'),canConnect=shopCan('channels.configure_token'),canUpload=shopCan('channels.operate')||shopCan('drafts.publish');
+ return `<div class="card"><h3>Google / YouTube</h3><p class="small muted">Kết nối kênh YouTube để tải video. Chỉ đọc thông tin kênh và tải video bạn chọn; không truy cập Gmail hoặc Drive.</p>
+ <button class="btn pri" onclick="googleConnect()" ${google.configured&&canConnect?'':'disabled'}>Kết nối Google / YouTube</button>
+ ${!google.configured?'<p class="small muted">Quản trị viên cần hoàn tất cấu hình Google OAuth và bật YouTube Data API trước khi kết nối.</p>':''}
+ <p class="small muted"><a href="/privacy" target="_blank" rel="noopener">Quyền riêng tư</a> · <a href="/terms" target="_blank" rel="noopener">Điều khoản sử dụng</a> · <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Quản lý quyền trên Google</a></p>
+ ${google.accounts.map(a=>`<div class="ch"><div style="flex:1"><b>${esc(a.name)}</b><div class="small muted">YouTube · ${esc(a.targetId)} · ${esc(a.status==='connected'?'Đã kết nối':a.status==='revoked'?'Đã ngắt kết nối':'Cần cấp quyền lại')}</div></div>${a.status!=='revoked'&&canConnect?`<button class="btn sm danger" onclick="googleDisconnect('${escAttr(a.id)}')">Ngắt kết nối YouTube</button>`:''}</div>`).join('')||'<p>Chưa có kênh YouTube được kết nối.</p>'}
+ ${connected.length&&canUpload?`<h3>Tải video lên YouTube</h3><label>Kênh YouTube</label><select id="yt_account">${connected.map(a=>`<option value="${escAttr(a.id)}">${esc(a.name)}</option>`).join('')}</select>
+ <label>Tiêu đề video</label><input id="yt_title" maxlength="100" placeholder="Tiêu đề video">
+ <label>Mô tả video</label><textarea id="yt_description" maxlength="5000"></textarea>
+ <label>Video (MP4, WebM hoặc MOV, tối đa 50 MB)</label><input id="yt_file" type="file" accept="video/mp4,video/webm,video/quicktime">
+ <label>Chế độ hiển thị</label><select id="yt_privacy"><option value="private">Riêng tư</option><option value="unlisted">Không công khai</option><option value="public">Công khai</option></select>
+ <label>Video có dành cho trẻ em không?</label><select id="yt_kids"><option value="">Chọn đối tượng của video</option><option value="false">Không dành cho trẻ em</option><option value="true">Dành cho trẻ em</option></select>
+ <p class="small muted">YouTube tiếp tục xử lý video sau khi nhận tệp. Kiểm tra YouTube Studio nếu cần; video không được tự lên lịch hoặc tự gửi lại khi chưa rõ kết quả.</p>
+ <button id="yt_upload" class="btn pri" onclick="googleUpload()">Tải video lên YouTube</button><p id="yt_status" role="status"></p>`:''}
+ <h3>Lịch sử tải video</h3>${history.uploads.map(j=>`<p>${esc(({sent:'YouTube đã xác nhận',processing:'Đang xử lý',unknown:'Chưa xác nhận; kiểm tra YouTube Studio trước khi tải lại',failed:'Tải thất bại'})[j.status]||j.status)}${j.videoId&&/^[\w-]{11}$/.test(j.videoId)?` · <a href="https://www.youtube.com/watch?v=${escAttr(j.videoId)}" target="_blank" rel="noopener">Xem video</a>`:''}</p>`).join('')||'<p class="small muted">Chưa có lượt tải video.</p>'}</div>`;
+}
+async function googleConnect(){
+ try{const r=await googleRequest('start',{method:'POST',body:'{}'}),url=new URL(r.authorizationUrl);if(url.origin!=='https://accounts.google.com')throw Error('Đường dẫn Google không hợp lệ');window.location.assign(url.toString());}catch(e){toast(e.message);}
+}
+async function googleDisconnect(id){
+ if(!confirm('Ngắt kết nối YouTube và xóa thông tin cấp quyền đã lưu trong shop? Video đã đăng trên YouTube vẫn được giữ.'))return;
+ try{await googleRequest('accounts/'+encodeURIComponent(id),{method:'DELETE'});socialAccountsLive();}catch(e){toast(e.message);}
+}
+async function googleUpload(){
+ const file=$('#yt_file')?.files[0],title=$('#yt_title')?.value.trim(),accountId=$('#yt_account')?.value,kids=$('#yt_kids')?.value;
+ if(!file||!title||!accountId||!['true','false'].includes(kids))return toast('Chọn kênh, video, tiêu đề và đối tượng người xem.');
+ if(file.size>50*1024*1024||!['video/mp4','video/webm','video/quicktime'].includes(file.type))return toast('Chọn video MP4, WebM hoặc MOV tối đa 50 MB.');
+ const privacy=$('#yt_privacy').value,description=$('#yt_description').value;
+ if(!confirm('Tải video "'+title+'" lên kênh YouTube đã chọn với chế độ '+$('#yt_privacy').selectedOptions[0].text+'?'))return;
+ const button=$('#yt_upload'),status=$('#yt_status');button.disabled=true;status.textContent='Đang gửi video tới YouTube…';
+ const attempt=window.googleUploadAttempt;
+ const key=attempt&&attempt.shop===SHOP.id&&attempt.accountId===accountId?attempt.key:crypto.randomUUID();
+ window.googleUploadAttempt={shop:SHOP.id,accountId,key};
+ const query=new URLSearchParams({accountId,title,description,privacy,madeForKids:kids});
+ try{const r=await googleRequest('upload?'+query,{method:'POST',headers:{'Content-Type':file.type,'Idempotency-Key':key},body:file});window.googleUploadAttempt=null;status.textContent='YouTube đã xác nhận video '+r.videoId;toast(status.textContent);socialAccountsLive();}
+ catch(e){if(e.deliveryStatus==='failed')window.googleUploadAttempt=null;status.textContent='Chưa xác nhận tải thành công. Kiểm tra lịch sử và YouTube Studio trước khi gửi lại. '+e.message;button.disabled=false;}
+}
 
 async function socialConnectMeta(){
  try{const result=await socialRequest('meta/start',{method:'POST',body:'{}'});const uri=new URL(result.authorizationUrl);if(uri.protocol!=='https:'||uri.hostname!=='www.facebook.com')throw Error('Đường dẫn xác thực không hợp lệ');window.location.assign(uri.toString());}

@@ -11,14 +11,18 @@ const privacy = page('Chính sách quyền riêng tư', `
 <h2>1. Dữ liệu chúng tôi thu thập</h2>
 <ul>
 <li><b>Tài khoản ShopPost:</b> địa chỉ email, tên hiển thị, mật khẩu đã băm (không lưu mật khẩu gốc), thông tin shop và vai trò thành viên.</li>
-<li><b>Kết nối kênh (Facebook Page, Instagram Professional, Zalo OA, Telegram):</b> khi Chủ shop hoặc Quản lý chủ động bấm kết nối, ShopPost nhận mã truy cập (access token) do nền tảng cấp, mã định danh và tên của Page/tài khoản/OA được chọn. ShopPost không lấy quyền đăng lên trang cá nhân Facebook hoặc Instagram cá nhân.</li>
-<li><b>Nội dung bài đăng:</b> văn bản, hình ảnh, lịch đăng và kết quả đăng (mã bài viết, đường dẫn bài viết, trạng thái lỗi) do người dùng tạo trong ShopPost.</li>
+<li><b>Kết nối kênh (Facebook Page, Instagram Professional, Zalo OA, Telegram, YouTube):</b> khi Chủ shop hoặc Quản lý chủ động bấm kết nối, ShopPost nhận mã truy cập (access token) do nền tảng cấp, mã định danh và tên của Page/tài khoản/OA được chọn. ShopPost không lấy quyền đăng lên trang cá nhân Facebook hoặc Instagram cá nhân.</li>
+<li><b>Nội dung bài đăng:</b> văn bản, hình ảnh, video, lịch đăng và kết quả đăng (mã bài viết, đường dẫn bài viết, trạng thái lỗi) do người dùng tạo trong ShopPost.</li>
 <li><b>Nhật ký kỹ thuật:</b> nhật ký thao tác trong shop (ai kết nối, ai đăng bài) để bảo mật và hỗ trợ.</li>
 </ul>
 <h2>2. Mục đích sử dụng</h2>
 <p>Dữ liệu chỉ được dùng để cung cấp các chức năng người dùng yêu cầu: đăng nhập, hiển thị danh sách Page/tài khoản đã kết nối, đăng hoặc lên lịch bài viết lên đúng kênh người dùng chọn, và hiển thị kết quả đăng. ShopPost chỉ đăng bài khi người dùng xác nhận gửi hoặc đặt lịch; không tự đăng khi vừa kết nối. Chúng tôi không bán dữ liệu, không dùng dữ liệu từ Facebook/Instagram cho quảng cáo hoặc lập hồ sơ người dùng.</p>
 <h2>3. Dữ liệu nhận từ Meta (Facebook/Instagram)</h2>
 <p>Với các quyền pages_show_list, pages_read_engagement, pages_manage_posts, instagram_basic và instagram_content_publish, ShopPost chỉ đọc danh sách Page và tài khoản Instagram Professional liên kết mà người dùng quản lý, cùng thông tin cơ bản (tên, mã định danh) để người dùng chọn kênh, và tạo bài đăng mới theo yêu cầu của người dùng.</p>
+<h2>Google và YouTube</h2>
+<p>ShopPost sử dụng YouTube API Services. Khi bạn kết nối Google/YouTube, ShopPost chỉ nhận tên và mã kênh YouTube được bạn cấp quyền, cùng access token và refresh token để đọc thông tin kênh và tải video theo thao tác của bạn. ShopPost không yêu cầu quyền truy cập Gmail, Drive hoặc danh bạ Google.</p>
+<p>Video được truyền tới YouTube khi bạn xác nhận tải; ShopPost không lưu bản sao tệp video trên máy chủ. Bạn tự chọn tiêu đề, mô tả, đối tượng trẻ em và chế độ hiển thị. Mã kênh, tên kênh và kết quả tải được xóa sau 30 ngày nếu không được cập nhật; mã truy cập được xóa ngay khi ngắt kết nối trong ShopPost. Việc ngắt kết nối không xóa video đã tải lên YouTube.</p>
+<p>Bạn có thể thu hồi quyền của ShopPost tại <a href="https://myaccount.google.com/permissions">cài đặt quyền truy cập Google</a> và yêu cầu xóa dữ liệu theo hướng dẫn bên dưới. Xem <a href="https://policies.google.com/privacy">Chính sách quyền riêng tư Google</a> và <a href="https://www.youtube.com/t/terms">Điều khoản dịch vụ YouTube</a>. Việc sử dụng dữ liệu Google tuân theo Google API Services User Data Policy, bao gồm các yêu cầu Limited Use; không bán dữ liệu, không dùng để quảng cáo hoặc huấn luyện AI.</p>
 <h2>4. Lưu trữ và bảo mật</h2>
 <p>Dữ liệu được lưu trên hạ tầng Cloudflare. Mã truy cập của các kênh được mã hóa AES-256-GCM trước khi lưu và không bao giờ hiển thị lại trên giao diện. Kết nối luôn dùng HTTPS. Chỉ thành viên có quyền phù hợp trong shop mới xem hoặc đăng lên kênh của shop đó.</p>
 <h2>5. Chia sẻ dữ liệu</h2>
@@ -37,7 +41,7 @@ const terms = page('Điều khoản sử dụng', `
 <h2>2. Tài khoản</h2>
 <p>Bạn chịu trách nhiệm bảo mật tài khoản và mọi hoạt động thực hiện dưới tài khoản của mình. Chủ shop chịu trách nhiệm phân quyền cho thành viên trong shop.</p>
 <h2>3. Kết nối kênh mạng xã hội</h2>
-<p>Bạn chỉ được kết nối các Page, tài khoản hoặc OA mà bạn có quyền quản trị hợp pháp. Việc sử dụng các nền tảng đó vẫn tuân theo điều khoản riêng của từng nền tảng (Meta, Zalo, Telegram...). Bạn có thể ngắt kết nối bất cứ lúc nào trong mục Kênh.</p>
+<p>Bạn chỉ được kết nối các Page, tài khoản hoặc OA mà bạn có quyền quản trị hợp pháp. Việc sử dụng các nền tảng đó vẫn tuân theo điều khoản riêng của từng nền tảng (Meta, Zalo, Telegram...). Bạn có thể ngắt kết nối bất cứ lúc nào trong mục Kênh. Khi sử dụng tính năng YouTube, bạn cũng chịu ràng buộc bởi <a href="https://www.youtube.com/t/terms">Điều khoản dịch vụ YouTube</a>.</p>
 <h2>4. Nội dung</h2>
 <p>Bạn sở hữu và chịu trách nhiệm về nội dung đăng qua ShopPost, bao gồm nội dung do AI gợi ý mà bạn chọn sử dụng. Không dùng ShopPost để đăng nội dung vi phạm pháp luật, xâm phạm quyền của người khác, spam hoặc vi phạm chính sách của nền tảng.</p>
 <h2>5. Giới hạn trách nhiệm</h2>
@@ -50,12 +54,12 @@ const terms = page('Điều khoản sử dụng', `
 const deletion = page('Hướng dẫn xóa dữ liệu người dùng', `
 <p>Bạn có thể xóa dữ liệu của mình khỏi ShopPost theo một trong các cách sau.</p>
 <h2>1. Ngắt kết nối kênh ngay trong ShopPost</h2>
-<ol><li>Đăng nhập https://shoppost.net.</li><li>Mở mục <b>Kênh</b>.</li><li>Chọn kênh (Facebook Page, Instagram, Zalo OA hoặc Telegram) và bấm <b>Ngắt kết nối</b>.</li></ol>
+<ol><li>Đăng nhập https://shoppost.net.</li><li>Mở mục <b>Kênh</b>.</li><li>Chọn kênh (Facebook Page, Instagram, Zalo OA, Telegram hoặc YouTube) và bấm <b>Ngắt kết nối</b>.</li></ol>
 <p>Mã truy cập của kênh bị xóa ngay lập tức và các bài đang chờ đăng lên kênh đó bị hủy.</p>
 <h2>2. Gỡ ShopPost khỏi tài khoản Facebook</h2>
 <ol><li>Trên Facebook, vào <b>Cài đặt và quyền riêng tư → Cài đặt → Ứng dụng và trang web</b>.</li><li>Chọn <b>Shoppost</b> và bấm <b>Gỡ</b>.</li></ol>
 <p>Mã truy cập ShopPost đang giữ sẽ mất hiệu lực; bạn có thể gửi thêm yêu cầu ở mục 3 để xóa toàn bộ dữ liệu liên quan.</p>
-<h2>3. Yêu cầu xóa toàn bộ tài khoản và dữ liệu</h2>
+<h2>Thu hồi quyền Google/YouTube</h2><p>Trong mục Kênh, bấm <b>Ngắt kết nối YouTube</b> để xóa token của kênh khỏi ShopPost. Để thu hồi toàn bộ quyền đã cấp cho ứng dụng tại Google, mở <a href="https://myaccount.google.com/permissions">cài đặt quyền truy cập Google</a> và gỡ ShopPost. Video đã tải vẫn ở trên YouTube; bạn có thể quản lý hoặc xóa trong YouTube Studio.</p><h2>3. Yêu cầu xóa toàn bộ tài khoản và dữ liệu</h2>
 <p>Gửi email tới <a href="mailto:${CONTACT}?subject=Yeu%20cau%20xoa%20du%20lieu%20ShopPost">${CONTACT}</a> với tiêu đề "Yêu cầu xóa dữ liệu ShopPost", ghi rõ email đăng nhập ShopPost (và tên Page/tài khoản đã kết nối nếu có). Chúng tôi xác minh quyền sở hữu, xóa tài khoản, mã truy cập, kết nối kênh và nội dung bài đăng liên quan trong vòng 30 ngày, rồi phản hồi xác nhận qua email.</p>`);
 
 export const LEGAL_PAGES = { '/privacy': privacy, '/terms': terms, '/data-deletion': deletion };

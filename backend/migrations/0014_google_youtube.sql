@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS google_oauth_states(state_hash TEXT PRIMARY KEY,shop_id TEXT NOT NULL,actor TEXT NOT NULL,verifier TEXT NOT NULL,expires_at INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending');
+CREATE TABLE IF NOT EXISTS google_channels(id TEXT PRIMARY KEY,shop_id TEXT NOT NULL,external_id TEXT NOT NULL,name TEXT NOT NULL,credential TEXT NOT NULL,credential_iv TEXT NOT NULL,status TEXT NOT NULL,updated_at INTEGER NOT NULL,UNIQUE(shop_id,external_id));
+CREATE INDEX IF NOT EXISTS google_channels_shop ON google_channels(shop_id,status);
+CREATE TABLE IF NOT EXISTS google_uploads(id TEXT PRIMARY KEY,shop_id TEXT NOT NULL,account_id TEXT NOT NULL,idempotency_key TEXT NOT NULL,fingerprint TEXT NOT NULL,status TEXT NOT NULL,video_id TEXT,error_code TEXT,created_at INTEGER NOT NULL,UNIQUE(shop_id,idempotency_key));

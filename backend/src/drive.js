@@ -29,6 +29,8 @@ const tokenRequest=(env,fields)=>providerJSON('https://oauth2.googleapis.com/tok
 const authHeaders=token=>({Authorization:'Bearer '+token});
 async function accessToken(env,row){
  let token=JSON.parse(await decryptToken(env,row.credential,row.credential_iv));
+ // Legacy grants derive a stable private generation; new authorizations always use a random ID.
+ if(!token.connectionId)token.connectionId='legacy_'+await hash(token.refreshToken);
  if(token.expiresAt>now()+90)return token.accessToken;
  const fresh=await tokenRequest(env,{grant_type:'refresh_token',refresh_token:token.refreshToken});
  if(typeof fresh.access_token!=='string'||!(fresh.expires_in>0))throw problem('drive_refresh_failed');

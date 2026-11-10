@@ -1,3 +1,5 @@
+import {handleMessaging,handleReplyWebhook,runPendingReplies} from './reply-messaging.js';
+import {handleReplies} from './replies.js';
 import { handleDrive } from './drive.js';
 import { handleSocial } from './social.js';
 import { cleanupGoogleData } from './google.js';
@@ -67,13 +69,14 @@ export default {
   async scheduled(event, env, ctx) {
     if (!env.DB) return;
     ctx.waitUntil(Promise.all([
+      runPendingReplies(env).catch(() => console.error(JSON.stringify({event:"replies.cron",code:"processing_failed"}))),
       cleanupGoogleData(env).catch(() => console.error(JSON.stringify({event:'google.cleanup',code:'cleanup_failed'}))),
       runDueScheduledPosts(env).then(result => console.info(JSON.stringify({event:'publish.cron',processed:result.processed}))).catch(() => console.error(JSON.stringify({event:'publish.cron',code:'scheduler_failed'}))),
       // Mỗi giờ một lần: tự phát hiện Instagram vừa được liên kết với Trang Facebook đã kết nối và đánh dấu Trang có token bị thu hồi.
       (new Date(event?.scheduledTime || Date.now()).getUTCMinutes() < 5 ? syncInstagramFromPages(env, env.DB).then(result => console.info(JSON.stringify({event:'meta.ig_sync',pages:result.pages,connected:result.connected,reauth:result.reauth,errors:result.errors}))) : Promise.resolve()).catch(() => console.error(JSON.stringify({event:'meta.ig_sync',code:'sync_failed'})))
     ]));
   },
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const origin = request.headers.get('Origin');
     const allowed = (env.ALLOWED_ORIGINS || '').split(',').map(x => x.trim()).filter(Boolean);
     const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'Vary': 'Origin', 'X-Content-Type-Options': 'nosniff', 'Strict-Transport-Security': 'max-age=15552000; includeSubDomains', 'X-Frame-Options': 'DENY', 'Permissions-Policy': 'geolocation=(), microphone=(), camera=()' };
@@ -81,6 +84,7 @@ export default {
     const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), { status, headers: { ...headers, ...extra } });
     if (origin && origin !== new URL(request.url).origin && !allowed.includes(origin)) return json({ error: 'Nguồn truy cập không được phép.' }, 403);
     const path = new URL(request.url).pathname;
+    if(path.startsWith('/webhooks/replies/'))return handleReplyWebhook(request,env,ctx);
     if(path.startsWith('/media/zalo/'))return publicZaloMedia(request,env);
     const legal = legalResponse(path, request.method);
     if (legal) return legal;
@@ -112,6 +116,8 @@ export default {
       if (!who.owner) return json({ error: 'Thiếu định danh người dùng.' }, 403);
       const expectedScope = request.headers.get('X-ShopAI-User-Scope');
       if (expectedScope && expectedScope !== await scopeFor(who.owner)) return json({ code: 'ACCOUNT_CHANGED', error: 'Tài khoản đã thay đổi. Tải lại trang trước khi tiếp tục.' }, 403);
+      if (path==='/api/replies/config'||path==='/api/replies/preview') return handleReplies(request, env, who, json);
+      if (path.startsWith('/api/replies/')) return handleMessaging(request,env,who,json);
       if (path.startsWith('/api/library/drive/')) return handleDrive(request, env, who, json);
       if (path.startsWith('/api/social/')) return handleSocial(request, env, who, json);
       return handleApi(request, env, who, json);
@@ -148,7 +154,7 @@ export default {
         try { const ctx = await resolveShop(env, who, request); if (ctx.error) shopError = { code: ctx.code, error: ctx.error }; else shop = { id: ctx.shop.id, name: ctx.shop.name, role: ctx.membership.role, canPublish: ctx.membership.can_publish, permissions: ctx.permissions }; }
         catch { shopError = { code: 'shop_unavailable', error: 'Không thể tải thông tin shop lúc này.' }; }
       }
-      return json({ userScope: await scopeFor(owner), auth: who.via, account: who.via === 'session' ? { provider: who.provider, name: who.name } : null, admin: isPlatformAdmin(env, who), shop, shopError, capabilities: { ai: true, drafts: Boolean(env.DB), publishing: Boolean(env.DB), scheduling: Boolean(env.DB), inbox: false }, version: env.CF_VERSION_METADATA?.id || null, release: env.RELEASE_SHA || null });
+      return json({ userScope: await scopeFor(owner), auth: who.via, account: who.via === 'session' ? { provider: who.provider, name: who.name } : null, admin: isPlatformAdmin(env, who), shop, shopError, capabilities: { ai: true, drafts: Boolean(env.DB), publishing: Boolean(env.DB), scheduling: Boolean(env.DB), inbox: Boolean(env.DB) }, version: env.CF_VERSION_METADATA?.id || null, release: env.RELEASE_SHA || null });
     }
     if (path.startsWith('/auth/')) return handleAuth(request, env, { json, headers, accessUser: async () => Boolean(request.headers.get('Cf-Access-Jwt-Assertion')) && await authenticate(request, env) });
     // Giao diện và API cùng origin; cần Access JWT hợp lệ hoặc phiên đăng nhập, nếu không thì hiện trang đăng nhập.

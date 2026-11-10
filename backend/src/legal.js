@@ -1,7 +1,7 @@
 // Trang pháp lý công khai (không cần đăng nhập) — Meta yêu cầu cho App Review và chế độ Live:
 // Chính sách quyền riêng tư, Điều khoản sử dụng, Hướng dẫn xóa dữ liệu người dùng.
 const CONTACT = 'ct@pthub.vn';
-const UPDATED = '10/11/2026';
+const UPDATED = '11/11/2026';
 const css = 'body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;max-width:760px;margin:0 auto;padding:32px 20px 64px;color:#1f2937;line-height:1.65}h1{font-size:28px;margin:0 0 4px}h2{font-size:19px;margin:28px 0 8px}.muted{color:#6b7280;font-size:14px}nav{margin:0 0 24px;font-size:14px}nav a{margin-right:14px;color:#4f46e5}a{color:#4f46e5}ul,ol{padding-left:22px}';
 const nav = '<nav><a href="/">ShopPost</a><a href="/privacy">Chính sách quyền riêng tư</a><a href="/terms">Điều khoản sử dụng</a><a href="/data-deletion">Xóa dữ liệu</a></nav>';
 const page = (title, body) => '<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + title + ' · ShopPost</title><style>' + css + '</style></head><body>' + nav + '<h1>' + title + '</h1><p class="muted">Cập nhật lần cuối: ' + UPDATED + '</p>' + body + '<p class="muted" style="margin-top:40px">Liên hệ: <a href="mailto:' + CONTACT + '">' + CONTACT + '</a> · https://shoppost.net</p></body></html>';
@@ -26,10 +26,13 @@ const privacy = page('Chính sách quyền riêng tư', `
 <p>ShopPost sử dụng YouTube API Services. Khi bạn kết nối Google/YouTube, ShopPost chỉ nhận tên và mã kênh YouTube được bạn cấp quyền, cùng access token và refresh token để đọc thông tin kênh và tải video theo thao tác của bạn. Luồng YouTube không yêu cầu quyền truy cập Gmail, Drive hoặc danh bạ Google.</p>
 <p>Video được truyền tới YouTube khi bạn xác nhận tải; ShopPost không lưu bản sao tệp video trên máy chủ. Bạn tự chọn tiêu đề, mô tả, đối tượng trẻ em và chế độ hiển thị. Mã kênh, tên kênh và kết quả tải được xóa sau 30 ngày nếu không được cập nhật; mã truy cập được xóa ngay khi ngắt kết nối trong ShopPost. Việc ngắt kết nối không xóa video đã tải lên YouTube.</p>
 <p>Bạn có thể thu hồi quyền của ShopPost tại <a href="https://myaccount.google.com/permissions">cài đặt quyền truy cập Google</a> và yêu cầu xóa dữ liệu theo hướng dẫn bên dưới. Xem <a href="https://policies.google.com/privacy">Chính sách quyền riêng tư Google</a> và <a href="https://www.youtube.com/t/terms">Điều khoản dịch vụ YouTube</a>. Việc sử dụng dữ liệu Google tuân theo Google API Services User Data Policy, bao gồm các yêu cầu Limited Use; không bán dữ liệu, không dùng để quảng cáo hoặc huấn luyện AI.</p>
+<h2>Hộp thư và kịch bản trả lời</h2>
+<p>Khi chủ shop hoặc quản lý bật trả lời tự động cho một kênh hỗ trợ, ShopPost nhận mã định danh người gửi và hội thoại, tên hiển thị, nội dung và thời gian tin nhắn mới từ kênh đó. Máy chủ lưu hội thoại, nội dung trả lời, nhãn, người được giao và kết quả xử lý để chạy kịch bản, phục vụ hỗ trợ và tính thời gian phản hồi. Hệ thống không tự nhập lịch sử tin nhắn cũ. Lưu hoặc chạy thử kịch bản không tự bật gửi tin.</p>
+<p>Chỉ thành viên được cấp quyền mới đọc hội thoại; nhân viên hỗ trợ chỉ đọc hội thoại được giao. Tin nhắn được xử lý bằng quy tắc đã lưu, không tự gửi tới AI. Câu trả lời tự động được gửi về đúng kênh và người gửi đã liên hệ. Tắt kênh dừng xử lý mới trong ShopPost, không xóa tin đã gửi hay lịch sử; dữ liệu được giữ khi tài khoản hoạt động và có thể yêu cầu xóa theo mục 7.</p>
 <h2>4. Lưu trữ và bảo mật</h2>
 <p>Dữ liệu được lưu trên hạ tầng Cloudflare. Mã truy cập của các kênh được mã hóa AES-256-GCM trước khi lưu và không bao giờ hiển thị lại trên giao diện. Kết nối luôn dùng HTTPS. Chỉ thành viên có quyền phù hợp trong shop mới xem hoặc đăng lên kênh của shop đó.</p>
 <h2>5. Chia sẻ dữ liệu</h2>
-<p>ShopPost chỉ gửi nội dung bài đăng tới nền tảng mà người dùng chọn (ví dụ Facebook, Instagram, Zalo, Telegram) để thực hiện việc đăng. Chúng tôi không chia sẻ dữ liệu cho bên thứ ba khác, trừ khi pháp luật yêu cầu.</p>
+<p>ShopPost gửi nội dung bài đăng và câu trả lời theo kịch bản tới nền tảng mà người dùng chọn (ví dụ Facebook, Instagram, Zalo, Telegram) để thực hiện việc đăng. Chúng tôi không chia sẻ dữ liệu cho bên thứ ba khác, trừ khi pháp luật yêu cầu.</p>
 <h2>6. Thời gian lưu giữ</h2>
 <p>Mã truy cập bị xóa ngay khi người dùng ngắt kết nối kênh. Dữ liệu tài khoản và bài đăng được lưu trong thời gian tài khoản còn hoạt động và được xóa khi có yêu cầu theo mục 7.</p>
 <h2>7. Quyền của người dùng và xóa dữ liệu</h2>
@@ -63,7 +66,7 @@ const deletion = page('Hướng dẫn xóa dữ liệu người dùng', `
 <ol><li>Trên Facebook, vào <b>Cài đặt và quyền riêng tư → Cài đặt → Ứng dụng và trang web</b>.</li><li>Chọn <b>Shoppost</b> và bấm <b>Gỡ</b>.</li></ol>
 <p>Mã truy cập ShopPost đang giữ sẽ mất hiệu lực; bạn có thể gửi thêm yêu cầu ở mục 3 để xóa toàn bộ dữ liệu liên quan.</p>
 <h2>Ngắt Google Drive</h2><p>Mở Kho tài nguyên và bấm <b>Ngắt Drive</b> để xóa token Drive trong ShopPost. Xóa riêng các tệp đã nhập khỏi Kho và bộ nhớ trình duyệt nếu không muốn giữ bản sao.</p><h2>Thu hồi quyền Google/YouTube</h2><p>Trong mục Kênh, bấm <b>Ngắt kết nối YouTube</b> để xóa token của kênh khỏi ShopPost. Để thu hồi toàn bộ quyền đã cấp cho ứng dụng tại Google, mở <a href="https://myaccount.google.com/permissions">cài đặt quyền truy cập Google</a> và gỡ ShopPost. Video đã tải vẫn ở trên YouTube; bạn có thể quản lý hoặc xóa trong YouTube Studio.</p><h2>3. Yêu cầu xóa toàn bộ tài khoản và dữ liệu</h2>
-<p>Gửi email tới <a href="mailto:${CONTACT}?subject=Yeu%20cau%20xoa%20du%20lieu%20ShopPost">${CONTACT}</a> với tiêu đề "Yêu cầu xóa dữ liệu ShopPost", ghi rõ email đăng nhập ShopPost (và tên Page/tài khoản đã kết nối nếu có). Chúng tôi xác minh quyền sở hữu, xóa tài khoản, mã truy cập, kết nối kênh và nội dung bài đăng liên quan trong vòng 30 ngày, rồi phản hồi xác nhận qua email.</p>`);
+<p>Gửi email tới <a href="mailto:${CONTACT}?subject=Yeu%20cau%20xoa%20du%20lieu%20ShopPost">${CONTACT}</a> với tiêu đề "Yêu cầu xóa dữ liệu ShopPost", ghi rõ email đăng nhập ShopPost (và tên Page/tài khoản đã kết nối nếu có). Chúng tôi xác minh quyền sở hữu, xóa tài khoản, mã truy cập, kết nối kênh, hội thoại, kịch bản và nội dung bài đăng liên quan trong vòng 30 ngày, rồi phản hồi xác nhận qua email.</p>`);
 
 export const LEGAL_PAGES = { '/privacy': privacy, '/terms': terms, '/data-deletion': deletion };
 export function legalResponse(path, method) {

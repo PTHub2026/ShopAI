@@ -125,7 +125,7 @@ test('Session capabilities require a verified subject and separate local account
   assert.equal(first.status,200);
   const session=await first.json();
   assert.match(session.userScope,/^[a-f0-9]{64}$/);
-  assert.deepEqual(session.capabilities,{ai:true,drafts:true,publishing:true,scheduling:true,inbox:false});
+  assert.deepEqual(session.capabilities,{ai:true,drafts:true,publishing:true,scheduling:true,inbox:true});
   const second=await (await worker.fetch(request({path:'/session',method:'GET',jwt:await token({sub:'user-b'})}),env())).json();
   assert.notEqual(second.userScope,session.userScope);assert.equal(second.capabilities.drafts,false);
   const page=await worker.fetch(request({path:'/',method:'GET'}),env({FRONTEND_HTML:'<head></head><body></body>'}));

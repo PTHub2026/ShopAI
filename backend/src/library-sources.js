@@ -21,6 +21,7 @@ const fault=(code,status=502)=>Object.assign(Error(code),{code,status});
 const segment=value=>encodeURIComponent(value);
 const idOK=value=>typeof value==='string'&&/^[A-Za-z0-9_:/!+=.-]{1,600}$/.test(value)&&value!=='.'&&value!=='..';
 const file=(id,name,size,mimeType)=>({id,name:String(name||'Tệp').slice(0,240),size:Number(size),mimeType,downloadable:Number.isSafeInteger(Number(size))&&Number(size)>=0&&Number(size)<=MAX_DRIVE_BYTES});
+const mediaTypes={avif:'image/avif',gif:'image/gif',jpeg:'image/jpeg',jpg:'image/jpeg',m4v:'video/mp4',mov:'video/quicktime',mp4:'video/mp4',ogg:'video/ogg',ogv:'video/ogg',png:'image/png',webm:'video/webm',webp:'image/webp'};
 const safeFetch=(url,init)=>fetch(url,{...init,redirect:'manual',signal:AbortSignal.timeout(20000)});
 const bearer=token=>({Authorization:'Bearer '+token});
 async function requestJSON(url,init){
@@ -116,7 +117,12 @@ async function download(provider,token,id,folder){
   controller.enqueue(chunk);
  }}));
  const name=String(meta.name||'Tệp').replace(/[\x00-\x1f\x7f]/g,'').slice(0,240);
- return new Response(body,{headers:{'Content-Type':response.headers.get('content-type')||'application/octet-stream','Content-Disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(name),'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"}});
+ let contentType=response.headers.get('content-type')||'application/octet-stream';
+ if(provider==='dropbox'&&contentType.split(';',1)[0].trim().toLowerCase()==='application/octet-stream'){
+  const extension=name.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
+  contentType=mediaTypes[extension]||contentType;
+ }
+ return new Response(body,{headers:{'Content-Type':contentType,'Content-Disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(name),'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"}});
 }
 
 export async function handleLibrarySource(req,env,who,json){
@@ -187,7 +193,7 @@ export async function handleLibrarySource(req,env,who,json){
    const name=String(await identity(provider,token.access_token)).slice(0,100);
    const current=await resolveShop(env,who,scoped);
    if(current.error||current.shop.id!==key[1]||current.shop.status!=='active'||!current.can('channels.configure_token'))return fail('forbidden',403);
-   const enc=await encryptToken(env,JSON.stringify({access:token.access_token,refresh:token.refresh_token,expires:seconds()+Math.min(Number(token.expires_in),86400)}));
+   const enc=await encryptToken(env,JSON.stringify({generation:random(),access:token.access_token,refresh:token.refresh_token,expires:seconds()+Math.min(Number(token.expires_in),86400)}));
    const saved=await db.batch([
     db.prepare('INSERT INTO library_source_grants(provider,shop,actor,name,credential,iv) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM library_source_states WHERE id=? AND claimed=1 AND expires>?) ON CONFLICT(provider,shop,actor) DO UPDATE SET name=excluded.name,credential=excluded.credential,iv=excluded.iv').bind(...key,name,enc.cipher,enc.iv,state.id,seconds()),
     db.prepare('DELETE FROM library_source_states WHERE id=?').bind(state.id)
@@ -201,13 +207,21 @@ export async function handleLibrarySource(req,env,who,json){
   if(!row)return fail('source_connection_required',409);
   let token=JSON.parse(await decryptToken(env,row.credential,row.iv));
   if(token.expires<=seconds()+90){
+   const generation=token.generation||row.credential;
    const fresh=await tokenRequest(config,{grant_type:'refresh_token',refresh_token:token.refresh,...(provider==='dropbox'?{}:{scope:config.scope})});
    if(!fresh.access_token||!(fresh.expires_in>0))throw fault('source_reauthorize');
-   token={access:fresh.access_token,refresh:fresh.refresh_token||token.refresh,expires:seconds()+Math.min(Number(fresh.expires_in),86400)};
+   token={generation,access:fresh.access_token,refresh:fresh.refresh_token||token.refresh,expires:seconds()+Math.min(Number(fresh.expires_in),86400)};
    const enc=await encryptToken(env,JSON.stringify(token));
    const saved=await db.prepare('UPDATE library_source_grants SET credential=?,iv=? WHERE provider=? AND shop=? AND actor=? AND credential=?').bind(enc.cipher,enc.iv,...key,row.credential).run();
-   if(saved.meta.changes!==1)return fail('source_connection_changed',409);
-   row.credential=enc.cipher;
+   if(saved.meta.changes===1){
+    row.credential=enc.cipher;row.iv=enc.iv;
+   }else{
+    const current=await grant();
+    if(!current)return fail('source_connection_changed',409);
+    const cached=JSON.parse(await decryptToken(env,current.credential,current.iv));
+    if(cached.generation!==generation||cached.expires<=seconds()+90)return fail('source_connection_changed',409);
+    token=cached;row.credential=current.credential;row.iv=current.iv;
+   }
   }
   const result=action==='files'?await list(provider,token.access,url.searchParams):await download(provider,token.access,url.searchParams.get('id'),url.searchParams.get('folder'));
   const current=await resolveShop(env,who,req);

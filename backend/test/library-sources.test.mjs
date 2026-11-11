@@ -30,6 +30,7 @@ const callback=(source,auth)=>source+'/callback?state='+auth.searchParams.get('s
 const creds=scope=>Response.json({access_token:'PRIVATE_ACCESS',refresh_token:'PRIVATE_REFRESH',expires_in:3600,scope});
 test('Dropbox OAuth and import use actor-bound one-use PKCE and encrypted storage',async()=>{
  const f=fixture(),fetchBefore=globalThis.fetch;
+ let dropboxName='photo.jpg';
  globalThis.fetch=async(url,init)=>{
   const {hostname,pathname}=new URL(url);
   if(pathname==='/oauth2/token'){
@@ -40,8 +41,8 @@ test('Dropbox OAuth and import use actor-bound one-use PKCE and encrypted storag
   assert.equal(init.headers.Authorization,'Bearer PRIVATE_ACCESS');
   if(pathname.endsWith('get_current_account'))return Response.json({account_id:'id1',name:{display_name:'Test Dropbox'}});
   if(pathname.endsWith('list_folder'))return Response.json({entries:[{'.tag':'file',id:'id:abc',name:'file.txt',size:5}],has_more:true,cursor:'opaque'});
-  if(pathname.endsWith('get_metadata'))return Response.json({'.tag':'file',name:'file.txt',size:5});
-  if(hostname==='content.dropboxapi.com')return new Response('hello');
+  if(pathname.endsWith('get_metadata'))return Response.json({'.tag':'file',name:dropboxName,size:5});
+  if(hostname==='content.dropboxapi.com')return new Response('hello',{headers:{'content-type':'application/octet-stream'}});
   throw Error(pathname);
  };
  try{
@@ -58,9 +59,44 @@ test('Dropbox OAuth and import use actor-bound one-use PKCE and encrypted storag
   assert.equal((await f.call('dropbox/files','GET',f.other)).status,409);
   const bytes=await f.call('dropbox/file?id=id%3Aabc');
   assert.match(bytes.headers.get('content-disposition'),/attachment/);
+  assert.equal(bytes.headers.get('content-type'),'image/jpeg');
   assert.equal(await bytes.text(),'hello');
+  dropboxName='unknown.bin';
+  const unknown=await f.call('dropbox/file?id=id%3Aabc');
+  assert.equal(unknown.headers.get('content-type'),'application/octet-stream');
   assert.equal((await f.call('dropbox/connection','DELETE')).status,200);
   assert.equal((await f.call('dropbox/files')).status,409);
+ }finally{globalThis.fetch=fetchBefore;f.DB.sqlite.close();}
+});
+test('concurrent refreshes reuse the winning token for the same source grant',async()=>{
+ const f=fixture(),fetchBefore=globalThis.fetch;
+ let refreshes=0,releaseRefresh;
+ const refreshGate=new Promise(resolve=>releaseRefresh=resolve);
+ globalThis.fetch=async(url,init)=>{
+  const {hostname,pathname}=new URL(url);
+  if(pathname==='/oauth2/token'&&init.body.get('grant_type')==='authorization_code')return creds('account_info.read files.metadata.read files.content.read');
+  if(pathname==='/oauth2/token'&&init.body.get('grant_type')==='refresh_token'){
+   if(++refreshes===2)releaseRefresh();
+   await refreshGate;
+   return Response.json({access_token:'REFRESHED_ACCESS',refresh_token:'REFRESHED_REFRESH',expires_in:3600});
+  }
+  if(pathname.endsWith('get_current_account'))return Response.json({account_id:'id1',name:{display_name:'Test Dropbox'}});
+  if(pathname.endsWith('list_folder'))return Response.json({entries:[],has_more:false});
+  throw Error(pathname+' '+hostname);
+ };
+ try{
+  const auth=await start(f,'dropbox');
+  await f.call(callback('dropbox',auth));
+  const row=f.DB.sqlite.prepare('SELECT credential,iv FROM library_source_grants').get();
+  const {decryptToken,encryptToken}=await import('../src/social.js');
+  const token=JSON.parse(await decryptToken(f.env,row.credential,row.iv));
+  token.expires=0;
+  const expired=await encryptToken(f.env,JSON.stringify(token));
+  f.DB.sqlite.prepare('UPDATE library_source_grants SET credential=?,iv=?').run(expired.cipher,expired.iv);
+  const [first,second]=await Promise.all([f.call('dropbox/files'),f.call('dropbox/files')]);
+  assert.equal(refreshes,2);
+  assert.equal(first.status,200);
+  assert.equal(second.status,200);
  }finally{globalThis.fetch=fetchBefore;f.DB.sqlite.close();}
 });
 test('Microsoft OneDrive and Outlook use separate scopes and safe file downloads',async()=>{

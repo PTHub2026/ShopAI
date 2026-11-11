@@ -405,35 +405,74 @@ function newDraft(){return {content:'',media:[],channels:[],custom:{},when:'now'
 /* ================= CLOUD DRAFTS ================= */
 const CLOUD={busy:false,items:[],nextCursor:null,message:'Chỉ bản nháp được lưu bằng nút bên dưới mới có trên máy chủ.',error:false};
 function cloudStatus(message,error=false){CLOUD.message=message;CLOUD.error=error;const el=$('#cloud_status');if(el){el.textContent=message;el.style.color=error?'var(--red)':''}for(const id of ['#cloud_save','#cloud_open','#cloud_copy']){const button=$(id);if(button)button.disabled=CLOUD.busy||(id!=='#cloud_open'&&cloudReadOnly())}}
-function cloudPanel(){return `<div class="card"><h3>Bản nháp máy chủ</h3><p class="small muted">Lưu và mở bản nháp văn bản trên các thiết bị đã đăng nhập${SHOP.ready?' trong shop “'+esc(SHOP.name)+'”':''}. Ảnh, video, lịch đăng và tùy biến kênh hiện chỉ lưu cục bộ.${cloudReadOnly()?' <b>Vai trò '+esc(SHOP.roleLabel)+' chỉ được xem, không lưu được bản nháp lên máy chủ.</b>':''}</p><div class="row"><button class="btn pri" id="cloud_save" onclick="cloudSaveDraft()" ${CLOUD.busy||cloudReadOnly()?'disabled':''}>Lưu bản nháp lên máy chủ</button><button class="btn" id="cloud_open" onclick="cloudListDrafts()" ${CLOUD.busy?'disabled':''}>Mở bản nháp đã lưu</button>${D.cloud?`<button class="btn" id="cloud_copy" onclick="cloudSaveDraft(true)" ${CLOUD.busy||cloudReadOnly()?'disabled':''}>Lưu thành bản mới</button>`:''}</div><p class="small" id="cloud_status" role="status" aria-live="polite" style="margin-bottom:0;${CLOUD.error?'color:var(--red)':''}">${esc(CLOUD.message)}</p></div>`}
-async function cloudRequest(path,options={}){
+function cloudPanel(){return `<div class="card"><h3>Bản nháp máy chủ</h3><p class="small muted">Mở lại nội dung, tệp đính kèm và giờ đăng dự kiến trên các thiết bị đã đăng nhập${SHOP.ready?' trong shop “'+esc(SHOP.name)+'”':''}. Tối đa 8 tệp ảnh hoặc video, tổng dung lượng 8 MB. Tùy biến theo kênh chỉ lưu trên trình duyệt.${cloudReadOnly()?' <b>Vai trò '+esc(SHOP.roleLabel)+' chỉ được xem, không lưu được bản nháp lên máy chủ.</b>':''}</p><div class="row"><button class="btn pri" id="cloud_save" onclick="cloudSaveDraft()" ${CLOUD.busy||cloudReadOnly()?'disabled':''}>Lưu bản nháp lên máy chủ</button><button class="btn" id="cloud_open" onclick="cloudListDrafts()" ${CLOUD.busy?'disabled':''}>Mở bản nháp đã lưu</button>${D.cloud?`<button class="btn" id="cloud_copy" onclick="cloudSaveDraft(true)" ${CLOUD.busy||cloudReadOnly()?'disabled':''}>Lưu thành bản mới</button>`:''}</div><p class="small" id="cloud_status" role="status" aria-live="polite" style="margin-bottom:0;${CLOUD.error?'color:var(--red)':''}">${esc(CLOUD.message)}</p></div>`}
+async function cloudRequest(path,options={},file){
   if(window.QA_RUNNING||!managedApp()||!APP_SCOPE)throw Error('Chưa có phiên máy chủ hợp lệ; bản nháp vẫn được giữ cục bộ.');
-  const response=await fetch(new URL(path,location.href).href,{...options,credentials:'same-origin',redirect:'error',signal:options.signal?AbortSignal.any([options.signal,AbortSignal.timeout(30000)]):AbortSignal.timeout(30000),headers:{...(options.headers||{}),...(options.body?{'Content-Type':'application/json'}:{}),'X-ShopAI-User-Scope':APP_SCOPE,...shopHeaders()}});
+  const response=await fetch(new URL(path,location.href).href,{...options,credentials:'same-origin',redirect:'error',signal:options.signal?AbortSignal.any([options.signal,AbortSignal.timeout(30000)]):AbortSignal.timeout(30000),headers:{...(options.headers||{}),...(typeof options.body==='string'?{'Content-Type':'application/json'}:{}),'X-ShopAI-User-Scope':APP_SCOPE,...shopHeaders()}});
   if(response.status===429){const ra=parseInt(response.headers.get('Retry-After'),10);const data=await response.json().catch(()=>({}));const e=Error(data.error||'Quá nhiều yêu cầu, vui lòng thử lại sau'+(Number.isFinite(ra)&&ra>0?' '+ra+' giây.':'.')+' Không cần đăng nhập lại.');e.job=data.job;e.status=429;throw e;}
   if(response.status===401||response.status===403){let serverMsg='',code='';try{if((response.headers.get('content-type')||'').toLowerCase().includes('application/json')){const j=await response.json();serverMsg=j?.error||'';code=typeof j?.code==='string'?j.code:''}}catch{}
     // Có mã lỗi nghiệp vụ (thiếu quyền, cần đăng nhập lại, shop tạm ngưng...) thì giữ nguyên thông báo máy chủ; không có mã = lỗi phiên đăng nhập.
     const err=Error(code&&serverMsg?serverMsg:(serverMsg||'Phiên truy cập đã hết hạn hoặc chưa được cấp quyền.')+' Vui lòng đăng nhập lại.');err.code=code;err.status=response.status;throw err}
+  if(file&&response.ok){
+    if(response.headers.get('Content-Type')!==file.type)throw Error('Định dạng tệp bản nháp không hợp lệ.');
+    const blob=await response.blob();
+    if(blob.size!==file.size)throw Error('Không tải đủ tệp bản nháp.');
+    return blob;
+  }
   if(!(response.headers.get('content-type')||'').toLowerCase().includes('application/json'))throw Error('Phản hồi không hợp lệ. Vui lòng đăng nhập lại; chưa xác nhận lưu.');
   let body;try{body=await response.json()}catch{throw Error('Phản hồi máy chủ không hợp lệ; chưa xác nhận lưu.')}
   if(!response.ok){const err=Error(body?.error||'Không truy cập được máy chủ; chưa xác nhận lưu.');err.code=typeof body?.code==='string'?body.code:'';err.status=response.status;err.job=body?.job;throw err}
   return body;
 }
 async function cloudSession(){const s=await cloudRequest('/session');if(s.userScope!==APP_SCOPE)throw Error('Tài khoản đã thay đổi. Tải lại trang trước khi lưu.');if(s.capabilities?.drafts!==true)throw Error('Kho bản nháp máy chủ chưa được cấu hình. Bản nháp vẫn ở trình duyệt này.');return s}
-function cloudRow(row){const d=row?.draft;return !!d&&typeof d.id==='string'&&/^[a-zA-Z0-9_-]{1,64}$/.test(d.id)&&['post','video'].includes(d.type)&&d.status==='draft'&&typeof d.content==='string'&&d.content.length<=20000&&Array.isArray(d.channels)&&d.channels.length<=32&&d.channels.every(id=>typeof id==='string'&&/^[a-zA-Z0-9_-]{1,64}$/.test(id))&&Array.isArray(d.media)&&!d.media.length&&Array.isArray(d.assets)&&!d.assets.length&&d.custom&&typeof d.custom==='object'&&!Array.isArray(d.custom)&&!Object.keys(d.custom).length&&Number.isSafeInteger(row.revision)&&row.revision>0&&Number.isSafeInteger(row.updatedAt)}
-function cloudPayload(d,id){return {id,type:d.cloud?.type||'post',content:d.content,channels:[...d.channels],status:'draft',media:[],assets:[],custom:{}}}
+const CLOUD_FILE_TYPES=new Set(['image/jpeg','image/png','image/gif','image/webp','video/mp4','video/webm','video/quicktime']);
+const CLOUD_FILE_BYTES=8*1024*1024;
+const CLOUD_DATE=/^\d{4}-\d{2}-\d{2}$/,CLOUD_TIME=/^([01]\d|2[0-3]):[0-5]\d$/;
+function cloudRow(row){const d=row?.draft;return !!d&&typeof d.id==='string'&&/^[a-zA-Z0-9_-]{1,64}$/.test(d.id)&&['post','video'].includes(d.type)&&d.status==='draft'&&typeof d.content==='string'&&d.content.length<=20000&&Array.isArray(d.channels)&&d.channels.length<=32&&d.channels.every(id=>typeof id==='string'&&/^[a-zA-Z0-9_-]{1,64}$/.test(id))&&Array.isArray(d.media)&&d.media.length<=8&&d.media.every(f=>f&&typeof f.id==='string'&&/^[a-f0-9-]{36}$/.test(f.id)&&typeof f.name==='string'&&f.name.length<=180&&CLOUD_FILE_TYPES.has(f.type)&&Number.isSafeInteger(f.size)&&f.size>0)&&d.media.reduce((n,f)=>n+f.size,0)<=CLOUD_FILE_BYTES&&(d.schedule===undefined||(d.schedule&&typeof d.schedule.date==='string'&&typeof d.schedule.time==='string'&&CLOUD_DATE.test(d.schedule.date)&&CLOUD_TIME.test(d.schedule.time)))&&Array.isArray(d.assets)&&!d.assets.length&&d.custom&&typeof d.custom==='object'&&!Array.isArray(d.custom)&&!Object.keys(d.custom).length&&Number.isSafeInteger(row.revision)&&row.revision>0&&Number.isSafeInteger(row.updatedAt)}
+function cloudPayload(d,id){return {id,type:d.cloud?.type||'post',content:d.content,channels:[...d.channels],status:'draft',media:[],assets:[],custom:{},...(d.when==='later'?{schedule:{date:d.date,time:d.time}}:{})}}
+async function draftFileBlob(media){
+  if(media.file instanceof Blob)return media.file;
+  const key=media.assetId||(media.fid?'d_'+media.fid:null);
+  if(key){const stored=await IDB.get('files',key);if(stored instanceof Blob)return stored;}
+  if(media.url?.startsWith('blob:')){
+    const response=await fetch(media.url);
+    if(response.ok)return response.blob();
+  }
+  throw Error('Không tìm thấy tệp gốc “'+media.name+'”. Hãy đính kèm lại tệp trước khi lưu.');
+}
 async function cloudSaveDraft(asNew=false){
   if(CLOUD.busy)return;
   if(window.QA_RUNNING||!managedApp())return cloudStatus('Chưa lưu lên máy chủ: thao tác này chỉ dùng trên ứng dụng đã đăng nhập.',true);
-  if(!D.content.trim())return cloudStatus('Nhập nội dung trước khi lưu.',true);
-  if(D.media.length||D.textAssets?.length||Object.keys(D.custom).length||D.when==='later')return cloudStatus('Chưa lưu máy chủ: chỉ hỗ trợ bản nháp văn bản, chưa có tệp, lịch đăng hoặc tùy biến kênh. Bản cục bộ được giữ nguyên.',true);
-  const editor=D,original=JSON.stringify(editor),cloud=!asNew&&editor.cloud;
+  if(!D.content.trim()&&!D.media.length)return cloudStatus('Nhập nội dung hoặc thêm tệp trước khi lưu.',true);
+  if(D.textAssets?.length||Object.keys(D.custom).length)return cloudStatus('Bản nháp có tài nguyên văn bản liên kết hoặc tùy biến theo kênh. Các mục này hiện chỉ lưu trên trình duyệt.',true);
+  if(D.when==='later'&&(!CLOUD_DATE.test(D.date)||!CLOUD_TIME.test(D.time)))return cloudStatus('Chọn ngày và giờ dự kiến trước khi lưu.',true);
+  if(D.media.length>8)return cloudStatus('Mỗi bản nháp hỗ trợ tối đa 8 tệp.',true);
+  const editor=D,original=JSON.stringify(editor),cloud=!asNew&&editor.cloud,shop=SHOP.id,attachments=[...editor.media];
   if(cloud&&cloud.scope!==APP_SCOPE)return cloudStatus('Bản nháp thuộc phiên khác; tải lại trang trước khi lưu.',true);
   const id=cloud?cloud.id:'d_'+uid(),revision=cloud?cloud.revision:0,draft=cloudPayload(editor,id);
   CLOUD.busy=true;cloudStatus('Đang lưu bản nháp lên máy chủ…');
   try{
     await cloudSession();
-    const row=await cloudRequest('/storage/drafts/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify({draft,revision})});
-    if(!cloudRow(row)||row.draft.id!==id||row.revision!==revision+1||JSON.stringify(row.draft)!==JSON.stringify(draft))throw Error('Phản hồi lưu không hợp lệ; chưa xác nhận lưu.');
+    const payload=JSON.stringify({draft,revision}),expected=[];
+    let body=payload;
+    if(attachments.length){
+      body=new FormData();
+      body.append('payload',payload);
+      let total=0;
+      for(const attachment of attachments){
+        const blob=await draftFileBlob(attachment);
+        const name=attachment.name.slice(0,180);
+        if(!CLOUD_FILE_TYPES.has(blob.type)||!blob.size)throw Error('Tệp cần là ảnh JPG, PNG, GIF, WebP hoặc video MP4, WebM, MOV.');
+        total+=blob.size;
+        if(total>CLOUD_FILE_BYTES)throw Error('Tổng dung lượng tệp bản nháp tối đa 8 MB.');
+        expected.push({type:blob.type,size:blob.size});
+        body.append('file',blob,name);
+      }
+    }
+    if(SHOP.id!==shop)return;
+    const row=await cloudRequest('/storage/drafts/'+encodeURIComponent(id),{method:'PUT',body});
+    if(SHOP.id!==shop)return;
+    if(!cloudRow(row)||row.draft.id!==id||row.revision!==revision+1||JSON.stringify({...row.draft,media:[]})!==JSON.stringify(draft)||JSON.stringify(row.draft.media.map(({type,size})=>({type,size})))!==JSON.stringify(expected))throw Error('Phản hồi lưu không hợp lệ; chưa xác nhận lưu.');
     if(D!==editor)return cloudStatus('Đã lưu bản trước lên máy chủ. Bản đang soạn hiện tại được giữ nguyên.');
     const changed=JSON.stringify(editor)!==original;
     editor.cloud={id,revision:row.revision,scope:APP_SCOPE,type:draft.type};saveDraft();
@@ -521,18 +560,33 @@ try{const r=await cloudRequest('/api/admin/audit?limit=100');if(viewAt!==viewGen
 function adminStatus(id,status){ask((status==='suspended'?'Tạm ngưng':'Kích hoạt lại')+' shop này? Thành viên của shop '+(status==='suspended'?'sẽ không thao tác được cho đến khi kích hoạt lại.':'sẽ làm việc bình thường trở lại.'),async()=>{try{await cloudRequest('/api/admin/shops/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({status})});toast(status==='suspended'?'Đã tạm ngưng shop':'Đã kích hoạt shop');adminLoad()}catch(e){shopFail(e,'Chưa cập nhật được trạng thái.')}},{title:'Quản trị nền tảng',ok:'Xác nhận',danger:status==='suspended'})}
 async function cloudOpenDraft(id){
   if(CLOUD.busy)return;
-  const editor=D,original=JSON.stringify(editor),page=route,modalAt=modalGeneration,viewAt=viewGeneration;
+  const editor=D,original=JSON.stringify(editor),page=route,modalAt=modalGeneration,viewAt=viewGeneration,shop=SHOP.id;
+  const current=()=>D===editor&&JSON.stringify(D)===original&&route===page&&viewGeneration===viewAt&&SHOP.id===shop;
   CLOUD.busy=true;cloudStatus('Đang mở bản nháp…');
   try{
     await cloudSession();
-    const row=await cloudRequest('/storage/drafts/'+encodeURIComponent(id));
+    if(!current()||modalGeneration!==modalAt)return cloudStatus('Bản đang soạn hoặc màn hình đã thay đổi; chưa thay nội dung.',true);
+    const path='/storage/drafts/'+encodeURIComponent(id),row=await cloudRequest(path);
     if(!cloudRow(row)||row.draft.id!==id)throw Error('Bản nháp máy chủ không hợp lệ.');
+    const files=[];
+    for(const file of row.draft.media){
+      if(!current()||modalGeneration!==modalAt)return cloudStatus('Bản đang soạn hoặc màn hình đã thay đổi; chưa thay nội dung.',true);
+      files.push(await cloudRequest(path+'/media/'+file.id,{},file));
+    }
     const apply=()=>{
-      if(D!==editor||JSON.stringify(D)!==original||route!==page||viewGeneration!==viewAt)return cloudStatus('Bản đang soạn hoặc màn hình đã thay đổi; chưa thay nội dung.',true);
-      D={...newDraft(),content:row.draft.content,channels:[...row.draft.channels],cloud:{id,revision:row.revision,scope:APP_SCOPE,type:row.draft.type}};
+      if(!current())return cloudStatus('Bản đang soạn hoặc màn hình đã thay đổi; chưa thay nội dung.',true);
+      const media=row.draft.media.map(({name,type,size},i)=>{
+        const fid=uid(),blob=files[i];
+        const item={name,type,size,fid,url:URL.createObjectURL(blob),thumb:null};
+        Object.defineProperty(item,'file',{value:blob,writable:true});
+        putFile('d_'+fid,blob);
+        return item;
+      });
+      const schedule=row.draft.schedule?{when:'later',date:row.draft.schedule.date,time:row.draft.schedule.time}:{};
+      D={...newDraft(),...schedule,content:row.draft.content,channels:[...row.draft.channels],media,cloud:{id,revision:row.revision,scope:APP_SCOPE,type:row.draft.type}};
       saveDraft();closeModal();cloudStatus('Đã mở bản nháp máy chủ, phiên bản '+row.revision+'.');go('create');
     };
-    if(D!==editor||JSON.stringify(D)!==original||route!==page||modalGeneration!==modalAt||viewGeneration!==viewAt)return cloudStatus('Bản đang soạn hoặc màn hình đã thay đổi; chưa thay nội dung.',true);
+    if(!current()||modalGeneration!==modalAt)return cloudStatus('Bản đang soạn hoặc màn hình đã thay đổi; chưa thay nội dung.',true);
     if(draftDirty())ask('Thay bản đang soạn bằng bản nháp máy chủ? Các thay đổi cục bộ chưa lưu sẽ bị thay thế.',apply,{ok:'Mở bản máy chủ'});else apply();
   }catch(e){cloudStatus(e.message||'Không mở được bản nháp. Bản cục bộ được giữ nguyên.',true)}finally{CLOUD.busy=false;cloudStatus(CLOUD.message,CLOUD.error)}
 }

@@ -107,10 +107,58 @@ test('A pending save cannot overwrite edits or a replacement draft',async()=>{
   }
 });
 
-test('Unsupported media, custom content or schedules do not get silently dropped',async()=>{
+test('Unavailable media, custom content or incomplete schedules do not get silently dropped',async()=>{
   for(const change of ['D.media=[{type:"image/png"}]','D.custom={x:{text:"riêng"}}','D.textAssets=["a"]','D.when="later"']){
     const r=runtime();try{await settle();edit(r);r.read(change);await r.w.cloudSaveDraft();assert.equal(r.requests.filter(x=>x.method==='PUT').length,0);assert.equal(r.read('!!D.cloud'),false)}finally{r.close()}
   }
+});
+
+test('Cloud draft round trip restores two original files and the intended schedule',async()=>{
+  let saved;
+  const r=runtime({fetchImpl:async(path,options)=>{
+    if(path==='/session')return Response.json(session);
+    if(options.method==='PUT'){
+      assert.equal(options.headers['Content-Type'],undefined);
+      const {draft,revision}=JSON.parse(options.body.get('payload'));
+      assert.equal(revision,0);
+      const files=options.body.getAll('file');
+      assert.deepEqual(await Promise.all(files.map(file=>file.text())),['first original','second original']);
+      const media=files.map(file=>({id:crypto.randomUUID(),name:file.name,type:file.type,size:file.size}));
+      saved={...envelope(draft.id,draft.content),draft:{...draft,media}};
+      return Response.json(saved);
+    }
+    const file=saved.draft.media.find(file=>path.endsWith('/media/'+file.id));
+    if(file)return new Response(file.name==='first.png'?'first original':'second original',{headers:{'Content-Type':file.type}});
+    return Response.json(saved);
+  }});
+  try{
+    await settle();edit(r);
+    r.w.Blob=Blob;r.w.FormData=FormData;r.w.URL.createObjectURL=URL.createObjectURL;
+    r.read(`D.media=[{name:'first.png',type:'image/png',file:new Blob(['first original'],{type:'image/png'})},{name:'second.jpg',type:'image/jpeg',file:new Blob(['second original'],{type:'image/jpeg'})}];D.when='later';D.date='2027-01-01';D.time='11:30';`);
+    await r.w.cloudSaveDraft();
+    assert.equal(r.read('D.cloud.revision'),1);
+    r.read('D=newDraft()');
+    await r.w.cloudOpenDraft(saved.draft.id);
+    assert.equal(r.read('D.content'),'Bản nháp cần lưu');
+    assert.equal(r.read('D.media.length'),2);
+    assert.equal(await r.read('D.media[1].file.text()'),'second original');
+    assert.equal(r.read('D.date'),'2027-01-01');
+    assert.equal(r.read('D.time'),'11:30');
+    assert.equal(r.requests.filter(request=>request.method==='POST').length,0);
+    r.read('D.media.forEach(file=>URL.revokeObjectURL?.(file.url))');
+  }finally{r.close()}
+});
+
+test('A missing attachment on the server keeps the current editor intact',async()=>{
+  const row=envelope();
+  row.draft.media=[{id:crypto.randomUUID(),name:'missing.png',type:'image/png',size:1}];
+  const r=runtime({fetchImpl:async path=>path==='/session'?Response.json(session):path.includes('/media/')?Response.json({error:'Tệp không còn.'},{status:404}):Response.json(row)});
+  try{
+    await settle();edit(r,'Bản đang soạn');
+    await r.w.cloudOpenDraft(row.draft.id);
+    assert.equal(r.read('D.content'),'Bản đang soạn');
+    assert.match(r.w.document.querySelector('#cloud_status').textContent,/Tệp không còn/);
+  }finally{r.close()}
 });
 
 test('Opening a cloud draft uses the latest server revision and protects unsaved edits',async()=>{

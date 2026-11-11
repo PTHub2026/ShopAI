@@ -630,9 +630,42 @@ V.ai=()=>{$('#view').innerHTML=`<div class="grid two g2" style="align-items:star
 <div class="card"><h3>🔁 Viết lại / chuyển thể</h3><textarea id="rw_in" placeholder="Dán nội dung cần viết lại..." style="min-height:100px"></textarea><div class="row" style="margin-top:8px"><select id="rw_pf" style="width:auto">${Object.entries(PF).map(([k,v])=>`<option value="${k}">${v.n}</option>`).join('')}</select><button class="btn" onclick="runRw('adapt')">Chuyển thể theo nền tảng</button><button class="btn" onclick="runRw('improve')">Cải thiện</button></div><div id="rw_out"></div></div>
 <div class="card small"><b>📌 Quy tắc nội dung đang áp dụng</b> (sửa tại <a href="#settings">Cài đặt</a>)<div class="muted" style="white-space:pre-wrap;margin-top:4px">${esc(S.settings.rules)}</div></div><div class="card small muted">Engine hiện tại: ${effectiveAIEndpoint()?'AI qua Cloudflare Access, cùng origin ('+esc(effectiveAIEndpoint())+'); lỗi kết nối sẽ dừng tác vụ và giữ bản nháp' :'Engine mẫu nội bộ (offline, dựa trên template). Kết nối LLM thật tại <a href="#settings">Cài đặt</a>.'}</div></div></div>`}
 function runPlan(){const t=$('#pl_topic').value.trim()||S.settings.brand,a=$('#pl_aud').value.trim()||'nhà bán hàng online';const st=new Date();st.setDate(st.getDate()+1);
-window._plan=PILLARS.map((p,i)=>{const d=new Date(st);d.setDate(st.getDate()+i);const ds=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;return {ds,d,pillar:p[0],idea:p[1].replace('{n}',rnd(3,7)).replace(/{t}/g,t).replace(/{a}/g,a),format:p[2],time:TIMES[i],pf:p[2]==='Video ngắn'?'tiktok':'facebook',topic:t,aud:a}});
-$('#pl_out').innerHTML=`<table style="margin-top:10px"><tr><th>Ngày</th><th>Trụ cột</th><th>Ý tưởng</th><th>Định dạng</th><th>Giờ</th><th></th></tr>${window._plan.map((r,i)=>`<tr><td>${r.d.toLocaleDateString('vi-VN',{weekday:'short',day:'2-digit',month:'2-digit'})}</td><td>${r.pillar}</td><td>${esc(r.idea)}</td><td>${r.format}</td><td>${r.time}</td><td><button class="btn sm" onclick="planUse(${i})">Soạn</button></td></tr>`).join('')}</table><p class="small muted">Giờ đăng là gợi ý mặc định; xem trang Phân tích để chọn khung giờ hiệu quả nhất với kênh của bạn.</p>`}
-async function planUse(i){try{const r=window._plan[i];const c=await AI.call('generate',{topic:r.idea,product:r.topic,audience:r.aud,tone:S.settings.tone,platform:r.pf,length:'medium',seed:i});freshDraft(()=>{D.content=c;D.when='later';D.date=r.ds;D.time=r.time;go('create');toast('Đã soạn bài & đặt lịch '+r.time+' – hãy chọn kênh')})}catch(e){toast('Tác vụ AI chưa hoàn tất. Vui lòng thử lại.')}}
+const out=$('#pl_out');const plan=PILLARS.map((p,i)=>{const d=new Date(st);d.setDate(st.getDate()+i);const ds=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;return {ds,d,pillar:p[0],idea:p[1].replace('{n}',rnd(3,7)).replace(/{t}/g,t).replace(/{a}/g,a),format:p[2],time:TIMES[i],pf:p[2]==='Video ngắn'?'tiktok':'facebook',topic:t,aud:a}});
+out._plan=plan;out.innerHTML=`<table style="margin-top:10px"><tr><th>Ngày</th><th>Trụ cột</th><th>Ý tưởng</th><th>Định dạng</th><th>Giờ</th><th></th></tr>${plan.map((r,i)=>`<tr><td>${r.d.toLocaleDateString('vi-VN',{weekday:'short',day:'2-digit',month:'2-digit'})}</td><td>${r.pillar}</td><td>${esc(r.idea)}</td><td>${r.format}</td><td>${r.time}</td><td><button class="btn sm" onclick="planUse(${i})">Soạn</button></td></tr>`).join('')}</table><p class="small muted">Giờ đăng là gợi ý mặc định; xem trang Phân tích để chọn khung giờ hiệu quả nhất với kênh của bạn.</p><p class="small" role="status"></p>`}
+async function planUse(i){
+ const out=$('#pl_out'),plan=out?._plan,row=plan?.[i];
+ if(!row||GENERATION_BUSY.has(plan))return;
+ const view=viewGeneration,shop=SHOP.id,dialog=modalGeneration,draft=D,original=JSON.stringify(D);
+ const current=()=>out.isConnected&&out._plan===plan&&viewGeneration===view&&SHOP.id===shop;
+ const sameDraft=()=>D===draft&&JSON.stringify(D)===original;
+ const buttons=[...out.querySelectorAll('button')],status=out.querySelector('[role="status"]');
+ GENERATION_BUSY.add(plan);
+ buttons.forEach(button=>{button.disabled=true;});
+ status.textContent='Đang soạn bài…';
+ try{
+  const content=await AI.call('generate',{topic:row.idea,product:row.topic,audience:row.aud,tone:S.settings.tone,platform:row.pf,length:'medium',seed:i});
+  if(!current()||modalGeneration!==dialog)return;
+  if(typeof content!=='string'||!content.trim())throw new Error('Empty AI result');
+  const apply=()=>{
+   if(!current())return;
+   if(!sameDraft()){status.textContent='Bản nháp đã thay đổi. Hãy bấm Soạn để thử lại.';return;}
+   D={...newDraft(),content,when:'later',date:row.ds,time:row.time};
+   saveDraft();
+   go('create');
+   toast('Đã tạo bản nháp cho '+row.time+'. Chọn kênh để lên lịch đăng.');
+  };
+  if(sameDraft()&&draftDirty())ask('Bài đang soạn chưa đăng sẽ bị thay thế. Tiếp tục?',apply,{ok:'Bỏ nháp & tạo mới',danger:true});
+  else apply();
+ }catch{
+  if(current()&&modalGeneration===dialog)status.textContent='Chưa soạn được bài. Hãy bấm Soạn để thử lại.';
+ }finally{
+  GENERATION_BUSY.delete(plan);
+  if(current()){
+   buttons.forEach(button=>{button.disabled=false;});
+   if(status.textContent==='Đang soạn bài…')status.textContent='';
+  }
+ }
+}
 async function runRw(k){
  const out=$('#rw_out');if(!out||GENERATION_BUSY.has(out))return;
  const read=()=>({text:$('#rw_in').value.trim(),platform:$('#rw_pf').value,tone:S.settings.tone}),base=read();

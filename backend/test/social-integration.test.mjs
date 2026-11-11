@@ -51,7 +51,7 @@ test('Telegram live: per-shop permissions, idempotency, revoked credentials and 
   const currentShop=(await f.request(owner,'/session')).data.shop.id;
   const message={accountId:account.id,kind:'text',text:'Hello from test'};
   const first=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'text-send-test-1234',body:message});
-  assert.equal(first.status,200);assert.equal(first.data.job.status,'sent');assert.equal(messages,1);
+  assert.equal(first.status,200);assert.equal(first.data.job.status,'sent');assert.equal(first.data.job.provider,'telegram');assert.equal(messages,1);
   const repeat=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'text-send-test-1234',body:message});
   assert.equal(repeat.status,200);assert.equal(messages,1,'duplicate key never republishes');
   assert.equal((await f.request(owner,'/api/social/jobs',{method:'POST',idem:'text-send-test-1234',body:{...message,text:'changed'}})).status,409);
@@ -80,10 +80,10 @@ test('Telegram 429 is retryable; unknown outcomes never retry automatically',asy
   assert.equal(throttled.status,429);assert.equal(throttled.data.job.status,'retryable');
   const jobId=throttled.data.job.id;
   const early=await f.request(owner,'/api/social/jobs/'+jobId+'/retry',{method:'POST'});
-  assert.equal(early.status,429);assert.equal(called,1,'retry_after must block early delivery');
+  assert.equal(early.status,429);assert.equal(early.data.job.provider,'telegram');assert.equal(called,1,'retry_after must block early delivery');
   f.db.sqlite.prepare('UPDATE publish_jobs SET next_attempt_at=0 WHERE id=?').run(jobId);
   const retried=await f.request(owner,'/api/social/jobs/'+jobId+'/retry',{method:'POST'});
-  assert.equal(retried.status,200);assert.equal(retried.data.job.status,'sent');assert.equal(called,2);
+  assert.equal(retried.status,200);assert.equal(retried.data.job.status,'sent');assert.equal(retried.data.job.provider,'telegram');assert.equal(called,2);
   const redundant=await f.request(owner,'/api/social/jobs/'+jobId+'/retry',{method:'POST'});
   assert.equal(redundant.status,200);assert.equal(called,2);
   const unknown=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'unknown-test-key-123',body:{...data,text:'Unknown'}});
@@ -114,7 +114,7 @@ test('unified channel API stores Telegram in channels and schedules into common 
   const list=await f.request(owner,'/channels/telegram/accounts');assert.equal(list.status,200);const a=list.data.accounts[0];
   assert.equal(f.db.sqlite.prepare('SELECT provider FROM channels WHERE id=?').get(a.id).provider,'telegram');
   const queued=await f.request(owner,'/channels/telegram/schedule',{method:'POST',idem:'unified-scheduled-123',body:{accountId:a.id,kind:'text',text:'Due soon',runAt:now()+60}});
-  assert.equal(queued.status,201);assert.equal(queued.data.job.status,'pending');
+  assert.equal(queued.status,201);assert.equal(queued.data.job.status,'pending');assert.equal(queued.data.job.provider,'telegram');
   f.db.sqlite.prepare('UPDATE publish_jobs SET next_attempt_at=0 WHERE id=?').run(queued.data.job.id);
   const {runDueScheduledPosts}=await import('../src/channels.js');await runDueScheduledPosts(f.env);
   assert.equal(f.db.sqlite.prepare('SELECT status FROM publish_jobs WHERE id=?').get(queued.data.job.id).status,'sent');
@@ -177,4 +177,26 @@ test('Facebook composer photo payload survives the real job route and idempotent
   const replay=await f.request(owner,'/channels/all/jobs',{method:'POST',shop,idem:'facebook-composer-test-key',body:payload});
   assert.equal(replay.status,200);assert.equal(posts,1);assert.equal(uploads,2);
  }finally{globalThis.fetch=original;f.db.sqlite.close();}
+});
+
+test('Publishing summary counts current shop jobs by provider and date, beyond the history page',async()=>{
+ const f=fixture(),owner=f.login('email:summary@example.com'),other=f.login('email:summary-other@example.com');
+ try{await fakeTelegram(()=>{throw Error('A report must not publish');},async()=>{
+  await connect(f.request,owner);
+  const account=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
+  const ownShop=(await f.request(owner,'/session')).data.shop.id;
+  const otherShop=(await f.request(other,'/session')).data.shop.id;
+  const add=f.db.sqlite.prepare("INSERT INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at) VALUES(?,?,?,?,'text','{}',?,'test',?,?)");
+  const recent=now()-60;
+  for(let i=0;i<201;i++)add.run('sent-'+i,ownShop,account.id,'sent-'+i,'sent',recent,recent);
+  add.run('failed',ownShop,account.id,'failed','failed',recent,recent);
+  add.run('old',ownShop,account.id,'old','sent',recent-8*86400,recent);
+  add.run('other',otherShop,account.id,'other','sent',recent,recent);
+  const path='/api/social/jobs/summary?days=7';
+  const summary=await f.request(owner,path);
+  assert.equal(summary.status,200);
+  assert.deepEqual(summary.data,{days:7,rows:[{provider:'telegram',status:'failed',count:1},{provider:'telegram',status:'sent',count:201}]});
+  assert.equal((await f.request(owner,'/api/social/jobs/summary?days=0')).status,400);
+  assert.equal((await f.request(other,path,{shop:ownShop})).status,404);
+ });}finally{f.db.sqlite.close();}
 });

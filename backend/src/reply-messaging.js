@@ -1,3 +1,4 @@
+import {graphRequest} from './meta.js';
 import {ensureReplySchema,matchReply} from './replies.js';
 import {ensureChannelStore} from './channel-store.js';
 import {decryptToken,callTelegram} from './social.js';
@@ -34,6 +35,14 @@ async function graph(env,token,path,body){const r=await fetch('https://graph.fac
 function readiness(env,c){if(c.status!=='connected')return 'channel_disconnected';if(!env.SOCIAL_TOKEN_KEY)return 'social_key_missing';if(!env.PUBLIC_ORIGIN||!/^https:\/\//.test(env.PUBLIC_ORIGIN))return 'public_origin_missing';if(c.provider==='telegram')return null;if(c.provider==='facebook')return env.META_REPLY_WEBHOOK_READY==='true'&&env.META_APP_SECRET&&env.META_APP_ID&&env.META_REPLY_VERIFY_TOKEN?null:'meta_webhook_not_ready';return 'provider_unsupported';}
 const conversation=c=>({id:c.id,accountId:c.account_id,provider:c.provider,name:c.name,status:c.status,paused:!!c.paused,assignedTo:c.assigned_to||null,tags:JSON.parse(c.tags),lastMessageAt:c.last_message_at,lastMessage:c.last_message});
 async function live(db,b){const c=await db.prepare("SELECT c.* FROM channels c JOIN reply_bindings b ON b.account_id=c.id AND b.shop_id=c.shop_id JOIN shops s ON s.id=c.shop_id WHERE c.id=? AND b.enabled=1 AND b.bot_id IS NOT NULL AND c.status='connected' AND s.status='active'").bind(b.account_id).first();return c&&await fingerprint(c)===b.credential?c:null;}
+async function verifyMessenger(env,channel,token){
+ const appToken=env.META_APP_ID+'|'+env.META_APP_SECRET;
+ const info=await graphRequest(env,'debug_token',appToken,{input_token:token,method:'GET'},'POST');
+ const scopes=info.data?.scopes;
+ if(!info.data?.is_valid||String(info.data.app_id)!==String(env.META_APP_ID)||!Array.isArray(scopes)||!['pages_messaging','pages_manage_metadata'].every(scope=>scopes.includes(scope)))throw Error('meta_messaging_permissions_missing');
+ const page=await graph(env,token,'me?fields=id');
+ if(String(page.id)!==channel.external_id)throw Error('meta_page_mismatch');
+}
 async function activate(env,c,activationId){
  const stillRequested=async()=>{const b=await env.DB.prepare('SELECT enabled,activation_id FROM reply_bindings WHERE account_id=?').bind(c.id).first();if(!b?.enabled||b.activation_id!==activationId)throw Error('channel_disabled');};
  const token=await decryptToken(env,c.token,c.token_iv);let botId='';
@@ -46,11 +55,7 @@ async function activate(env,c,activationId){
   await stillRequested();
   await callTelegram(token,'setWebhook',{url,secret_token:await mac(env.SOCIAL_TOKEN_KEY,'reply-telegram:'+botId),allowed_updates:['message'],drop_pending_updates:false});
  }else{
-  const appToken=env.META_APP_ID+'|'+env.META_APP_SECRET;
-  // debug_token input_token is a Graph API parameter; never log URLs or credentials.
-  const info=await graph(env,appToken,'debug_token?input_token='+encodeURIComponent(token));
-  if(!info.data?.is_valid||String(info.data.app_id)!==String(env.META_APP_ID)||!['pages_messaging','pages_manage_metadata'].every(s=>info.data.scopes?.includes(s)))throw Error('meta_messaging_permissions_missing');
-  const me=await graph(env,token,'me?fields=id');if(String(me.id)!==c.external_id)throw Error('meta_page_mismatch');
+  await verifyMessenger(env,c,token);
   const current=await env.DB.prepare('SELECT * FROM channels WHERE id=?').bind(c.id).first();if(!current||current.status!=='connected'||await fingerprint(c)!==await fingerprint(current))throw Error('credential_changed');
   await stillRequested();
   await graph(env,token,encodeURIComponent(c.external_id)+'/subscribed_apps',{subscribed_fields:['messages','messaging_postbacks']});
@@ -70,6 +75,20 @@ export async function handleMessaging(req,env,who,respond=json){
  if(parts[0]==='channels'&&!parts[1]&&req.method==='GET'){
   const {results}=await db.prepare('SELECT c.*,b.enabled,b.credential,b.bot_id FROM channels c LEFT JOIN reply_bindings b ON b.account_id=c.id WHERE c.shop_id=? ORDER BY c.created_at DESC').bind(shop).all();
   return respond({channels:await Promise.all(results.map(async c=>{const reason=readiness(env,c),stale=c.credential&&c.credential!==await fingerprint(c);return {id:c.id,accountId:c.id,name:c.name,provider:c.provider,externalId:c.external_id,status:c.status,enabled:!!c.enabled&&c.bot_id!==null&&!stale&&c.status==='connected',ready:!reason,reason:reason||(stale?'credential_changed':null)};}))});
+ }
+ if(parts[0]==='channels'&&parts[1]&&parts[2]==='diagnostics'&&parts.length===3&&req.method==='GET'){
+  if(!ctx.can('channels.configure_token')||ctx.shop.status!=='active')return fail(403,'forbidden');
+  const channel=await db.prepare("SELECT * FROM channels WHERE id=? AND shop_id=? AND provider='facebook'").bind(parts[1],shop).first();
+  if(!channel)return fail(404,'not_found');
+  const reason=readiness(env,channel);
+  if(reason)return respond({ready:false,reason});
+  try{
+   await verifyMessenger(env,channel,await decryptToken(env,channel.token,channel.token_iv));
+   return respond({ready:true,reason:null});
+  }catch(error){
+   const reason=['meta_messaging_permissions_missing','meta_page_mismatch'].includes(error.message)?error.message:'provider_verification_failed';
+   return respond({ready:false,reason});
+  }
  }
  if(parts[0]==='channels'&&parts[1]&&!parts[2]&&req.method==='PATCH'){
   let data;try{data=JSON.parse(await bounded(req,8192));}catch{return fail(400,'invalid_input');}if(!data||typeof data!=='object'||Array.isArray(data)||typeof data.enabled!=='boolean')return fail(400,'invalid_input');

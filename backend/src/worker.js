@@ -1,3 +1,4 @@
+import {handleLibrarySource} from './library-sources.js';
 import {handleMessaging,handleReplyWebhook,runPendingReplies} from './reply-messaging.js';
 import {handleReplies} from './replies.js';
 import { handleDrive } from './drive.js';
@@ -119,6 +120,7 @@ export default {
       if (path==='/api/replies/config'||path==='/api/replies/preview') return handleReplies(request, env, who, json);
       if (path.startsWith('/api/replies/')) return handleMessaging(request,env,who,json);
       if (path.startsWith('/api/library/drive/')) return handleDrive(request, env, who, json);
+      if (path.startsWith('/api/library/')) return handleLibrarySource(request, env, who, json);
       if (path.startsWith('/api/social/')) return handleSocial(request, env, who, json);
       return handleApi(request, env, who, json);
     }

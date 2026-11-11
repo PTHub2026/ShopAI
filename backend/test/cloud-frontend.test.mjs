@@ -525,6 +525,61 @@ test('rewrite blocks duplicate requests and discards responses after form, page 
  for(const change of ['form','page','output']){const pending=deferred(),r=runtime();try{await settle();r.w.go('ai');await settle();r.w.document.querySelector('#rw_in').value='Source';let calls=0;r.w.pendingRewrite=()=>{calls++;return pending.promise;};r.read('AI.call=()=>window.pendingRewrite()');const out=r.w.document.querySelector('#rw_out'),buttons=[...r.w.document.querySelectorAll('button[onclick^="runRw("]')];const request=r.w.runRw('improve');await r.w.runRw('adapt');assert.equal(calls,1);assert.ok(buttons.every(b=>b.disabled));if(change==='form')r.w.document.querySelector('#rw_in').value='Edited';if(change==='page')r.w.go('create');if(change==='output')out.replaceWith(out.cloneNode(false));pending.resolve('Stale rewrite');await request;assert.equal(out._variants,undefined);assert.ok(buttons.filter(b=>b.isConnected).every(b=>!b.disabled));assert.doesNotMatch(r.w.document.querySelector('#view').textContent,/Stale rewrite/);}finally{r.close();}}
 });
 
+test('AI plan ignores duplicate requests and results from a replaced plan or screen',async()=>{
+ for(const change of ['plan','screen']){
+  const pending=deferred(),r=runtime();
+  try{
+   await settle();r.w.go('ai');r.w.runPlan();
+   let calls=0;
+   r.w.pendingPlan=()=>{calls++;return pending.promise;};
+   r.read('AI.call=()=>window.pendingPlan()');
+   const out=r.w.document.querySelector('#pl_out');
+   const request=r.w.planUse(0);
+   await r.w.planUse(1);
+   assert.equal(calls,1);
+   assert.ok([...out.querySelectorAll('button')].every(button=>button.disabled));
+   if(change==='plan')r.w.runPlan();
+   else r.w.go('library');
+   pending.resolve('Stale plan result');await request;
+   assert.equal(r.read('D.content'),'');
+   assert.equal(r.read('route'),change==='plan'?'ai':'library');
+   assert.equal(r.w.document.querySelector('#ask_yes'),null);
+  }finally{r.close();}
+ }
+});
+
+test('AI plan lets the user retry and saves the completed draft with its suggested time',async()=>{
+ const r=runtime();
+ try{
+  await settle();r.w.go('ai');r.w.runPlan();
+  r.read('AI.call=async()=>{throw Error("Unavailable")}');
+  await r.w.planUse(0);
+  const out=r.w.document.querySelector('#pl_out');
+  assert.match(out.querySelector('[role="status"]').textContent,/thử lại/);
+  assert.ok([...out.querySelectorAll('button')].every(button=>!button.disabled));
+  r.read('AI.call=async()=>"Planned post"');
+  await r.w.planUse(0);
+  assert.equal(r.read('route'),'create');
+  assert.equal(r.read('loadDraft().content'),'Planned post');
+  assert.equal(r.read('loadDraft().time'),'11:30');
+  assert.equal(r.read('loadDraft().when'),'later');
+ }finally{r.close();}
+});
+
+test('AI plan confirmation preserves changes made to the draft while the dialog is open',async()=>{
+ const r=runtime();
+ try{
+  await settle();edit(r,'Existing draft');r.w.go('ai');r.w.runPlan();
+  r.read('AI.call=async()=>"Planned post"');
+  await r.w.planUse(0);
+  r.read('D.time="18:00"');
+  r.w.document.querySelector('#ask_yes').click();
+  assert.equal(r.read('route'),'ai');
+  assert.equal(r.read('D.content'),'Existing draft');
+  assert.equal(r.read('D.time'),'18:00');
+ }finally{r.close();}
+});
+
 test('text prompt input has the passed dialog title as its accessible name',async()=>{
  const r=runtime();try{await settle();const title='Tên mới cho shop';r.w.askText(title,'Shop A',()=>{});await settle();assert.equal(r.w.document.querySelector('#ask_in').getAttribute('aria-label'),title);assert.equal(r.w.document.querySelector('#ask_in').value,'Shop A');}finally{r.close();}
 });
@@ -545,4 +600,29 @@ test('composer channel and both asset views explicitly name selection checkboxes
 
 test('video scene text and duration controls have distinct scene names without changing project data',async()=>{
  const r=runtime();try{await settle();r.w.HTMLCanvasElement.prototype.getContext=()=>new Proxy({measureText:()=>({width:0}),createLinearGradient:()=>({addColorStop:()=>{}})},{get:(target,key)=>key in target?target[key]:()=>{}});r.read("VP=vNewProject();VP.scenes=[{id:'scene-one',text:'Opening text',d:3},{id:'scene-two',text:'Closing text',d:4,cta:true}]");const before=r.read('JSON.stringify(VP)');r.w.go('video');await settle();const fields=[...r.w.document.querySelectorAll('.vscene textarea')];assert.deepEqual(fields.map(f=>f.getAttribute('aria-label')),['Nội dung cảnh 1','Nội dung cảnh 2']);assert.deepEqual(fields.map(f=>f.value),['Opening text','Closing text']);assert.deepEqual([...r.w.document.querySelectorAll('.vscene input[type=number]')].map(f=>f.getAttribute('aria-label')),['Thời lượng cảnh 1 (giây)','Thời lượng cảnh 2 (giây)']);r.w.decorateProductScreen();assert.equal(r.w.document.querySelector('.vscene textarea'),fields[0]);assert.equal(r.read('JSON.stringify(VP)'),before);assert.equal(r.requests.filter(x=>['POST','PUT','PATCH','DELETE'].includes(x.method)).length,0);}finally{r.close();}
+});
+
+test('Publishing report shows the newest selected period from the server',async()=>{
+ const delayed=deferred(),calls=[];
+ const r=runtime({api:async(path,options)=>{
+  if(path==='/api/social/jobs/summary'){
+   calls.push(options.headers['X-ShopPost-Shop']);
+   if(calls.length===1)return delayed.promise;
+   return Response.json({days:7,rows:[{provider:'telegram',status:'sent',count:4}]});
+  }
+  return Response.json({shops:[],defaultShopId:null,roles:{}});
+ }});
+ try{
+  await settle();r.read("SHOP.ready=true;SHOP.id='s_aaaaaaaaaa';SHOP.permissions=['reports.view']");
+  r.w.go('analytics');
+  const period=r.w.document.querySelector('#publish_report_period');
+  period.value='7';period.dispatchEvent(new r.w.Event('change'));
+  await settle();
+  const out=r.w.document.querySelector('#publish_report_result');
+  assert.match(out.textContent,/TelegramĐã đăng4/);
+  delayed.resolve(Response.json({days:30,rows:[{provider:'facebook',status:'sent',count:15}]}));
+  await settle();
+  assert.doesNotMatch(out.textContent,/Facebook/);
+  assert.deepEqual(calls,['s_aaaaaaaaaa','s_aaaaaaaaaa']);
+ }finally{r.close();}
 });

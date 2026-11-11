@@ -91,6 +91,16 @@ export async function handleSocial(req,env,who,json){
    await new Promise(resolve=>{const done=()=>{clearTimeout(timer);req.signal.removeEventListener('abort',done);resolve();};const timer=setTimeout(done,Math.min(1000,deadline-Date.now()));req.signal.addEventListener('abort',done,{once:true});});
   }
  }
+ if(section==='jobs'&&resource==='summary'&&!action&&req.method==='GET'){
+  if(!ctx.can('reports.view'))return fail(json,403,'forbidden');
+  const days=Number(new URL(req.url).searchParams.get('days')??30);
+  if(![7,30,90].includes(days))return fail(json,400,'invalid_period');
+  const {results}=await db.prepare(`SELECT COALESCE(c.provider,'unknown') AS provider,j.status,COUNT(*) AS count
+    FROM publish_jobs j LEFT JOIN channels c ON c.id=j.account_id AND c.shop_id=j.shop_id
+    WHERE j.shop_id=? AND j.created_at>=? AND (?='all' OR c.provider=?)
+    GROUP BY COALESCE(c.provider,'unknown'),j.status ORDER BY provider,j.status`).bind(shop,now()-days*86400,provider,provider).all();
+  return json({days,rows:results});
+ }
  if(section==='jobs'&&!resource&&req.method==='GET'){
   if(!ctx.can('channels.view'))return fail(json,403,'forbidden');
   return json({jobs:await listJobs(db,shop,provider)});
@@ -109,8 +119,8 @@ export async function handleSocial(req,env,who,json){
   await db.prepare("INSERT OR IGNORE INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at,next_attempt_at) VALUES(?,?,?,?,?,?,'pending',?,?,?,?)").bind('pj_'+crypto.randomUUID(),shop,a.id,idem,data.kind,payload,who.owner,t,t,scheduled?Math.floor(data.runAt):0).run();
   const j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND idempotency_key=?').bind(shop,idem).first();
   if(j.account_id!==a.id||j.kind!==data.kind||j.payload!==payload||(scheduled&&j.next_attempt_at!==Math.floor(data.runAt)))return fail(json,409,'idempotency_conflict');
-  if(scheduled)return json({ok:true,id:j.id,runAt:j.next_attempt_at,status:'scheduled',job:jobView(j)},201);
-  return deliver(j,db,env,shop,json);
+  if(scheduled)return json({ok:true,id:j.id,runAt:j.next_attempt_at,status:'scheduled',job:jobView({...j,provider:a.provider})},201);
+  return deliver({...j,provider:a.provider},db,env,shop,json);
  }
  if(section==='jobs'&&resource&&['retry','run'].includes(action)&&req.method==='POST'){
   if(!ctx.can('channels.operate')&&!ctx.can('drafts.publish'))return fail(json,403,'forbidden');
@@ -129,7 +139,7 @@ export async function handleSocial(req,env,who,json){
    }
   }
   if(action==='run'&&j.status==='pending'){await db.prepare("UPDATE publish_jobs SET next_attempt_at=0,updated_at=? WHERE shop_id=? AND id=? AND status='pending'").bind(now(),shop,j.id).run();j.next_attempt_at=0;}
-  return deliver(j,db,env,shop,json);
+  return deliver({...j,provider:account?.provider??null},db,env,shop,json);
  }
  return fail(json,404,'not_found');
 }

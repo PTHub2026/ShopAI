@@ -265,6 +265,9 @@ test('Email OTP: mã hết hạn, sai quá 5 lần, gửi quá 5 mã/giờ và l
     const failed = await post(e, '/auth/email/start', { email: 'loi@shoppost.net' });
     assert.equal(failed.status, 502); assert.equal((await failed.text()).includes(RESEND_KEY), false);
     assert.equal(row(e.DB, 'SELECT code_hash FROM auth_otp_codes WHERE email = ?', 'loi@shoppost.net').code_hash, '');
+    // Delivery failure must NOT consume the user's hourly OTP quota (sent_count stays 0).
+    assert.equal(row(e.DB, 'SELECT sent_count FROM auth_otp_codes WHERE email = ?', 'loi@shoppost.net').sent_count, 0,
+      'failed email delivery must not increment sent_count');
   });
 });
 

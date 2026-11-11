@@ -377,7 +377,8 @@ async function otpSend(env, key, recipient, buildEmail) {
   let sent = false;
   try { sent = await sendEmail(env, { to: recipient, ...buildEmail(code) }); } catch { sent = false; }
   if (!sent) {
-    await env.DB.prepare("UPDATE auth_otp_codes SET code_hash = '' WHERE email = ?").bind(key).run();
+    // Roll back sent_count so a delivery failure doesn't consume the user's hourly quota.
+    await env.DB.prepare("UPDATE auth_otp_codes SET code_hash = '', sent_count = ? WHERE email = ?").bind(count, key).run();
     return { status: 502, data: { error: 'Không gửi được email lúc này. Vui lòng thử lại sau ít phút.' } };
   }
   return { status: 200, data: { ok: true, retryAfter: OTP_RESEND_AFTER, expiresIn: OTP_TTL } };
@@ -605,7 +606,8 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
         let sent = false;
         try { sent = viaPhone ? await sendSmsCode(env, sms, email, code) : await sendEmail(env, { to: email, ...otpEmail(code) }); } catch { sent = false; }
         if (!sent) {
-          await env.DB.prepare("UPDATE auth_otp_codes SET code_hash = '' WHERE email = ?").bind(email).run();
+          // Roll back sent_count so a delivery failure doesn't consume the user's hourly quota.
+          await env.DB.prepare("UPDATE auth_otp_codes SET code_hash = '', sent_count = ? WHERE email = ?").bind(count, email).run();
           return json({ error: viaPhone ? 'Không gửi được tin nhắn SMS lúc này. Vui lòng thử lại sau ít phút.' : 'Không gửi được email lúc này. Vui lòng thử lại sau ít phút.' }, 502);
         }
         return json({ ok: true, retryAfter: OTP_RESEND_AFTER, expiresIn: OTP_TTL });

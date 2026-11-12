@@ -4,6 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import {webcrypto,createHash} from 'node:crypto';
 import worker from '../src/worker.js';
+import {encryptToken} from '../src/social.js';
 import {SESSION_COOKIE} from '../src/auth.js';
 if(!globalThis.crypto)globalThis.crypto=webcrypto;
 const base='https://shoppost.example',hash=x=>createHash('sha256').update(x).digest('hex'),now=()=>Math.floor(Date.now()/1000);
@@ -199,4 +200,34 @@ test('Publishing summary counts current shop jobs by provider and date, beyond t
   assert.equal((await f.request(owner,'/api/social/jobs/summary?days=0')).status,400);
   assert.equal((await f.request(other,path,{shop:ownShop})).status,404);
  });}finally{f.db.sqlite.close();}
+});
+
+test('Meta engagement reads sent jobs for the active shop and distinguishes denied access from zero',async()=>{
+ const f=fixture(),owner=f.login('email:meta-report@example.com'),other=f.login('email:other-report@example.com'),oldFetch=globalThis.fetch;
+ Object.assign(f.env,{META_APP_ID:'1234567890',META_APP_SECRET:'synthetic',META_REDIRECT_URI:base+'/api/social/meta/callback'});
+ try{
+  await f.request(owner,'/api/social/accounts');
+  const shop=(await f.request(owner,'/session')).data.shop.id;
+  const credential=await encryptToken(f.env,'REPORT_TOKEN');
+  const channel=f.db.sqlite.prepare("INSERT INTO channels(id,shop_id,provider,name,external_id,token,token_iv,status,connected_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'connected','test',?,?)");
+  for(const [id,provider] of [['fb','facebook'],['ig','instagram']])channel.run(id,shop,provider,provider,'1234',credential.cipher,credential.iv,now(),now());
+  const job=f.db.sqlite.prepare("INSERT INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,remote_message_id,created_by,created_at,updated_at) VALUES(?,?,?,?,'text','{}',?,?,'test',?,?)");
+  for(const [id,account,status,remote] of [['1','fb','sent','1234_5678'],['2','ig','sent','9101112'],['3','fb','failed','4444']])job.run(id,shop,account,id,status,remote,now(),now());
+  const calls=[];
+  globalThis.fetch=async(input,options)=>{
+   const url=new URL(input);calls.push(url.pathname.split('/').at(-1));
+   assert.equal(url.hostname,'graph.facebook.com');
+   assert.equal(options.method,'GET');
+   assert.equal(options.headers.Authorization,'Bearer REPORT_TOKEN');
+   if(url.pathname.endsWith('/1234_5678'))return Response.json({reactions:{summary:{total_count:0}},comments:{summary:{total_count:3}}});
+   return Response.json({error:{code:10}},{status:403});
+  };
+  const path='/api/social/meta/engagement';
+  assert.deepEqual((await f.request(other,path)).data.rows,[]);
+  const r=await f.request(owner,path);
+  assert.equal(r.status,200);
+  assert.deepEqual(r.data.rows.map(row=>[row.provider,row.reactions,row.comments,row.status]),[['instagram',null,null,'permission_required'],['facebook',0,3,'available']]);
+  assert.deepEqual(calls.sort(),['1234_5678','9101112']);
+  assert.doesNotMatch(JSON.stringify(r.data),/REPORT_TOKEN/);
+ }finally{globalThis.fetch=oldFetch;f.db.sqlite.close();}
 });

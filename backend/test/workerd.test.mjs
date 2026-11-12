@@ -32,5 +32,43 @@ test('Authenticated Worker reads/writes real local D1 and rejects stale revision
     const read=await fetch('/storage/drafts/integration-a');assert.equal(read.status,200);assert.equal((await read.json()).draft.content,'Dữ liệu thử nghiệm D1 cục bộ');
     assert.equal((await fetch('/storage/drafts/integration-a',{},bob)).status,404);
     assert.deepEqual((await (await fetch('/storage/drafts',{},bob)).json()).drafts,[]);
+
+    const mediaDraft={id:'integration-media',type:'post',content:'Ảnh thử nghiệm',channels:[],status:'draft',schedule:{date:'2027-01-01',time:'11:30'}};
+    const bytes=new Uint8Array(1024*1024+4).fill(25);
+    const upload=async(revision,first=bytes,content=mediaDraft.content)=>{
+      const form=new FormData();
+      form.append('payload',JSON.stringify({draft:{...mediaDraft,content},revision}));
+      form.append('file',new Blob([first],{type:'image/png'}),'anh-1.png');
+      form.append('file',new Blob([new Uint8Array([5,10,15])],{type:'image/jpeg'}),'anh-2.jpg');
+      const url='https://app.example/storage/drafts/integration-media';
+      const request=new Request(url,{method:'PUT',body:form});
+      return mf.dispatchFetch(url,{method:'PUT',body:await request.arrayBuffer(),headers:{'Content-Type':request.headers.get('Content-Type'),Origin:'https://app.example','Cf-Access-Jwt-Assertion':alice}});
+    };
+    const mediaSave=await upload(0);
+    assert.equal(mediaSave.status,200);
+    const savedMedia=(await mediaSave.json()).draft;
+    assert.deepEqual(savedMedia.schedule,mediaDraft.schedule);
+    assert.deepEqual(savedMedia.media.map(file=>file.name),['anh-1.png','anh-2.jpg']);
+    const mediaPath='/storage/drafts/integration-media/media/';
+    const firstPath=mediaPath+savedMedia.media[0].id;
+    assert.equal((await fetch(firstPath,{},bob)).status,404);
+    assert.equal((await mf.dispatchFetch('https://app.example'+firstPath)).status,401);
+    const first=await fetch(firstPath);
+    assert.equal(first.status,200);
+    assert.equal(first.headers.get('Content-Type'),'image/png');
+    assert.equal(first.headers.get('Cache-Control'),'private, no-store');
+    assert.deepEqual(new Uint8Array(await first.arrayBuffer()),bytes);
+    assert.equal((await upload(0,new Uint8Array([1]))).status,409);
+    assert.equal((await fetch(firstPath)).status,200);
+    const overlapping=await Promise.all([upload(1,new Uint8Array([1]),'Update A'),upload(1,new Uint8Array([2]),'Update B')]);
+    assert.deepEqual(overlapping.map(response=>response.status).sort(),[200,409]);
+    assert.equal((await fetch(firstPath)).status,404);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM draft_media_chunks').first()).n,2);
+    const saveText=await fetch('/storage/drafts/integration-media',{method:'PUT',body:JSON.stringify({draft:mediaDraft,revision:2})});
+    assert.equal(saveText.status,200);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM draft_media_chunks').first()).n,0);
+    assert.equal((await upload(3)).status,200);
+    assert.equal((await fetch('/storage/drafts/integration-media',{method:'DELETE'})).status,200);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM draft_media_chunks').first()).n,0);
   } finally {await mf.dispose()}
 });

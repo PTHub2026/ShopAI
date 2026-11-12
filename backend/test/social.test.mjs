@@ -44,5 +44,5 @@ test('jobView includes provider from channel in publish and retry/run responses'
  // publish path: provider from 'a' (the channel) must be spread into j before deliver/jobView
  assert.match(source,/jobView\(\{\.\.\.j,provider:a\.provider\}\)/);
  // retry/run path: provider from 'account' must be spread into j before deliver
- assert.match(source,/deliver\(\{\.\.\.j,provider:account\?\.provider\}/);
+ assert.match(source,/deliver\(\{\.\.\.j,provider:account\?\.provider\?\?null\}/);
 });

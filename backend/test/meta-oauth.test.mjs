@@ -120,3 +120,21 @@ test('Meta OAuth: callback khi phiên ShopPost hết hạn chuyển về ứng d
  const post=await worker.fetch(new Request(base+'/api/social/meta/start',{method:'POST',headers:{Origin:base}}),f.env);
  assert.equal(post.status,401);
 });
+test('Messenger reauthorization requests both scopes and rejects an incomplete grant before saving a Page',async()=>{
+ const f=fixture(),owner=f.login('email:owner@example.com'),previous=globalThis.fetch;
+ try{
+  const start=await f.req(owner,'/api/social/meta/start?purpose=messenger','POST');
+  const auth=new URL((await start.json()).authorizationUrl);
+  assert.match(auth.searchParams.get('scope'),/pages_messaging,pages_manage_metadata/);
+  assert.equal(auth.searchParams.get('auth_type'),'rerequest');
+  globalThis.fetch=async(input)=>{
+   const url=new URL(input);
+   if(url.pathname.endsWith('/oauth/access_token'))return Response.json({access_token:'synthetic-token'});
+   if(url.pathname.endsWith('/me/permissions'))return Response.json({data:['pages_show_list','pages_manage_posts','pages_messaging'].map(permission=>({permission,status:'granted'}))});
+   throw Error('Must reject before listing or replacing Page grants');
+  };
+  const result=await f.req(owner,'/api/social/meta/callback?state='+auth.searchParams.get('state')+'&code=synthetic');
+  assert.equal(result.status,403);
+  assert.match(await result.text(),/meta_scope_denied/);
+ }finally{globalThis.fetch=previous;f.sqlite.close();}
+});

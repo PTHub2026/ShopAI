@@ -21,7 +21,7 @@ export function metaConfigured(e){
  Boolean(e.SOCIAL_TOKEN_KEY);
 }
 function form(obj){return new URLSearchParams(obj);}
-async function graphRequest(e,path,token,fields={},method='GET'){
+export async function graphRequest(e,path,token,fields={},method='GET'){
  const uri=new URL(graph(e,path));
  let init={method,redirect:'manual',signal:AbortSignal.timeout(12000)};
  // Keep Graph access tokens out of URLs, browser history and edge request logs.
@@ -142,17 +142,47 @@ export async function handleMeta(req,env,who,json){
  const body=await res.clone().json().catch(()=>({}));
  return callbackErrorPage(String(body.code||body.error||''),res.status);
 }
+async function metaEngagement(req,env,who,ctx,json){
+ const db=env.DB,shop=ctx.shop.id;
+ const {results}=await db.prepare(`SELECT j.id,j.remote_message_id,j.account_id,c.provider,c.name,c.token,c.token_iv
+ FROM publish_jobs j JOIN channels c ON c.shop_id=j.shop_id AND c.id=j.account_id
+ WHERE j.shop_id=? AND j.status='sent' AND c.status='connected' AND c.provider IN ('facebook','instagram')
+ AND j.remote_message_id IS NOT NULL
+ ORDER BY j.created_at DESC,j.id DESC LIMIT 12`).bind(shop).all();
+ const number=value=>Number.isSafeInteger(value)&&value>=0?value:null;
+ const read=async row=>{
+  const entry={id:row.id,postId:row.remote_message_id,provider:row.provider,channel:row.name,reactions:null,comments:null,status:'unavailable'};
+  if(!/^\d{1,32}(?:_\d{1,32})?$/.test(row.remote_message_id))return entry;
+  try{
+   const token=await decryptToken(env,row.token,row.token_iv);
+   const facebook=row.provider==='facebook';
+   const data=await graphRequest(env,row.remote_message_id,token,{fields:facebook?'reactions.limit(0).summary(true),comments.limit(0).summary(true)':'like_count,comments_count'});
+   entry.reactions=number(facebook?data.reactions?.summary?.total_count:data.like_count);
+   entry.comments=number(facebook?data.comments?.summary?.total_count:data.comments_count);
+   if(entry.reactions!==null||entry.comments!==null)entry.status='available';
+  }catch(e){if(metaDenied(e))entry.status='permission_required';}
+  return entry;
+ };
+ const rows=[];
+ for(let i=0;i<results.length;i+=4)rows.push(...await Promise.all(results.slice(i,i+4).map(read)));
+ const current=await resolveShop(env,who,req);
+ if(current.error||current.shop.id!==shop||!current.can('reports.view'))return error(json,'forbidden',403);
+ const active=await db.prepare("SELECT id,token FROM channels WHERE shop_id=? AND status='connected' AND provider IN ('facebook','instagram')").bind(shop).all();
+ const tokens=new Map(active.results.map(row=>[row.id,row.token]));
+ return json({rows:rows.filter((_,i)=>tokens.get(results[i].account_id)===results[i].token),fetchedAt:stamp()},200,{'Cache-Control':'no-store'});
+}
+
 async function handleMetaRequest(req,env,who,json){
  if(!metaConfigured(env))return error(json,'meta_not_configured',503);
  if(!env.DB)return error(json,'db_missing',503);
  const url=new URL(req.url),segments=url.pathname.split('/'),act=segments.at(-1);
- if(!['start','callback','sync'].includes(act))return error(json,'not_found',404);
+ if(!['start','callback','sync','engagement'].includes(act))return error(json,'not_found',404);
  const db=env.DB;
  await db.batch(META_SCHEMA.map(s=>db.prepare(s)));
  let scopedRequest=req;
  if(act==='callback'){
   const state=url.searchParams.get('state');
-  if(!state||!/^[-_A-Za-z0-9]{43}$/.test(state))return error(json,'invalid_oauth_state',400);
+  if(!state||!/^(?:m_)?[-_A-Za-z0-9]{43}$/.test(state))return error(json,'invalid_oauth_state',400);
   const prior=await db.prepare('SELECT shop_id,actor FROM meta_oauth_states WHERE state_hash=?').bind(await sha(state)).first();
   if(!prior||prior.actor!==who.owner)return error(json,'invalid_oauth_state',403);
   const headers=new Headers(req.headers);headers.set('X-ShopPost-Shop',prior.shop_id);
@@ -160,6 +190,11 @@ async function handleMetaRequest(req,env,who,json){
  }
  const ctx=await resolveShop(env,who,scopedRequest);
  if(ctx.error)return json({error:ctx.error,code:ctx.code},ctx.status);
+ if(act==='engagement'){
+  if(req.method!=='GET')return error(json,'method_not_allowed',405);
+  if(!ctx.can('reports.view'))return error(json,'forbidden',403);
+  return metaEngagement(req,env,who,ctx,json);
+ }
  if(act==='sync'){
   if(req.method!=='POST')return error(json,'method_not_allowed',405);
   if(!ctx.can('channels.configure_token')||ctx.shop.status!=='active')return error(json,'forbidden',403);
@@ -168,15 +203,20 @@ async function handleMetaRequest(req,env,who,json){
  if(act==='start'){
   if(req.method!=='POST')return error(json,'method_not_allowed',405);
   if(!ctx.can('channels.configure_token')||ctx.shop.status!=='active')return error(json,'forbidden',403);
-  const state=random(),t=stamp();
+  const messenger=url.searchParams.get('purpose')==='messenger';
+  const state=(messenger?'m_':'')+random(),t=stamp();
   await db.prepare('INSERT INTO meta_oauth_states(state_hash,shop_id,actor,expires_at,created_at) VALUES(?,?,?,?,?)').bind(await sha(state),ctx.shop.id,who.owner,t+600,t).run();
   const auth=new URL('https://www.facebook.com/'+version(env)+'/dialog/oauth');
   // Business-type Meta apps use Facebook Login for Business: permissions come from a
   // Dashboard configuration (config_id) instead of the scope parameter.
-  const configId=String(env.META_LOGIN_CONFIG_ID||'').trim();
+  const configId=String((messenger&&env.META_MESSENGER_LOGIN_CONFIG_ID)||env.META_LOGIN_CONFIG_ID||'').trim();
+  if(messenger&&configId&&!env.META_MESSENGER_LOGIN_CONFIG_ID)return error(json,'meta_messenger_login_not_configured',503);
   const params={client_id:appId(env),redirect_uri:env.META_REDIRECT_URI,response_type:'code',state};
   if(/^\d{5,20}$/.test(configId))params.config_id=configId;
-  else params.scope='pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish';
+  else {
+   params.scope='pages_show_list,pages_read_engagement,pages_manage_posts,instagram_basic,instagram_content_publish';
+   if(messenger){params.scope+=',pages_messaging,pages_manage_metadata';params.auth_type='rerequest';}
+  }
   auth.search=new URLSearchParams(params).toString();
   return json({authorizationUrl:auth.toString()});
  }
@@ -185,7 +225,7 @@ async function handleMetaRequest(req,env,who,json){
  if(!ctx.can('channels.configure_token')||ctx.shop.status!=='active')return error(json,'forbidden',403);
  if(url.origin!==new URL(env.META_REDIRECT_URI).origin||url.pathname!==new URL(env.META_REDIRECT_URI).pathname)return error(json,'callback_origin_mismatch',400);
  const state=url.searchParams.get('state'),code=url.searchParams.get('code');
- if(!state||!/^[-_A-Za-z0-9]{43}$/.test(state))return error(json,'invalid_oauth_state',400);
+ if(!state||!/^(?:m_)?[-_A-Za-z0-9]{43}$/.test(state))return error(json,'invalid_oauth_state',400);
  const hash=await sha(state);
  const row=await db.prepare('SELECT shop_id,actor,expires_at FROM meta_oauth_states WHERE state_hash=?').bind(hash).first();
  if(!row||row.actor!==who.owner||row.shop_id!==ctx.shop.id||row.expires_at<=stamp())return error(json,'invalid_or_expired_state',403);
@@ -193,6 +233,7 @@ async function handleMetaRequest(req,env,who,json){
  const consumed=await db.prepare('DELETE FROM meta_oauth_states WHERE state_hash=? AND shop_id=? AND actor=? AND expires_at>?').bind(hash,ctx.shop.id,who.owner,stamp()).run();
  if(consumed.meta.changes!==1)return error(json,'oauth_state_used',403);
  if(!code||code.length>2048)return error(json,'oauth_declined',400);
+ const messenger=state.length===45;
  let pages;
  try {
   const tokenUrl=new URL(graph(env,'oauth/access_token'));
@@ -209,6 +250,7 @@ async function handleMetaRequest(req,env,who,json){
   const permissions=await graphRequest(env,'me/permissions',long.access_token,{limit:'100'});
   const granted=new Set((Array.isArray(permissions.data)?permissions.data:[]).filter(p=>p.status==='granted').map(p=>p.permission));
   if(!granted.has('pages_show_list')||!granted.has('pages_manage_posts'))throw Error('META_PAGE_SCOPE_DENIED');
+  if(messenger&&(!granted.has('pages_messaging')||!granted.has('pages_manage_metadata')))throw Error('META_PAGE_SCOPE_DENIED');
   const canUseInstagram=granted.has('instagram_basic')&&granted.has('instagram_content_publish');
   pages=await graphRequest(env,'me/accounts',long.access_token,{fields:'id,name,access_token,instagram_business_account{id,username}',limit:'100'});
   const items=Array.isArray(pages.data)?[...pages.data]:[];
@@ -229,6 +271,8 @@ async function handleMetaRequest(req,env,who,json){
   if(e?.message==='META_PAGE_SCOPE_DENIED')return error(json,'meta_scope_denied',403);
   return error(json,'meta_authorization_failed',502);
  }
+ const current=await resolveShop(env,who,scopedRequest);
+ if(current.error||current.shop.id!==ctx.shop.id||current.shop.status!=='active'||!current.can('channels.configure_token'))return error(json,'forbidden',403);
  const items=pages.data;
  let count=0;
  for(const page of items){
@@ -238,6 +282,6 @@ async function handleMetaRequest(req,env,who,json){
   if(pages.canUseInstagram&&ig&&/^\d+$/.test(String(ig.id||''))){await saveAccount(db,env,who,ctx.shop.id,'instagram',{id:ig.id,name:ig.username||'Instagram'},page.access_token);count++;}
  }
  await audit(db,{shopId:ctx.shop.id,actor:who.owner,action:'social.meta_oauth_complete',detail:{accountCount:count}});
- const redirect=new URL('/',url.origin);redirect.searchParams.set('meta_connected',String(count));redirect.hash='accounts';
+ const redirect=new URL('/',url.origin);redirect.searchParams.set('meta_connected',String(count));redirect.hash=messenger?'bot':'accounts';
  return new Response(null,{status:303,headers:{Location:redirect.toString(),'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
 }

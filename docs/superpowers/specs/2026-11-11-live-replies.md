@@ -1,0 +1,9 @@
+# Live reply scripts and whole-product verification
+
+User requests: inspect Kịch bản trả lời, make non-working controls functional against real backend, then inspect every page, repair and upgrade. Existing production scripts are browser-only and the automatic reply switch is disabled.
+
+Implement a shop-scoped server document for scripts and reply settings with CAS revisions, RBAC, size limits and server-side preview using the same matcher as live dispatch. Frontend CRUD, enabled flags, priority, working hours, SLA, AI generation and test controls must call the real APIs in managed mode; preserve offline demo mode. Never copy another shop's browser data automatically. Offer explicit import of existing local scripts, without automatic activation. Keep account credentials on server and ignore stale asynchronous results after shop/view/modal changes.
+
+Add verified inbound messaging and real reply adapters for connected Telegram groups/private target and Facebook Page Messenger. Owner/manager activation is per channel, explicit, and checks provider readiness. Existing channels stay inactive. Inbound signatures/secrets, immutable provider IDs and deduplicated event keys protect dispatch; bot echoes and old messages are ignored. Handoff/close/tag actions update real conversation state; no unclear delivery is retried. No test messages to actual customers without a specific recipient/content instruction. External permission/identity steps remain factual blockers rather than simulated success.
+
+Audit all MENU routes and significant controls; fix independent bugs found, maintain clear unavailable state where external integration is genuinely absent. Verify with real SQLite/Worker tests and live safe CRUD/preview. Deploy only after full suite/build and review. Report unverified platform behavior accurately.

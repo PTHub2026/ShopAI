@@ -16,3 +16,10 @@ test('backoff honors provider wait, caps attempts and never retries ambiguous se
  assert.equal(retryDecision({status:502},1).status,'unknown');
  assert.equal(retryDecision({status:401},1).reauth,true);
 });
+test('Facebook: link bài đăng dựng từ id Graph, từ chối id lạ',async()=>{
+ const {facebookPostUrl}=await import('../src/provider-adapters.js');
+ assert.equal(facebookPostUrl('1396389486893122_122110107363519903'),'https://www.facebook.com/1396389486893122_122110107363519903');
+ assert.equal(facebookPostUrl('987654321'),'https://www.facebook.com/987654321');
+ assert.equal(facebookPostUrl('abc/../x'),null);
+ assert.equal(facebookPostUrl(''),null);
+});

@@ -125,8 +125,15 @@ async function refreshAccessToken(env, refreshToken) {
   const body = new URLSearchParams({ app_id: String(env.ZALO_APP_ID || ''), grant_type: 'refresh_token', refresh_token: refreshToken });
   return fetchJson(ZALO_TOKEN, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', secret_key: String(env.ZALO_APP_SECRET || '') }, body: body.toString() });
 }
-async function getOaInfo(accessToken) {
-  return fetchJson(ZALO_GETOA, { method: 'GET', headers: { access_token: accessToken } });
+// Zalo requires HMAC-SHA256(access_token, app_secret) when app secret proof is enabled.
+// Send credentials only in headers; compute against the current token after every refresh.
+async function oaHeaders(env, accessToken) {
+  const key = await crypto.subtle.importKey('raw', enc.encode(env.ZALO_APP_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const proof = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(accessToken)));
+  return { access_token: accessToken, appsecret_proof: Array.from(proof, byte => byte.toString(16).padStart(2, '0')).join('') };
+}
+async function getOaInfo(env, accessToken) {
+  return fetchJson(ZALO_GETOA, { method: 'GET', headers: await oaHeaders(env, accessToken) });
 }
 
 async function upsertChannel(db,env, { shopId, provider, externalId, name, accessToken, refreshToken, expiresAt, connectedBy, expected, generation }) {
@@ -153,7 +160,7 @@ async function ensureFreshToken(env, db, channel) {
  const refresh=await unprotectToken(env,channel.shop_id,'refresh',channel.refresh_token);
  if(!/^\d+$/.test(String(channel.external_id||'')))throw Object.assign(Error('Cần kết nối lại Zalo OA để xác minh danh tính.'),{reauth:true});
  if(!channel.token.startsWith('enc1.')){
-  const verified=await getOaInfo(access);
+  const verified=await getOaInfo(env,access);
   if(!verified.ok||Number(verified.data?.error)!==0||String(verified.data?.data?.oa_id||'')!==String(channel.external_id))throw Object.assign(Error('Cần kết nối lại Zalo OA để xác minh quyền truy cập.'),{reauth:true});
   const a=await protectToken(env,channel.shop_id,'access',access),r=await protectToken(env,channel.shop_id,'refresh',refresh);
   await db.prepare('UPDATE channels SET token=?,refresh_token=? WHERE shop_id=? AND provider=? AND token=? AND refresh_token IS ?').bind(a,r,channel.shop_id,channel.provider,channel.token,channel.refresh_token).run();
@@ -231,10 +238,11 @@ export async function publishZaloArticle(env, db, channel, opts = {}) {
   for (const ref of refs.slice(1)) body.push(imageSegment(ref));
   const article = { type: 'normal', title: heading, author: (clean(opts.author) || 'Shoppost').slice(0,50), description: text.slice(0, 200), body, status: 'show' };
   if (refs[0]) article.cover = coverFrom(refs[0]);
-  const created = await fetchJson(ZALO_ARTICLE_CREATE, { method: 'POST', headers: { access_token: accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify(article) });
+  const headers = { ...await oaHeaders(env, accessToken), 'Content-Type': 'application/json' };
+  const created = await fetchJson(ZALO_ARTICLE_CREATE, { method: 'POST', headers, body: JSON.stringify(article) });
   const token = created.ok && created.data && Number(created.data.error) === 0 ? (created.data.data && created.data.data.token) : null;
   if (!token) throw providerFailure(created,'Zalo từ chối tạo bài viết: '+zaloError(created));
-  const verified = await fetchJson(ZALO_ARTICLE_VERIFY, { method: 'POST', headers: { access_token: accessToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+  const verified = await fetchJson(ZALO_ARTICLE_VERIFY, { method: 'POST', headers, body: JSON.stringify({ token }) });
   if (!(verified.ok && verified.data && Number(verified.data.error) === 0)) throw Object.assign(new Error('Zalo chưa xác nhận bài viết: '+zaloError(verified)),{deliveryUncertain:true});
   const art = (verified.data && verified.data.data) || {};
   if(!art.id&&!art.article_id)throw Error('Zalo chưa xác nhận mã bài viết. Kiểm tra OA trước khi đăng lại.');
@@ -266,7 +274,7 @@ export async function channels(request, env, who, json) {
     const h=new Headers(request.headers);h.set('X-Channel-Provider','zalo');
     return handleSocial(new Request(target,{method,headers:h,...(!['GET','HEAD'].includes(method)?{body:await request.arrayBuffer()}:{}),signal:request.signal}),env,who,json);
   }
-  const unified = /^\/channels\/(all|telegram|facebook|instagram|meta)\/(accounts|connect|publish|schedule|jobs|providers|start)(\/.*)?$/.exec(path);
+  const unified = /^\/channels\/(all|telegram|facebook|instagram|meta)\/(accounts|connect|publish|schedule|jobs|providers|start|sync)(\/.*)?$/.exec(path);
   if(unified){
     const [,provider,operation,rest='']=unified;
     let section=operation==='connect'?'accounts':operation==='publish'||operation==='schedule'?'jobs':operation;
@@ -451,7 +459,7 @@ export async function zaloCallback(request, env, who) {
   const refreshToken = tok.data.refresh_token || null;
   const expiresAt = now() + (Number(tok.data.expires_in) || 90000);
 
-  const oa = await getOaInfo(accessToken);
+  const oa = await getOaInfo(env,accessToken);
   const oaData = oa.ok && oa.data && Number(oa.data.error) === 0 ? oa.data.data : null;
   if(!oaData || !/^\d+$/.test(String(oaData.oa_id||'')))return fail('oa_unavailable');
   const externalId = String(oaData.oa_id);

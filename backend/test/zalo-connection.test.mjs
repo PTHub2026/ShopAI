@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
-import {webcrypto,createHash} from 'node:crypto';
+import {webcrypto,createHash,createHmac} from 'node:crypto';
 import worker from '../src/worker.js';
 import {SESSION_COOKIE} from '../src/auth.js';
 if(!globalThis.crypto)globalThis.crypto=webcrypto;
@@ -34,6 +34,28 @@ async function begin(f,cookie){
 async function callback(f,start){return worker.fetch(new Request(start.url,{headers:{Cookie:start.cookie}}),f.env);}
 async function mocked(fn,run){const original=globalThis.fetch;globalThis.fetch=fn;try{await run();}finally{globalThis.fetch=original;}}
 const graph=async url=>String(url).includes('access_token')?Response.json({access_token:access,refresh_token:refresh,expires_in:90000}):Response.json({error:0,data:{oa_id:'123456789',name:'Test OA'}});
+function assertOaProof(env,url,init,token){
+ const headers=new Headers(init.headers);
+ assert.equal(headers.get('access_token'),token);
+ assert.equal(headers.get('appsecret_proof'),createHmac('sha256',env.ZALO_APP_SECRET).update(token).digest('hex'));
+ assert.equal(String(url).includes(token),false);
+ assert.equal(String(url).includes(env.ZALO_APP_SECRET),false);
+ assert.equal(headers.has('secret_key'),false);
+}
+test('Zalo OA verification and article requests carry the required app secret proof',async()=>{
+ const f=fixture(),owner=f.login('email:owner@example.com'),start=await begin(f,owner),paths=[];
+ try{await mocked(async(url,init)=>{
+  if(String(url).includes('oauth.zaloapp.com'))return graph(url);
+  assertOaProof(f.env,url,init,access);paths.push(new URL(url).pathname);
+  if(String(url).endsWith('/getoa'))return graph(url);
+  return String(url).endsWith('/create')?Response.json({error:0,data:{token:'article'}}):Response.json({error:0,data:{id:'post'}});
+ },async()=>{
+  assert.match((await callback(f,start)).headers.get('Location'),/connected=zalo/);
+  const {publishZaloArticle}=await import('../src/channels.js');
+  assert.equal((await publishZaloArticle(f.env,f.env.DB,f.sqlite.prepare('SELECT * FROM channels').get(),{content:'Test',images:['https://example.com/cover.png']})).ok,true);
+  assert.deepEqual(paths,['/v2.0/oa/getoa','/v2.0/article/create','/v2.0/article/verify']);
+ });}finally{f.sqlite.close();}
+});
 test('Zalo connection is single-use, encrypts tokens, and creates no login session',async()=>{
  const f=fixture(),owner=f.login('email:owner@example.com'),start=await begin(f,owner);
  try{await mocked(graph,async()=>{
@@ -70,6 +92,7 @@ test('Zalo refresh is serialized and stored rotated tokens are reusable without 
  await mocked(async(url,init)=>{
   if(String(url).includes('access_token')){refreshCalls++;await new Promise(r=>setTimeout(r,20));return Response.json({access_token:'rotated-access',refresh_token:'rotated-refresh',expires_in:90000});}
   assert.equal(init.headers.access_token,'rotated-access');
+  assertOaProof(f.env,url,init,'rotated-access');
   return String(url).endsWith('/create')?Response.json({error:0,data:{token:'article'}}):Response.json({error:0,data:{id:'post'}});
  },async()=>{
   const result=await Promise.allSettled([publishZaloArticle(f.env,f.env.DB,channel,{content:'One',images:['https://example.com/cover.png']}),publishZaloArticle(f.env,f.env.DB,channel,{content:'Two',images:['https://example.com/cover.png']})]);
@@ -99,7 +122,7 @@ test('legacy plaintext tokens are encrypted before use and cannot be moved to an
  try{await mocked(graph,()=>callback(f,start));
  f.sqlite.prepare('UPDATE channels SET token=?,refresh_token=?').run(access,refresh);
  const {publishZaloArticle}=await import('../src/channels.js');
- await mocked(async(url,init)=>{assert.equal(init.headers.access_token,access);if(String(url).endsWith('/getoa'))return Response.json({error:0,data:{oa_id:'123456789'}});return String(url).endsWith('/create')?Response.json({error:0,data:{token:'article'}}):Response.json({error:0,data:{id:'post'}});},async()=>{
+ await mocked(async(url,init)=>{assertOaProof(f.env,url,init,access);if(String(url).endsWith('/getoa'))return Response.json({error:0,data:{oa_id:'123456789'}});return String(url).endsWith('/create')?Response.json({error:0,data:{token:'article'}}):Response.json({error:0,data:{id:'post'}});},async()=>{
   assert.equal((await publishZaloArticle(f.env,f.env.DB,f.sqlite.prepare('SELECT * FROM channels').get(),{content:'Test',images:['https://example.com/cover.png']})).ok,true);
   const stored=f.sqlite.prepare('SELECT * FROM channels').get();assert.ok(stored.token.startsWith('enc1.'));assert.ok(stored.refresh_token.startsWith('enc1.'));
   await assert.rejects(publishZaloArticle(f.env,f.env.DB,{...stored,shop_id:'other-shop'},{content:'Test',images:['https://example.com/cover.png']}));

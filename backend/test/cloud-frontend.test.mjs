@@ -7,10 +7,10 @@ const scope='a'.repeat(64);
 const session={userScope:scope,capabilities:{ai:true,drafts:true,publishing:false,scheduling:false,inbox:false}};
 const envelope=(id='cloud-a',content='Đã lưu từ thiết bị khác',revision=1)=>({draft:{id,type:'post',content,channels:[],status:'draft',media:[],assets:[],custom:{}},revision,updatedAt:1000});
 // api: mock cho /api/* (shop, thành viên, lời mời); mặc định trả tài khoản chưa có shop để các mock bản nháp cũ không bị lẫn yêu cầu khởi động.
-function runtime({managed=true,fetchImpl,stored={},api,invite=''}={}) {
+function runtime({managed=true,fetchImpl,stored={},api,invite='',route=''}={}) {
   const requests=[],errors=[];
   const html=managed?source.replace('<head>','<head><meta name="shopai-ai-endpoint" content="/ai"><meta name="shopai-user-scope" content="'+scope+'">'+(invite?'<meta name="shoppost-invite" content="'+invite+'">':'')):source;
-  const dom=new JSDOM(html,{url:'https://app.example/',runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:new VirtualConsole(),beforeParse(w){
+  const dom=new JSDOM(html,{url:'https://app.example/'+(route?'#'+route:''),runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:new VirtualConsole(),beforeParse(w){
     w.scrollTo=()=>{};w.AbortSignal=AbortSignal;w.TextEncoder=TextEncoder;
     for(const [k,v] of Object.entries(stored))w.localStorage.setItem(k,JSON.stringify(v));
     w.fetch=async(url,options={})=>{const path=new URL(url,w.location.href).pathname;requests.push({path,...options});if(path.startsWith('/api/'))return api?api(path,options):Response.json({shops:[],defaultShopId:null,admin:false,roles:{}});return fetchImpl?fetchImpl(path,options):Response.json(session)};
@@ -21,6 +21,25 @@ function runtime({managed=true,fetchImpl,stored={},api,invite=''}={}) {
 }
 const settle=()=>new Promise(r=>setImmediate(r));
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
+test('YouTube UI distinguishes setup from connection and sends the chosen video as binary',async()=>{
+ const r=runtime();try{
+  await settle();r.read("SHOP.permissions=['channels.configure_token','channels.operate']");
+  const disabled=r.read("googleSection({configured:false,accounts:[]},{uploads:[]})");
+  assert.match(disabled,/disabled/);assert.match(disabled,/chưa|cần hoàn tất/i);
+  const section=r.read(`googleSection({configured:true,accounts:[{id:'yt-test',name:'<script>bad</script>',targetId:'UCtest',status:'connected'}]},{uploads:[]})`);
+  r.w.document.querySelector('#view').innerHTML=section;assert.equal(r.w.document.querySelector('#view script'),null);
+  const file=new r.w.File(['video'],'test.mp4',{type:'video/mp4'});
+  Object.defineProperty(r.w.document.querySelector('#yt_file'),'files',{value:[file]});
+  r.w.document.querySelector('#yt_title').value='My video';r.w.document.querySelector('#yt_kids').value='false';
+  r.w.confirm=()=>true;r.w.crypto.randomUUID=()=> 'test-video-idempotency-key';r.w.socialAccountsLive=()=>{};
+  let received;r.w.fetch=async(url,opts)=>{received={url,opts};return Response.json({videoId:'abcdefghijk'});};
+  await r.w.googleUpload();assert.equal(received.opts.body,file);assert.equal(received.opts.headers['Content-Type'],'video/mp4');assert.equal(received.opts.headers['Idempotency-Key'],'test-video-idempotency-key');assert.match(received.url,/privacy=private/);
+  assert.match(r.w.document.querySelector('#yt_status').textContent,/abcdefghijk/);
+  let counter=0;const keys=[];r.w.crypto.randomUUID=()=> 'retry-video-attempt-'+(++counter);
+  r.w.fetch=async(url,opts)=>{keys.push(opts.headers['Idempotency-Key']);return keys.length===1?Response.json({error:'youtube_upload_failed',status:'failed'},{status:502}):Response.json({videoId:'abcdefghijk'});};
+  await r.w.googleUpload();await r.w.googleUpload();assert.notEqual(keys[0],keys[1],'a confirmed pre-send failure allows a fresh attempt');
+ }finally{r.close();}
+});
 function edit(r,text='Bản nháp cần lưu') {r.w.document.querySelector('#ct').value=text;r.w.document.querySelector('#ct').dispatchEvent(new r.w.Event('input'));}
 
 test('Managed application starts empty and separates local state from demo',async()=>{
@@ -88,10 +107,58 @@ test('A pending save cannot overwrite edits or a replacement draft',async()=>{
   }
 });
 
-test('Unsupported media, custom content or schedules do not get silently dropped',async()=>{
+test('Unavailable media, custom content or incomplete schedules do not get silently dropped',async()=>{
   for(const change of ['D.media=[{type:"image/png"}]','D.custom={x:{text:"riêng"}}','D.textAssets=["a"]','D.when="later"']){
     const r=runtime();try{await settle();edit(r);r.read(change);await r.w.cloudSaveDraft();assert.equal(r.requests.filter(x=>x.method==='PUT').length,0);assert.equal(r.read('!!D.cloud'),false)}finally{r.close()}
   }
+});
+
+test('Cloud draft round trip restores two original files and the intended schedule',async()=>{
+  let saved;
+  const r=runtime({fetchImpl:async(path,options)=>{
+    if(path==='/session')return Response.json(session);
+    if(options.method==='PUT'){
+      assert.equal(options.headers['Content-Type'],undefined);
+      const {draft,revision}=JSON.parse(options.body.get('payload'));
+      assert.equal(revision,0);
+      const files=options.body.getAll('file');
+      assert.deepEqual(await Promise.all(files.map(file=>file.text())),['first original','second original']);
+      const media=files.map(file=>({id:crypto.randomUUID(),name:file.name,type:file.type,size:file.size}));
+      saved={...envelope(draft.id,draft.content),draft:{...draft,media}};
+      return Response.json(saved);
+    }
+    const file=saved.draft.media.find(file=>path.endsWith('/media/'+file.id));
+    if(file)return new Response(file.name==='first.png'?'first original':'second original',{headers:{'Content-Type':file.type}});
+    return Response.json(saved);
+  }});
+  try{
+    await settle();edit(r);
+    r.w.Blob=Blob;r.w.FormData=FormData;r.w.URL.createObjectURL=URL.createObjectURL;
+    r.read(`D.media=[{name:'first.png',type:'image/png',file:new Blob(['first original'],{type:'image/png'})},{name:'second.jpg',type:'image/jpeg',file:new Blob(['second original'],{type:'image/jpeg'})}];D.when='later';D.date='2027-01-01';D.time='11:30';`);
+    await r.w.cloudSaveDraft();
+    assert.equal(r.read('D.cloud.revision'),1);
+    r.read('D=newDraft()');
+    await r.w.cloudOpenDraft(saved.draft.id);
+    assert.equal(r.read('D.content'),'Bản nháp cần lưu');
+    assert.equal(r.read('D.media.length'),2);
+    assert.equal(await r.read('D.media[1].file.text()'),'second original');
+    assert.equal(r.read('D.date'),'2027-01-01');
+    assert.equal(r.read('D.time'),'11:30');
+    assert.equal(r.requests.filter(request=>request.method==='POST').length,0);
+    r.read('D.media.forEach(file=>URL.revokeObjectURL?.(file.url))');
+  }finally{r.close()}
+});
+
+test('A missing attachment on the server keeps the current editor intact',async()=>{
+  const row=envelope();
+  row.draft.media=[{id:crypto.randomUUID(),name:'missing.png',type:'image/png',size:1}];
+  const r=runtime({fetchImpl:async path=>path==='/session'?Response.json(session):path.includes('/media/')?Response.json({error:'Tệp không còn.'},{status:404}):Response.json(row)});
+  try{
+    await settle();edit(r,'Bản đang soạn');
+    await r.w.cloudOpenDraft(row.draft.id);
+    assert.equal(r.read('D.content'),'Bản đang soạn');
+    assert.match(r.w.document.querySelector('#cloud_status').textContent,/Tệp không còn/);
+  }finally{r.close()}
 });
 
 test('Opening a cloud draft uses the latest server revision and protects unsaved edits',async()=>{
@@ -337,9 +404,243 @@ test('Zalo publishing preserves the idempotency header and caller cancellation s
  }finally{r.close();}
 });
 test('immediate Zalo rate-limit responses retain the common job for later successful reconciliation',async()=>{
- const r=runtime({fetchImpl:async(path)=>path==='/channels/zalo/publish'?Response.json({job:{id:'pj_retry',status:'retryable',kind:'photo',attempts:1},retryAfter:30},{status:429}):Response.json(session)});
- try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';S.channels=[{id:'real_zalo',pf:'zalo',real:true,provider:'zalo',connected:true}];D.content='Queued content';D.channels=['real_zalo'];D.media=[{type:'image/jpeg',thumb:'data:image/jpeg;base64,/9j/AA==',name:'cover',size:4}]");
- await r.w.submitPostReal(['real_zalo']);assert.equal(r.read('S.posts[0].schedId'),'pj_retry');assert.equal(r.read('S.posts[0].status'),'scheduled');
+ const r=runtime({fetchImpl:async(path)=>path==='/channels/all/jobs'?Response.json({job:{id:'pj_retry',status:'retryable',kind:'photo',attempts:1},retryAfter:30},{status:429}):Response.json(session)});
+ try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.operate'];S.channels=[{id:'real_zalo',accountId:'zalo-a',name:'OA',pf:'zalo',real:true,provider:'zalo',connected:true}];D.content='Queued content';D.channels=['real_zalo'];D.media=[{type:'image/jpeg',thumb:'data:image/jpeg;base64,/9j/AA==',name:'cover',size:4}]");
+ r.w.confirm=()=>true;await r.w.submitPostReal(['real_zalo']);assert.equal(r.read('S.posts[0].schedId'),'pj_retry');assert.equal(r.read('S.posts[0].status'),'scheduled');
  r.w.applyPublishJobs([{id:'pj_retry',status:'sent',kind:'photo',attempts:2}],'shop');assert.equal(r.read('S.posts[0].status'),'published');
+ }finally{r.close();}
+});
+
+test('composer loads connected Facebook channels without overwriting the draft and enables publishing',async()=>{
+ const r=runtime({fetchImpl:async(path)=>path==='/channels'?Response.json({channels:[]}):path==='/channels/all/accounts'?Response.json({accounts:[{id:'fb-a',provider:'facebook',name:'ShopTrack',targetId:'123',status:'active'},{id:'fb-old',provider:'facebook',name:'Revoked',status:'revoked'}]}):Response.json(session)});
+ try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';D.content='Keep my draft';D.media=[{type:'image/png',thumb:'data:image/png;base64,iVBORw0KGgo='}]");await r.w.channelsLoad();
+ assert.equal(r.read('D.content'),'Keep my draft');assert.equal(r.read('D.media.length'),1);
+ assert.equal(r.read('S.channels.filter(c=>c.connected&&c.pf===\"facebook\").length'),1);
+ r.w.selAll(1);assert.equal(r.w.document.querySelector('#sub').disabled,false);assert.match(r.w.document.querySelector('#chlist').textContent,/ShopTrack/);
+ }finally{r.close();}
+});
+test('Facebook composer confirms exact channel and sends all photos with stable idempotency while blocking double clicks',async()=>{
+ const pending=deferred(),sent=[];let confirmations=0;
+ const r=runtime({fetchImpl:async(path,opts)=>{if(path==='/channels/all/jobs'&&opts.method==='POST'){sent.push(opts);await pending.promise;return Response.json({ok:true,job:{id:'pj_fb',status:'sent',url:'https://www.facebook.com/123_9'},url:'https://www.facebook.com/123_9'});}return Response.json(session);}});
+ try{await settle();r.w.crypto.randomUUID=()=> 'stable-facebook-composer-key';r.w.confirm=msg=>{confirmations++;assert.match(msg,/ShopTrack/);return true;};
+ r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.operate'];S.channels=[{id:'real_fb',accountId:'fb-a',pf:'facebook',provider:'facebook',real:true,name:'ShopTrack',connected:true}];D.content='Caption';D.channels=['real_fb'];D.media=[{type:'image/png',thumb:'data:image/png;base64,iVBORw0KGgo='},{type:'image/jpeg',thumb:'data:image/jpeg;base64,/9j/AA=='}]");
+ const first=r.w.submitPostReal(['real_fb']);await settle();await r.w.submitPostReal(['real_fb']);assert.equal(sent.length,1);assert.equal(confirmations,1);
+ const payload=JSON.parse(sent[0].body);assert.equal(payload.accountId,'fb-a');assert.equal(payload.images.length,2);assert.equal(payload.text,'Caption');assert.equal(sent[0].headers['Idempotency-Key'],'stable-facebook-composer-key');
+ pending.resolve();await first;assert.equal(r.read('S.posts[0].status'),'published');assert.equal(r.read('S.posts[0].url'),'https://www.facebook.com/123_9');assert.equal(r.read('D.content'),'');
+ }finally{r.close();}
+});
+
+test('channel loading from a previous shop never clears the new shop connections',async()=>{
+ const pending=deferred(),r=runtime({fetchImpl:async(path)=>path==='/channels'?pending.promise:Response.json({accounts:[]})});
+ try{await settle();r.read("SHOP.ready=true;SHOP.id='shop-a'");const load=r.w.channelsLoad();r.read("SHOP.id='shop-b';REALCH=[{id:'fb-b',name:'New shop',provider:'facebook',status:'connected'}];syncRealChannels()");pending.resolve(Response.json({channels:[]}));await load;assert.equal(r.read('S.channels[0].name'),'New shop');}finally{r.close();}
+});
+test('a declined confirmation and unsupported video never send a composer job',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';S.channels=[{id:'fb',accountId:'a',pf:'facebook',provider:'facebook',name:'Page',connected:true,real:true}];D.content='Keep';D.channels=['fb']");r.w.confirm=()=>false;await r.w.submitPostReal(['fb']);r.read("D.media=[{type:'video/mp4',thumb:'poster'}]");r.w.confirm=()=>true;await r.w.submitPostReal(['fb']);assert.equal(r.requests.filter(x=>x.path==='/channels/all/jobs'&&x.method==='POST').length,0);assert.equal(r.read('D.content'),'Keep');}finally{r.close();}
+});
+test('partial channel delivery never marks a multi-channel post fully published',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.id='shop';S.posts=[{id:'post',jobs:[{id:'one',status:'pending'},{id:'two',status:'pending'}],status:'scheduled'}]");r.w.applyPublishJobs([{id:'one',status:'sent',url:'https://example.com/post'}],'shop');assert.equal(r.read('S.posts[0].status'),'scheduled');r.w.applyPublishJobs([{id:'two',status:'unknown'}],'shop');assert.equal(r.read('S.posts[0].status'),'unknown');r.w.applyPublishJobs([{id:'two',status:'sent'}],'shop');assert.equal(r.read('S.posts[0].status'),'published');}finally{r.close();}
+});
+
+test('mixed Facebook and Zalo composer channels retain both backend account IDs',async()=>{
+ const r=runtime({fetchImpl:async(path)=>path==='/channels'?Response.json({channels:[{provider:'zalo',external_id:'456',status:'connected',name:'OA'}]}):path==='/channels/all/accounts'?Response.json({accounts:[{id:'zalo-a',provider:'zalo',targetId:'456',status:'active'},{id:'fb-a',provider:'facebook',name:'Page',targetId:'123',status:'active'}]}):Response.json(session)});
+ try{await settle();r.read("SHOP.ready=true;SHOP.id='shop'");await r.w.channelsLoad();assert.equal(r.read('S.channels.find(c=>c.pf===\"zalo\").accountId'),'zalo-a');assert.equal(r.read('S.channels.find(c=>c.pf===\"facebook\").accountId'),'fb-a');}finally{r.close();}
+});
+test('published history uses the submitted snapshot while keeping edits made during delivery',async()=>{
+ const pending=deferred(),r=runtime({fetchImpl:async(path,opts)=>path==='/channels/all/jobs'&&opts.method==='POST'?pending.promise:Response.json(session)});
+ try{await settle();r.w.confirm=()=>true;r.w.crypto.randomUUID=()=> 'immutable-submission-test-key';r.read("SHOP.ready=true;SHOP.id='shop';S.channels=[{id:'fb',accountId:'a',pf:'facebook',provider:'facebook',name:'Page',connected:true,real:true}];D.content='Submitted';D.channels=['fb']");const send=r.w.submitPostReal(['fb']);await settle();r.read("D.content='New unsent edit';D.media=[{type:'image/png',thumb:'new-photo'}]");pending.resolve(Response.json({ok:true,job:{id:'sent-snapshot',status:'sent'}}));await send;assert.equal(r.read('S.posts[0].content'),'Submitted');assert.equal(r.read('S.posts[0].media.length'),0);assert.equal(r.read('D.content'),'New unsent edit');assert.equal(r.read('D.media.length'),1);}finally{r.close();}
+});
+
+test('real connection inventory counts Facebook and YouTube and never counts configuration or revoked accounts',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop'");
+ r.w.updateConnectionInventory({accounts:[{id:'fb',name:'ShopTrack',provider:'facebook',targetId:'123',status:'active'},{id:'old',name:'Old',provider:'facebook',targetId:'456',status:'revoked'},{id:'bad',name:'Missing identity',provider:'telegram',status:'active'}]},{channels:[],setup:{zalo:{configured:true}}},{configured:true,accounts:[{id:'yt',name:'My YouTube',targetId:'UCtest',status:'connected'}]},'shop');
+ const card=r.w.connectionSummary();assert.match(card,/2 tài khoản đã kết nối thật/);assert.match(card,/Facebook/);assert.match(card,/YouTube/);r.read("CHANNEL_TAB='available'");const available=r.w.connectionSummary();assert.match(available,/Chưa kết nối/);assert.match(available,/Đã ngắt kết nối/);assert.match(card,/Cần cấp quyền lại/);assert.match(r.w.document.querySelector('#shop_box').textContent,/2 kênh đã kết nối thật/);
+ }finally{r.close();}
+});
+test('connection status comes only from matching shop server data and incomplete reads never retain stale success',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='a'");r.w.updateConnectionInventory({accounts:[{id:'fb',name:'<script>bad</script>',provider:'facebook',targetId:'123',status:'active'}]},{channels:[]},{accounts:[]},'a');assert.doesNotMatch(r.w.connectionSummary(),/<script>/);
+ r.read("SHOP.id='b'");assert.doesNotMatch(r.w.connectionSummary(),/bad/);r.w.updateConnectionInventory({accounts:[]},{channels:[]},{accounts:[]},'a');assert.doesNotMatch(r.w.connectionSummary(),/bad/);
+ r.w.updateConnectionInventory(null,{channels:[]},{accounts:[]},'b');assert.match(r.w.connectionSummary(),/Chưa xác nhận đủ/);assert.doesNotMatch(r.w.connectionSummary(),/1 tài khoản đã kết nối thật/);
+ }finally{r.close();}
+});
+
+test('partial Zalo metadata stays visible as connected but is not publish selectable without its account ID',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop'");r.w.updateConnectionInventory(null,{channels:[{provider:'zalo',name:'OA',external_id:'123',status:'connected'}]},{accounts:[]},'shop');assert.match(r.w.connectionSummary(),/Đã kết nối thật/);assert.equal(r.read('S.channels.filter(c=>c.real).length'),0);assert.match(r.w.document.querySelector('#shop_box').textContent,/cần kiểm tra lại/);
+ r.w.updateConnectionInventory({accounts:[{id:'zalo-a',provider:'zalo',targetId:'123',status:'active'}]},{channels:[{provider:'zalo',name:'OA',external_id:'123',status:'connected'}]},{accounts:[]},'shop');assert.equal(r.read('S.channels[0].accountId'),'zalo-a');
+ }finally{r.close();}
+});
+
+test('account controls expose login logout and add-account without logging out on render',async()=>{
+ const r=runtime();try{await settle();for(const id of ['login_btn','logout_btn','switch_account_btn'])assert.ok(r.w.document.getElementById(id));assert.equal(r.w.document.getElementById('login_btn').hidden,true);assert.equal(r.w.document.querySelector('header #add_account_btn'),null);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);
+ r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.configure_token']");r.w.socialRequest=async()=>({facebook:{enabled:true}});r.w.cloudRequest=async()=>({setup:{zalo:{configured:true}}});r.w.googleRequest=async()=>({configured:true});await r.w.openAddAccount();assert.match(r.w.document.querySelector('#mbox').textContent,/Facebook/);assert.match(r.w.document.querySelector('#mbox').textContent,/YouTube/);assert.match(r.w.document.querySelector('#mbox').textContent,/Telegram/);assert.equal(r.requests.filter(x=>x.method==='POST').length,0);
+ }finally{r.close();}
+});
+test('logout failures retain the session and re-enable the controls, cancellation sends nothing',async()=>{
+ const r=runtime({fetchImpl:async(path)=>path==='/auth/logout'?Response.json({error:'Try later'},{status:503}):Response.json(session)});try{await settle();r.w.confirm=()=>false;await r.w.logoutShopPost();assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);r.w.confirm=()=>true;await r.w.logoutShopPost();assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,1);assert.equal(r.w.document.getElementById('logout_btn').disabled,false);assert.equal(r.w.location.pathname,'/');assert.match(r.w.document.querySelector('#toast').textContent,/Try later/);}finally{r.close();}
+});
+
+test('add-account respects viewer permissions and refuses a stale shop action',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=[]");r.w.socialRequest=async()=>({facebook:{enabled:true},instagram:{enabled:true},telegram:{enabled:true}});r.w.cloudRequest=async()=>({setup:{zalo:{configured:true}}});r.w.googleRequest=async()=>({configured:true});await r.w.openAddAccount();const buttons=[...r.w.document.querySelectorAll('#mbox button[onclick^="connectAdditionalAccount"]')];assert.equal(buttons.length,5);assert.ok(buttons.every(b=>b.disabled));r.read("SHOP.permissions=['channels.configure_token'];SHOP.id='other'");let calls=0;r.w.socialConnectMeta=()=>calls++;await r.w.connectAdditionalAccount('facebook','shop');assert.equal(calls,0);}finally{r.close();}
+});
+
+test('login recovery preserves draft and uses the normal authentication gate for an expired session',async()=>{
+ const r=runtime();try{await settle();edit(r,'Preserve before login');r.w.cloudRequest=async()=>{throw Object.assign(Error('Session expired'),{status:401});};await r.w.openShopPostLogin();assert.equal(r.read('D.content'),'Preserve before login');assert.match(r.w.localStorage.getItem('pdk_draft_v1:'+scope),/Preserve before login/);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);}finally{r.close();}
+});
+
+test('channel tabs separate shop accounts from available platforms and management menus use exact actions',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.configure_token'];SHOP.name='My shop'");r.w.updateConnectionInventory({accounts:[{id:'fb',name:'ShopTrack',provider:'facebook',targetId:'123',status:'active'}]},{channels:[]},{accounts:[{id:'yt',name:'Channel',targetId:'UCtest',status:'connected'}]},'shop');
+ const html=r.w.connectionSummary();assert.match(html,/Kênh đăng bài/);assert.match(html,/Kết nối kênh/);assert.match(html,/Cấp lại quyền/);assert.match(html,/Ngắt kết nối/);assert.doesNotMatch(html,/Đăng nhập \/ Kết nối/);
+ r.read("CHANNEL_TAB='available'");const available=r.w.connectionSummary();assert.match(available,/Instagram/);assert.match(available,/Kết nối thêm/);assert.match(available,/Kết nối Zalo OA/);
+ }finally{r.close();}
+});
+test('account disclosure distinguishes expired login and closes on Escape without logging out',async()=>{
+ const r=runtime();try{await settle();r.w.cloudRequest=async()=>{throw Object.assign(Error('expired'),{status:401});};await r.w.refreshAccountMenu();assert.equal(r.w.document.getElementById('login_btn').hidden,false);assert.equal(r.w.document.getElementById('logout_btn').hidden,true);assert.equal(r.w.document.getElementById('switch_account_btn').hidden,true);const menu=r.w.document.getElementById('account_actions');menu.open=true;menu.dispatchEvent(new r.w.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(menu.open,false);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);}finally{r.close();}
+});
+
+test('channel tab activation keeps keyboard focus and a single tab stop',async()=>{
+ const r=runtime();try{await settle();r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.configure_token']");r.w.updateConnectionInventory({accounts:[]},{channels:[]},{accounts:[]},'shop');r.w.document.querySelector('#view').innerHTML=r.w.connectionSummary();r.w.document.getElementById('tab_available').click();assert.equal(r.w.document.activeElement.id,'tab_available');assert.equal(r.w.document.getElementById('tab_available').tabIndex,0);assert.equal(r.w.document.getElementById('tab_connected').tabIndex,-1);r.w.document.getElementById('tab_available').dispatchEvent(new r.w.KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));assert.equal(r.w.document.activeElement.id,'tab_connected');assert.equal(r.w.document.getElementById('tab_connected').tabIndex,0);}finally{r.close();}
+});
+
+test('shared design adds clear screen headings and labels without replacing the editor or draft',async()=>{
+ const r=runtime();try{await settle();const input=r.w.document.querySelector('#ct');edit(r,'Still my draft');r.w.decorateProductScreen();await settle();assert.equal(r.w.document.querySelector('#ct'),input);assert.equal(input.value,'Still my draft');assert.match(r.w.document.querySelector('#screen_heading').textContent,/Soạn bài/);assert.equal(input.getAttribute('aria-label'),'Nội dung bài viết');assert.equal(r.w.document.querySelector('.drop').getAttribute('role'),'button');assert.equal(r.w.document.querySelector('#toast').getAttribute('aria-live'),'polite');assert.equal(r.w.document.querySelectorAll('.screen-heading').length,1);}finally{r.close();}
+});
+test('dialogs are labelled, trap focus, and return focus when dismissed',async()=>{
+ const r=runtime();try{await settle();const trigger=r.w.document.querySelector('#cloud_open');trigger.focus();r.w.modal('<h3>Test dialog</h3><label>Content</label><input id="dialog_input"><button id="dialog_close" onclick="closeModal()">Close</button>');const box=r.w.document.querySelector('#mbox');assert.equal(box.getAttribute('role'),'dialog');assert.equal(box.getAttribute('aria-modal'),'true');assert.equal(r.w.document.activeElement.id,'dialog_input');assert.equal(r.w.document.querySelector('label[for="dialog_input"]').textContent,'Content');r.w.document.querySelector('#dialog_close').focus();r.w.document.dispatchEvent(new r.w.KeyboardEvent('keydown',{key:'Tab',bubbles:true,cancelable:true}));assert.equal(r.w.document.activeElement.id,'dialog_input');r.w.closeModal();assert.equal(r.w.document.activeElement,trigger);}finally{r.close();}
+});
+test('managed library does not offer simulated cloud connectors as real services',async()=>{
+ const r=runtime();try{await settle();r.w.go('library');await settle();assert.equal(r.w.document.querySelector('#view .screen-scope'),null);assert.ok(r.w.document.querySelector('#lb_drive'));assert.ok(r.w.document.querySelector('#library_storage details'));assert.equal(r.w.document.querySelectorAll('button[onclick^="lbConnect"]').length,0);}finally{r.close();}
+});
+test('AI generation blocks duplicate clicks, preserves updated forms and restores loading controls',async()=>{
+ const pending=deferred(),r=runtime();try{await settle();r.w.go('ai');await settle();let calls=0;r.read('AI.call=async()=>"Generated"');r.w.eval('AI.call=async()=>window.pendingGeneration()');r.w.pendingGeneration=()=>{calls++;return pending.promise;};r.w.document.querySelector('#a_topic').value='Original';const button=r.w.document.querySelector('button[onclick="runGen(\'a\')"]'),out=r.w.document.querySelector('#a_out');const request=r.w.runGen('a');await r.w.runGen('a');assert.equal(calls,1);assert.equal(button.disabled,true);r.w.document.querySelector('#a_topic').value='Edited';pending.resolve('Old generated response');await request;assert.equal(button.disabled,false);assert.doesNotMatch(out.textContent,/Old generated response/);assert.match(out.textContent,/Yêu cầu đã dừng/);}finally{r.close();}
+});
+
+test('choosing an AI variant uses its own output and preserves edits made before confirmation',async()=>{
+ const r=runtime();try{await settle();r.w.go('ai');await settle();r.w.document.querySelector('#a_out')._variants=['Chosen from this form'];r.w._gen=['Unrelated'];r.w.useGen(0,'a');assert.equal(r.read('D.content'),'Chosen from this form');r.w.go('ai');await settle();r.w.document.querySelector('#a_out')._variants=['Replacement'];r.w.useGen(0,'a');r.read("D.content='Edited while confirming'");r.w.document.querySelector('#ask_yes').click();assert.equal(r.read('D.content'),'Edited while confirming');}finally{r.close();}
+});
+
+test('rewrite selection stays bound to its result after another generator updates global variants',async()=>{
+ const r=runtime();try{await settle();r.w.go('ai');await settle();r.w.document.querySelector('#rw_in').value='Rewrite source';r.read("AI.call=async kind=>kind==='generate'?'Other generator output':'Rewritten output'");await r.w.runRw('improve');const out=r.w.document.querySelector('#rw_out');assert.deepEqual([...out._variants],['Rewritten output']);r.w.document.querySelector('#a_topic').value='Other topic';await r.w.runGen('a');assert.equal(r.w._gen[0],'Other generator output');out.querySelector('button').click();assert.equal(r.read('D.content'),'Rewritten output');}finally{r.close();}
+});
+
+test('rewrite blocks duplicate requests and discards responses after form, page or output changes',async()=>{
+ for(const change of ['form','page','output']){const pending=deferred(),r=runtime();try{await settle();r.w.go('ai');await settle();r.w.document.querySelector('#rw_in').value='Source';let calls=0;r.w.pendingRewrite=()=>{calls++;return pending.promise;};r.read('AI.call=()=>window.pendingRewrite()');const out=r.w.document.querySelector('#rw_out'),buttons=[...r.w.document.querySelectorAll('button[onclick^="runRw("]')];const request=r.w.runRw('improve');await r.w.runRw('adapt');assert.equal(calls,1);assert.ok(buttons.every(b=>b.disabled));if(change==='form')r.w.document.querySelector('#rw_in').value='Edited';if(change==='page')r.w.go('create');if(change==='output')out.replaceWith(out.cloneNode(false));pending.resolve('Stale rewrite');await request;assert.equal(out._variants,undefined);assert.ok(buttons.filter(b=>b.isConnected).every(b=>!b.disabled));assert.doesNotMatch(r.w.document.querySelector('#view').textContent,/Stale rewrite/);}finally{r.close();}}
+});
+
+test('AI plan ignores duplicate requests and results from a replaced plan or screen',async()=>{
+ for(const change of ['plan','screen']){
+  const pending=deferred(),r=runtime();
+  try{
+   await settle();r.w.go('ai');r.w.runPlan();
+   let calls=0;
+   r.w.pendingPlan=()=>{calls++;return pending.promise;};
+   r.read('AI.call=()=>window.pendingPlan()');
+   const out=r.w.document.querySelector('#pl_out');
+   const request=r.w.planUse(0);
+   await r.w.planUse(1);
+   assert.equal(calls,1);
+   assert.ok([...out.querySelectorAll('button')].every(button=>button.disabled));
+   if(change==='plan')r.w.runPlan();
+   else r.w.go('library');
+   pending.resolve('Stale plan result');await request;
+   assert.equal(r.read('D.content'),'');
+   assert.equal(r.read('route'),change==='plan'?'ai':'library');
+   assert.equal(r.w.document.querySelector('#ask_yes'),null);
+  }finally{r.close();}
+ }
+});
+
+test('AI plan lets the user retry and saves the completed draft with its suggested time',async()=>{
+ const r=runtime();
+ try{
+  await settle();r.w.go('ai');r.w.runPlan();
+  r.read('AI.call=async()=>{throw Error("Unavailable")}');
+  await r.w.planUse(0);
+  const out=r.w.document.querySelector('#pl_out');
+  assert.match(out.querySelector('[role="status"]').textContent,/thử lại/);
+  assert.ok([...out.querySelectorAll('button')].every(button=>!button.disabled));
+  r.read('AI.call=async()=>"Planned post"');
+  await r.w.planUse(0);
+  assert.equal(r.read('route'),'create');
+  assert.equal(r.read('loadDraft().content'),'Planned post');
+  assert.equal(r.read('loadDraft().time'),'11:30');
+  assert.equal(r.read('loadDraft().when'),'later');
+ }finally{r.close();}
+});
+
+test('AI plan confirmation preserves changes made to the draft while the dialog is open',async()=>{
+ const r=runtime();
+ try{
+  await settle();edit(r,'Existing draft');r.w.go('ai');r.w.runPlan();
+  r.read('AI.call=async()=>"Planned post"');
+  await r.w.planUse(0);
+  r.read('D.time="18:00"');
+  r.w.document.querySelector('#ask_yes').click();
+  assert.equal(r.read('route'),'ai');
+  assert.equal(r.read('D.content'),'Existing draft');
+  assert.equal(r.read('D.time'),'18:00');
+ }finally{r.close();}
+});
+
+test('text prompt input has the passed dialog title as its accessible name',async()=>{
+ const r=runtime();try{await settle();const title='Tên mới cho shop';r.w.askText(title,'Shop A',()=>{});await settle();assert.equal(r.w.document.querySelector('#ask_in').getAttribute('aria-label'),title);assert.equal(r.w.document.querySelector('#ask_in').value,'Shop A');}finally{r.close();}
+});
+
+test('every managed screen renders its shared hierarchy without triggering writes',async()=>{
+ const readAPI=(path)=>path.includes('/google/accounts')?Response.json({configured:false,accounts:[]}):path.includes('/google/uploads')?Response.json({uploads:[]}):Response.json({shops:[],defaultShopId:null,admin:false,roles:{}});
+ const r=runtime({api:readAPI,fetchImpl:async(path)=>path==='/session'?Response.json(session):path==='/channels'?Response.json({channels:[],setup:{zalo:{configured:false,canConnect:false}}}):path==='/channels/all/accounts'?Response.json({accounts:[]}):path==='/channels/all/jobs'?Response.json({jobs:[]}):path==='/channels/all/providers'?Response.json({facebook:{enabled:false},instagram:{enabled:false},telegram:{enabled:false}}):Response.json({})});
+ try{await settle();r.w.HTMLCanvasElement.prototype.getContext=()=>new Proxy({measureText:()=>({width:0})},{get:(target,key)=>key in target?target[key]:()=>{}});const routes=r.read('Object.keys(SCREEN_META)');assert.equal(routes.length,17);for(const route of routes){r.w.go(route);await settle();await settle();assert.equal(r.w.document.querySelector('#view').dataset.screen,route);assert.ok(r.w.document.querySelector('#view h2'),route+' needs a clear screen heading');}assert.deepEqual(r.errors,[]);assert.equal(r.requests.filter(x=>['POST','PUT','PATCH','DELETE'].includes(x.method)).length,0);}finally{r.close();}
+});
+
+test('password fields have explicit visible labels and decoration preserves entered values',async()=>{
+ const r=runtime();try{await settle();r.w.go('settings');await settle();for(const [id,title] of [['pw_cur','Mật khẩu hiện tại'],['pw_new','Mật khẩu mới'],['pw_confirm','Nhập lại mật khẩu mới']]){const input=r.w.document.getElementById(id);assert.ok(input.labels.length);assert.ok([...input.labels].some(label=>label.textContent.startsWith(title)));input.value='Unsaved password';r.w.decorateProductScreen();assert.equal(r.w.document.getElementById(id),input);assert.equal(input.value,'Unsaved password');}assert.equal(r.requests.filter(x=>['POST','PUT','PATCH','DELETE'].includes(x.method)).length,0);}finally{r.close();}
+});
+
+test('composer channel and both asset views explicitly name selection checkboxes with escaped item names',async()=>{
+ const r=runtime();try{await settle();const name='Shop "A" <sample> & friends';r.w.fixtureName=name;r.read("S.channels=[{id:'label-channel',pf:'facebook',name:window.fixtureName,handle:'@test',connected:true}];D.channels=['label-channel'];S.assets=[{id:'label-asset',name:window.fixtureName,kind:'text',text:'Local content',created:Date.now(),size:12,source:'manual',tags:[],folder:null}];LB.sel.add('label-asset')");r.w.go('create');await settle();const checkbox=r.w.document.querySelector('#chlist input[type=checkbox]');assert.equal(checkbox.getAttribute('aria-label'),'Chọn kênh '+name+' (Facebook)');assert.equal(checkbox.checked,true);const editor=r.w.document.querySelector('#ct');r.w.decorateProductScreen();assert.equal(r.w.document.querySelector('#ct'),editor);for(const mode of ['grid','table']){r.read("LB.view='"+mode+"'");r.w.go('library');await settle();const item=r.w.document.querySelector('#view input[aria-label^="Chọn tài nguyên"]');assert.ok(item,mode);assert.equal(item.getAttribute('aria-label'),'Chọn tài nguyên '+name);assert.equal(item.checked,true);assert.equal(r.w.document.querySelector('#view sample'),null);}assert.equal(r.read('D.channels[0]'),'label-channel');assert.equal(r.read('S.assets[0].text'),'Local content');assert.equal(r.requests.filter(x=>['POST','PUT','PATCH','DELETE'].includes(x.method)).length,0);}finally{r.close();}
+});
+
+test('video scene text and duration controls have distinct scene names without changing project data',async()=>{
+ const r=runtime();try{await settle();r.w.HTMLCanvasElement.prototype.getContext=()=>new Proxy({measureText:()=>({width:0}),createLinearGradient:()=>({addColorStop:()=>{}})},{get:(target,key)=>key in target?target[key]:()=>{}});r.read("VP=vNewProject();VP.scenes=[{id:'scene-one',text:'Opening text',d:3},{id:'scene-two',text:'Closing text',d:4,cta:true}]");const before=r.read('JSON.stringify(VP)');r.w.go('video');await settle();const fields=[...r.w.document.querySelectorAll('.vscene textarea')];assert.deepEqual(fields.map(f=>f.getAttribute('aria-label')),['Nội dung cảnh 1','Nội dung cảnh 2']);assert.deepEqual(fields.map(f=>f.value),['Opening text','Closing text']);assert.deepEqual([...r.w.document.querySelectorAll('.vscene input[type=number]')].map(f=>f.getAttribute('aria-label')),['Thời lượng cảnh 1 (giây)','Thời lượng cảnh 2 (giây)']);r.w.decorateProductScreen();assert.equal(r.w.document.querySelector('.vscene textarea'),fields[0]);assert.equal(r.read('JSON.stringify(VP)'),before);assert.equal(r.requests.filter(x=>['POST','PUT','PATCH','DELETE'].includes(x.method)).length,0);}finally{r.close();}
+});
+
+test('Publishing report shows the newest selected period from the server',async()=>{
+ const delayed=deferred(),calls=[];
+ const r=runtime({api:async(path,options)=>{
+  if(path==='/api/social/jobs/summary'){
+   calls.push(options.headers['X-ShopPost-Shop']);
+   if(calls.length===1)return delayed.promise;
+   return Response.json({days:7,rows:[{provider:'telegram',status:'sent',count:4}]});
+  }
+  return Response.json({shops:[],defaultShopId:null,roles:{}});
+ }});
+ try{
+  await settle();r.read("SHOP.ready=true;SHOP.id='s_aaaaaaaaaa';SHOP.permissions=['reports.view']");
+  r.w.go('analytics');
+  const period=r.w.document.querySelector('#publish_report_period');
+  period.value='7';period.dispatchEvent(new r.w.Event('change'));
+  await settle();
+  const out=r.w.document.querySelector('#publish_report_result');
+  assert.match(out.textContent,/TelegramĐã đăng4/);
+  delayed.resolve(Response.json({days:30,rows:[{provider:'facebook',status:'sent',count:15}]}));
+  await settle();
+  assert.doesNotMatch(out.textContent,/Facebook/);
+  assert.deepEqual(calls,['s_aaaaaaaaaa','s_aaaaaaaaaa']);
+ }finally{r.close();}
+});
+
+test('Opening analytics directly loads reports once the shop is ready',async()=>{
+ const pending=deferred();
+ const r=runtime({route:'analytics',api:async path=>{
+  if(path==='/api/shops')return pending.promise;
+  if(path==='/api/social/jobs/summary')return Response.json({days:30,rows:[]});
+  if(path==='/api/social/google/accounts')return Response.json({accounts:[{id:'yt-test',name:'ShopTrack TV',status:'connected'}]});
+  return Response.json({});
+ }});
+ try{
+  assert.match(r.w.document.querySelector('#youtube_report_status').textContent,/Đang tải thông tin shop/);
+  pending.resolve(Response.json(shopsBody('s_bbbbbbbbbb')));
+  await settle();await settle();
+  assert.equal(r.w.document.querySelector('#youtube_report_account').value,'yt-test');
+  assert.equal(r.w.document.querySelector('#youtube_report_load').hidden,false);
+  assert.match(r.w.document.querySelector('#publish_report_status').textContent,/Chưa có lượt đăng/);
  }finally{r.close();}
 });

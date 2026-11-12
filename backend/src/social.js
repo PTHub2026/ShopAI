@@ -3,6 +3,7 @@ import {ensureChannelStore} from './channel-store.js';
 import {validatePost, retryDecision, publishFor} from './provider-adapters.js';
 import {resolveShop,audit} from './shops.js';
 import {handleMeta,publishMeta,metaDenied,metaConfigured} from './meta.js';
+import {handleGoogle} from './google.js';
 const now=()=>Math.floor(Date.now()/1000);
 export const SOCIAL_SCHEMA=["CREATE TABLE IF NOT EXISTS social_accounts (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, provider TEXT NOT NULL CHECK(provider IN ('telegram','facebook','instagram')), display_name TEXT NOT NULL, target_id TEXT NOT NULL, token_ciphertext TEXT NOT NULL, token_iv TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked','error')), connected_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(shop_id,provider,target_id));","CREATE INDEX IF NOT EXISTS social_accounts_shop ON social_accounts(shop_id,status);","CREATE TABLE IF NOT EXISTS publish_jobs (id TEXT PRIMARY KEY, shop_id TEXT NOT NULL, account_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('text','photo')), payload TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','sending','sent','retryable','unknown','failed')), attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0, remote_message_id TEXT, error_code TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(shop_id,idempotency_key));","CREATE INDEX IF NOT EXISTS publish_jobs_shop ON publish_jobs(shop_id,created_at DESC);"];
 const initialized=new WeakMap();
@@ -21,7 +22,7 @@ async function key(env){return crypto.subtle.importKey('raw',decodeKey(env),'AES
 export async function encryptToken(env,token){const iv=crypto.getRandomValues(new Uint8Array(12));const cipher=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},await key(env),new TextEncoder().encode(token)));return {cipher:b64(cipher),iv:b64(iv)};}
 export async function decryptToken(env,cipher,iv){return new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:un64(iv)},await key(env),un64(cipher)));}
 export async function callTelegram(token,method,body){
- const r=await fetch('https://api.telegram.org/bot'+token+'/'+method,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),redirect:'error',signal:AbortSignal.timeout(12000)});
+ const r=await fetch('https://api.telegram.org/bot'+token+'/'+method,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),redirect:'manual',signal:AbortSignal.timeout(12000)});
  const data=await r.json().catch(()=>({}));
  if(!r.ok||data.ok!==true){const e=Error('TELEGRAM_FAILED');e.status=r.status;e.retryAfter=Number(data.parameters?.retry_after)||0;throw e;}
  return data.result;
@@ -34,6 +35,7 @@ export async function handleSocial(req,env,who,json){
  if(!env.DB)return fail(json,503,'db_missing');
  try{decodeKey(env);}catch{return fail(json,503,'social_key_missing');}
  const [,,,section,resource,action]=new URL(req.url).pathname.split('/');
+ if(section==='google')return handleGoogle(req,env,who,json);
  if(section==='providers'&&!resource&&req.method==='GET'){
   const ctx=await resolveShop(env,who,req);if(ctx.error)return json({error:ctx.error,code:ctx.code},ctx.status);
   if(!ctx.can('channels.view'))return fail(json,403,'forbidden');
@@ -89,6 +91,16 @@ export async function handleSocial(req,env,who,json){
    await new Promise(resolve=>{const done=()=>{clearTimeout(timer);req.signal.removeEventListener('abort',done);resolve();};const timer=setTimeout(done,Math.min(1000,deadline-Date.now()));req.signal.addEventListener('abort',done,{once:true});});
   }
  }
+ if(section==='jobs'&&resource==='summary'&&!action&&req.method==='GET'){
+  if(!ctx.can('reports.view'))return fail(json,403,'forbidden');
+  const days=Number(new URL(req.url).searchParams.get('days')??30);
+  if(![7,30,90].includes(days))return fail(json,400,'invalid_period');
+  const {results}=await db.prepare(`SELECT COALESCE(c.provider,'unknown') AS provider,j.status,COUNT(*) AS count
+    FROM publish_jobs j LEFT JOIN channels c ON c.id=j.account_id AND c.shop_id=j.shop_id
+    WHERE j.shop_id=? AND j.created_at>=? AND (?='all' OR c.provider=?)
+    GROUP BY COALESCE(c.provider,'unknown'),j.status ORDER BY provider,j.status`).bind(shop,now()-days*86400,provider,provider).all();
+  return json({days,rows:results});
+ }
  if(section==='jobs'&&!resource&&req.method==='GET'){
   if(!ctx.can('channels.view'))return fail(json,403,'forbidden');
   return json({jobs:await listJobs(db,shop,provider)});
@@ -103,12 +115,12 @@ export async function handleSocial(req,env,who,json){
   try{validatePost(a.provider,data);}catch(e){return fail(json,e.status||400,e.code||'invalid_input');}
   const scheduled=req.headers.get('X-Channel-Schedule')==='1';
   if(scheduled&&(!Number.isFinite(data.runAt)||Math.floor(data.runAt)<=now()))return fail(json,400,'invalid_schedule');
-  const payload=JSON.stringify({externalId:a.external_id,text:data.text,photoUrl:data.kind==='photo'?(data.photoUrl||null):null,...(a.provider==='zalo'?{title:data.title||'',images:data.images||[],author:data.author||ctx.shop.name}:{} )}),t=now();
+  const payload=JSON.stringify({externalId:a.external_id,text:data.text,photoUrl:data.kind==='photo'?(data.photoUrl||null):null,...(a.provider==='facebook'&&data.kind==='photo'&&data.images!==undefined?{images:data.images}:{}),...(a.provider==='zalo'?{title:data.title||'',images:data.images||[],author:data.author||ctx.shop.name}:{} )}),t=now();
   await db.prepare("INSERT OR IGNORE INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at,next_attempt_at) VALUES(?,?,?,?,?,?,'pending',?,?,?,?)").bind('pj_'+crypto.randomUUID(),shop,a.id,idem,data.kind,payload,who.owner,t,t,scheduled?Math.floor(data.runAt):0).run();
   const j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND idempotency_key=?').bind(shop,idem).first();
   if(j.account_id!==a.id||j.kind!==data.kind||j.payload!==payload||(scheduled&&j.next_attempt_at!==Math.floor(data.runAt)))return fail(json,409,'idempotency_conflict');
-  if(scheduled)return json({ok:true,id:j.id,runAt:j.next_attempt_at,status:'scheduled',job:jobView(j)},201);
-  return deliver(j,db,env,shop,json);
+  if(scheduled)return json({ok:true,id:j.id,runAt:j.next_attempt_at,status:'scheduled',job:jobView({...j,provider:a.provider})},201);
+  return deliver({...j,provider:a.provider},db,env,shop,json);
  }
  if(section==='jobs'&&resource&&['retry','run'].includes(action)&&req.method==='POST'){
   if(!ctx.can('channels.operate')&&!ctx.can('drafts.publish'))return fail(json,403,'forbidden');
@@ -127,7 +139,7 @@ export async function handleSocial(req,env,who,json){
    }
   }
   if(action==='run'&&j.status==='pending'){await db.prepare("UPDATE publish_jobs SET next_attempt_at=0,updated_at=? WHERE shop_id=? AND id=? AND status='pending'").bind(now(),shop,j.id).run();j.next_attempt_at=0;}
-  return deliver(j,db,env,shop,json);
+  return deliver({...j,provider:account?.provider??null},db,env,shop,json);
  }
  return fail(json,404,'not_found');
 }

@@ -14,8 +14,18 @@ export function validatePost(provider,p){
   return;
  }
  if(provider==='instagram'&&p.kind!=='photo')reject('instagram_requires_photo');
+ if(provider==='facebook'){
+  if(p.text.length>5000||(!p.text.trim()&&p.kind==='text'))reject('invalid_input');
+  if(p.kind==='photo'&&p.images!==undefined){
+   let images;try{images=normalizeImages(p.images);}catch(e){reject(e.message);}
+   if(!images.length||JSON.stringify(p.images).length>6*1024*1024)reject('invalid_photo');
+   if(images.some(i=>i.kind==='url'?!/^https:\/\//.test(i.url):!['image/jpeg','image/png','image/gif','image/webp'].includes(i.mime)))reject('invalid_photo');
+   return;
+  }
+  if(p.kind==='text')return;
+ }
  if(!['telegram','facebook','instagram'].includes(provider))reject('unsupported_provider');
- if(p.text.length>(p.kind==='photo'?1024:4096)||(!p.text.trim()&&p.kind==='text'))reject('invalid_input');
+ if(p.text.length>(provider==='facebook'?5000:p.kind==='photo'?1024:4096)||(!p.text.trim()&&p.kind==='text'))reject('invalid_input');
  if(p.kind==='photo'&&(typeof p.photoUrl!=='string'||!/^https:\/\/[^\s@/]+(?:\/[^\s]*)?$/.test(p.photoUrl)||p.photoUrl.length>2048))reject('invalid_photo');
 }
 export function retryDecision(e,attempt){
@@ -65,12 +75,14 @@ export function normalizeImages(images) {
 }
 
 
+// Graph trả id dạng PAGEID_POSTID (bài văn bản) hoặc id số (ảnh); facebook.com/<id> chuyển tới đúng bài.
+export function facebookPostUrl(id){return /^\d{1,30}(_\d{1,30})?$/.test(String(id))?'https://www.facebook.com/'+id:null;}
 const publishers={
  async zalo(env,db,a,j){const p=JSON.parse(j.payload);const r=await publishZaloArticle(env,db,a,{content:p.text,title:p.title,images:p.images,author:p.author});return {id:String(r.id),url:r.url};},
  async telegram(env,db,a,j){const token=await decryptToken(env,a.token,a.token_iv),p=JSON.parse(j.payload);
  const r=j.kind==='text'?await callTelegram(token,'sendMessage',{chat_id:a.external_id,text:p.text}):await callTelegram(token,'sendPhoto',{chat_id:a.external_id,photo:p.photoUrl,caption:p.text});
  if(!Number.isSafeInteger(r?.message_id)||r.message_id<=0)throw Error('TELEGRAM_MISSING_MESSAGE_ID');return {id:String(r.message_id)};},
- async facebook(env,db,a,j){return {id:await publishMeta(env,a,j)};},
+ async facebook(env,db,a,j){const id=await publishMeta(env,a,j);return {id,url:facebookPostUrl(id)};},
  async instagram(env,db,a,j){return {id:await publishMeta(env,a,j)};}
 };
 export async function publishFor(provider,env,db,account,job){

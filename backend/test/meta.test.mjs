@@ -60,3 +60,20 @@ test('Instagram never calls media_publish until container reaches FINISHED',asyn
   assert.deepEqual(called,['media','container_1']);
  }finally{globalThis.fetch=original;}
 });
+
+test('Facebook uploads local images unpublished and attaches every image to one confirmed post',async()=>{
+ const e=env(),enc=await encryptToken(e,token),a={provider:'facebook',external_id:'123456',token:enc.cipher,token_iv:enc.iv};
+ const images=['data:image/png;base64,iVBORw0KGgo=','data:image/jpeg;base64,/9j/AA=='],original=globalThis.fetch,calls=[];
+ globalThis.fetch=async(url,options)=>{
+  calls.push(String(url));assert.equal(options.headers.Authorization,'Bearer '+token);assert.equal(String(url).includes(token),false);
+  if(String(url).endsWith('/photos')){assert.ok(options.body instanceof FormData);assert.equal(options.body.get('published'),'false');assert.ok(options.body.get('source') instanceof Blob);return Response.json({id:String(100+calls.length)});}
+  const p=new URLSearchParams(options.body);assert.equal(p.get('message'),'Long caption '.repeat(150));assert.deepEqual(JSON.parse(p.get('attached_media')), [{media_fbid:'101'},{media_fbid:'102'}]);return Response.json({id:'123456_999'});
+ };
+ try{assert.equal(await publishMeta(e,a,{kind:'photo',payload:JSON.stringify({text:'Long caption '.repeat(150),images})}),'123456_999');assert.equal(calls.length,3);}finally{globalThis.fetch=original;}
+});
+test('Facebook never publishes an album if an upload fails',async()=>{
+ const e=env(),enc=await encryptToken(e,token),a={provider:'facebook',external_id:'123456',token:enc.cipher,token_iv:enc.iv};
+ const original=globalThis.fetch;let calls=0;
+ globalThis.fetch=async(url)=>{assert.ok(String(url).endsWith('/photos'));calls++;return calls===1?Response.json({id:'101'}):Response.json({error:{code:100}},{status:400});};
+ try{await assert.rejects(publishMeta(e,a,{kind:'photo',payload:JSON.stringify({text:'Album',images:['https://example.com/1.jpg','https://example.com/2.jpg']})}));assert.equal(calls,2);}finally{globalThis.fetch=original;}
+});

@@ -76,3 +76,65 @@ test('Meta OAuth: one-use state, same actor, scoped accounts, encrypted Page tok
   assert.deepEqual(calls.map(p=>p.split('/').at(-1)),['access_token','access_token','permissions','accounts','accounts']);
  }finally{globalThis.fetch=previous;f.sqlite.close();}
 });
+test('Meta OAuth: META_LOGIN_CONFIG_ID dùng config_id (Facebook Login for Business) thay cho scope',async()=>{
+ const f=fixture();
+ const owner=f.login('email:cfg@example.com');
+ f.env.META_LOGIN_CONFIG_ID='987654321012345';
+ const r=await f.req(owner,'/api/social/meta/start','POST');
+ assert.equal(r.status,200);
+ const url=new URL((await r.json()).authorizationUrl);
+ assert.equal(url.searchParams.get('config_id'),'987654321012345');
+ assert.equal(url.searchParams.has('scope'),false);
+ assert.equal(url.searchParams.get('response_type'),'code');
+ f.env.META_LOGIN_CONFIG_ID='khong-hop-le';
+ const r2=await f.req(owner,'/api/social/meta/start','POST');
+ const url2=new URL((await r2.json()).authorizationUrl);
+ assert.equal(url2.searchParams.has('config_id'),false);
+ assert.match(url2.searchParams.get('scope'),/pages_manage_posts/);
+});
+test('Meta OAuth: lỗi callback trả trang HTML quay về ứng dụng, giữ mã trạng thái',async()=>{
+ const f=fixture();
+ const owner=f.login('email:cb@example.com');
+ const start=await f.req(owner,'/api/social/meta/start','POST');
+ const state=new URL((await start.json()).authorizationUrl).searchParams.get('state');
+ const declined=await f.req(owner,'/api/social/meta/callback?state='+encodeURIComponent(state)+'&error=access_denied');
+ assert.equal(declined.status,400);
+ assert.match(declined.headers.get('content-type'),/text\/html/);
+ const html=await declined.text();
+ assert.match(html,/meta_error=oauth_declined#accounts/);
+ assert.doesNotMatch(html,/<script/i);
+ assert.match(declined.headers.get('content-security-policy'),/default-src 'none'/);
+ const bad=await f.req(owner,'/api/social/meta/callback?state=khong-hop-le&code=x');
+ assert.equal(bad.status,400);
+ assert.match(await bad.text(),/meta_error=invalid_oauth_state/);
+ const startJson=await f.req(owner,'/api/social/meta/start','GET');
+ assert.equal(startJson.status,405);
+ assert.match(startJson.headers.get('content-type'),/json/);
+});
+
+test('Meta OAuth: callback khi phiên ShopPost hết hạn chuyển về ứng dụng, không lộ JSON',async()=>{
+ const f=fixture();
+ const r=await worker.fetch(new Request(base+'/api/social/meta/callback?state=x&code=y'),f.env);
+ assert.equal(r.status,302);
+ assert.equal(r.headers.get('Location'),'/?meta_error=session_expired#accounts');
+ const post=await worker.fetch(new Request(base+'/api/social/meta/start',{method:'POST',headers:{Origin:base}}),f.env);
+ assert.equal(post.status,401);
+});
+test('Messenger reauthorization requests both scopes and rejects an incomplete grant before saving a Page',async()=>{
+ const f=fixture(),owner=f.login('email:owner@example.com'),previous=globalThis.fetch;
+ try{
+  const start=await f.req(owner,'/api/social/meta/start?purpose=messenger','POST');
+  const auth=new URL((await start.json()).authorizationUrl);
+  assert.match(auth.searchParams.get('scope'),/pages_messaging,pages_manage_metadata/);
+  assert.equal(auth.searchParams.get('auth_type'),'rerequest');
+  globalThis.fetch=async(input)=>{
+   const url=new URL(input);
+   if(url.pathname.endsWith('/oauth/access_token'))return Response.json({access_token:'synthetic-token'});
+   if(url.pathname.endsWith('/me/permissions'))return Response.json({data:['pages_show_list','pages_manage_posts','pages_messaging'].map(permission=>({permission,status:'granted'}))});
+   throw Error('Must reject before listing or replacing Page grants');
+  };
+  const result=await f.req(owner,'/api/social/meta/callback?state='+auth.searchParams.get('state')+'&code=synthetic');
+  assert.equal(result.status,403);
+  assert.match(await result.text(),/meta_scope_denied/);
+ }finally{globalThis.fetch=previous;f.sqlite.close();}
+});

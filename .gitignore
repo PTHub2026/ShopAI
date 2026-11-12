@@ -1,5 +1,7 @@
 backend/dist/
 backend/.wrangler/
 node_modules/
+backend/wrangler.staging.jsonc
+backend/wrangler.staging.jsonc.tmp
 backend/${HOME}
 backend/.wrangler

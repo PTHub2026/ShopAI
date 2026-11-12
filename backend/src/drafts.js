@@ -1,23 +1,24 @@
+import { draftMediaRead, draftMediaWrite, readDraftUpload } from './draft-media.js';
 import { DRAFT_STATUSES } from './shops.js';
 const ID = /^[a-zA-Z0-9_-]{1,64}$/;
-const FIELDS = new Set(['id', 'type', 'content', 'channels', 'status', 'media', 'assets', 'custom']);
+const FIELDS = new Set(['id', 'type', 'content', 'channels', 'status', 'media', 'assets', 'custom', 'schedule']);
 const rowData = row => ({ draft: JSON.parse(row.payload), revision: row.revision, updatedAt: row.updated_at, status: row.status || 'draft', createdBy: row.created_by || row.owner || null, assignedTo: row.assigned_to || null });
 const FORBIDDEN = { error: 'Bạn không có quyền thực hiện thao tác này với bản nháp trong shop hiện tại.', code: 'forbidden' };
 const SELECT = 'SELECT owner, id, payload, revision, updated_at, status, created_by, assigned_to FROM drafts';
 
-// Chỉ bản nháp văn bản tường minh; mọi truy vấn đều giới hạn theo shop hiện hành (ctx.shop) và quyền của người dùng (ctx.can).
+// Chỉ lưu khi có yêu cầu tường minh; mọi truy vấn đều giới hạn theo shop hiện hành (ctx.shop) và quyền của người dùng (ctx.can).
 // owner = danh tính đã xác minh (Access sub hoặc phiên đăng nhập); ctx do worker giải quyết từ header X-ShopPost-Shop / shop mặc định.
 export async function drafts(request, env, owner, json, ctx) {
   const url = new URL(request.url);
-  const match = /^\/storage\/drafts(?:\/([a-zA-Z0-9_-]{1,64})(\/status)?)?$/.exec(url.pathname);
+  const match = /^\/storage\/drafts(?:\/([a-zA-Z0-9_-]{1,64})(?:(\/status)|\/media\/([a-f0-9-]{36}))?)?$/.exec(url.pathname);
   if (!match) return json({ error: 'Đường dẫn bản nháp không hợp lệ.' }, 404);
   if (!env.DB) return json({ error: 'Chưa gắn cơ sở dữ liệu bản nháp.' }, 503);
   if (!ctx || !ctx.shop || typeof ctx.can !== 'function') return json({ error: 'Thiếu ngữ cảnh shop.' }, 403);
-  const id = match[1], statusRoute = Boolean(match[2]), shopId = ctx.shop.id;
+  const id = match[1], statusRoute = Boolean(match[2]), mediaId = match[3], shopId = ctx.shop.id;
   const mine = row => row && (row.created_by === owner || row.assigned_to === owner || row.owner === owner);
   const mayEdit = row => ctx.can('drafts.edit_any') || (ctx.can('drafts.edit_own') && mine(row));
-  if (statusRoute ? request.method !== 'POST' : request.method !== 'GET' && !((request.method === 'PUT' || request.method === 'DELETE') && id)) {
-    return json({ error: statusRoute ? 'Chỉ hỗ trợ POST để đổi trạng thái.' : 'Chỉ hỗ trợ đọc bản nháp, PUT hoặc DELETE theo mã bản nháp.' }, 405, { Allow: statusRoute ? 'POST' : id ? 'GET, PUT, DELETE' : 'GET' });
+  if (mediaId ? request.method !== 'GET' : statusRoute ? request.method !== 'POST' : request.method !== 'GET' && !((request.method === 'PUT' || request.method === 'DELETE') && id)) {
+    return json({ error: mediaId ? 'Chỉ hỗ trợ GET để tải tệp bản nháp.' : statusRoute ? 'Chỉ hỗ trợ POST để đổi trạng thái.' : 'Chỉ hỗ trợ đọc bản nháp, PUT hoặc DELETE theo mã bản nháp.' }, 405, { Allow: mediaId ? 'GET' : statusRoute ? 'POST' : id ? 'GET, PUT, DELETE' : 'GET' });
   }
   if (request.method !== 'GET' && request.headers.get('Origin') !== url.origin) {
     return json({ error: 'Chỉ cho phép ghi từ cùng origin.' }, 403);
@@ -35,6 +36,7 @@ export async function drafts(request, env, owner, json, ctx) {
   try {
     if (request.method === 'GET' && id) {
       const row = await env.DB.prepare(SELECT + ' WHERE shop_id = ? AND id = ?').bind(shopId, id).first();
+      if (mediaId) return await draftMediaRead(env.DB, row, mediaId, json);
       return row ? json(rowData(row)) : json({ error: 'Không tìm thấy bản nháp.' }, 404);
     }
     if (statusRoute) {
@@ -93,16 +95,24 @@ export async function drafts(request, env, owner, json, ctx) {
       const res = await env.DB.prepare('DELETE FROM drafts WHERE shop_id = ? AND id = ?').bind(shopId, id).run();
       return json({ deleted: res.meta.changes > 0 });
     }
-    let body;
-    try { body = await readBody(request); } catch (error) { return error.response ? error.response(json) : json({ error: 'JSON không hợp lệ.' }, 400); }
+    let body, files = [], media = [];
+    try {
+      if (request.headers.get('Content-Type')?.toLowerCase().startsWith('multipart/form-data;')) {
+        ({ body, files, media } = await readDraftUpload(request));
+      } else body = await readBody(request);
+    } catch (error) { return error.response ? error.response(json) : json({ error: 'JSON không hợp lệ.' }, 400); }
     const d = body?.draft;
-    if (!d || Array.isArray(d) || d.id !== id || d.status !== 'draft' || !['post', 'video'].includes(d.type) || typeof d.content !== 'string' || !d.content.trim() || d.content.length > 20000 || !Array.isArray(d.channels) || d.channels.length > 32 || new Set(d.channels).size !== d.channels.length || d.channels.some(c => typeof c !== 'string' || !ID.test(c)) || !Number.isSafeInteger(body.revision) || body.revision < 0 || body.revision >= Number.MAX_SAFE_INTEGER) {
+    if (!d || Array.isArray(d) || d.id !== id || d.status !== 'draft' || !['post', 'video'].includes(d.type) || typeof d.content !== 'string' || (!d.content.trim() && !media.length) || d.content.length > 20000 || !Array.isArray(d.channels) || d.channels.length > 32 || new Set(d.channels).size !== d.channels.length || d.channels.some(c => typeof c !== 'string' || !ID.test(c)) || !Number.isSafeInteger(body.revision) || body.revision < 0 || body.revision >= Number.MAX_SAFE_INTEGER) {
       return json({ error: 'Bản nháp hoặc số phiên bản không hợp lệ.' }, 400);
     }
     if (Object.keys(d).some(k => !FIELDS.has(k)) || ['media', 'assets'].some(k => k in d && (!Array.isArray(d[k]) || d[k].length)) || ('custom' in d && (!d.custom || Array.isArray(d.custom) || typeof d.custom !== 'object' || Object.keys(d.custom).length))) {
-      return json({ error: 'Hiện chỉ lưu bản nháp văn bản chưa có tệp, lịch đăng hoặc tùy biến kênh.' }, 422);
+      return json({ error: 'Dữ liệu đính kèm hoặc tùy biến kênh không hợp lệ.' }, 422);
     }
-    const payload = JSON.stringify({ id, type: d.type, content: d.content, channels: d.channels, status: 'draft', media: [], assets: [], custom: {} });
+    const schedule = d.schedule;
+    if (schedule !== undefined && (!schedule || typeof schedule.date !== 'string' || typeof schedule.time !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(schedule.date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.time) || !Number.isFinite(Date.parse(schedule.date)) || new Date(schedule.date).toISOString().slice(0, 10) !== schedule.date)) {
+      return json({ error: 'Ngày hoặc giờ dự kiến không hợp lệ.' }, 422);
+    }
+    const payload = JSON.stringify({ id, type: d.type, content: d.content, channels: d.channels, status: 'draft', media, assets: [], custom: {}, ...(schedule ? { schedule: { date: schedule.date, time: schedule.time } } : {}) });
     const now = Date.now();
     const existing = await env.DB.prepare(SELECT + ' WHERE shop_id = ? AND id = ?').bind(shopId, id).first();
     if (body.revision === 0) {
@@ -110,6 +120,7 @@ export async function drafts(request, env, owner, json, ctx) {
       if (existing) return json({ error: 'Bản nháp đã thay đổi trên máy chủ. Mở lại hoặc lưu thành bản mới.' }, 409);
     } else {
       if (!existing) return json({ error: 'Bản nháp không còn trên máy chủ. Mở lại hoặc lưu thành bản mới.' }, 409);
+      if (existing.revision !== body.revision) return json({ error: 'Bản nháp đã thay đổi trên máy chủ. Mở lại hoặc lưu thành bản mới.' }, 409);
       if (!mayEdit(existing)) return json(FORBIDDEN, 403);
     }
     // Sửa nội dung bản đã gửi duyệt/đã duyệt bởi người không có quyền duyệt thì bản nháp quay về trạng thái draft.
@@ -117,7 +128,10 @@ export async function drafts(request, env, owner, json, ctx) {
     const statement = body.revision === 0
       ? env.DB.prepare("INSERT INTO drafts (owner, id, payload, revision, updated_at, shop_id, status, assigned_to, created_by) VALUES (?, ?, ?, 1, ?, ?, 'draft', NULL, ?) ON CONFLICT(owner, id) DO NOTHING").bind(owner, id, payload, now, shopId, owner)
       : env.DB.prepare('UPDATE drafts SET payload = ?, revision = revision + 1, updated_at = ?, status = ? WHERE shop_id = ? AND id = ? AND revision = ?').bind(payload, now, status, shopId, id, body.revision);
-    const result = await statement.run();
+    const hasStoredMedia = existing && JSON.parse(existing.payload).media?.length;
+    const result = media.length || hasStoredMedia
+      ? await draftMediaWrite(env.DB, statement, { shopId, id, revision: body.revision + 1, payload, files, media })
+      : await statement.run();
     if (result.meta.changes !== 1) {
       // Khi tạo mới (revision=0): xung đột PRIMARY KEY (owner, id) có thể xảy ra nếu owner
       // đã tạo bản nháp cùng ID trong một shop khác (shop_id khác). Phân biệt trường hợp này

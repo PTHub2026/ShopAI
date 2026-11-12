@@ -4,6 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import {webcrypto,createHash} from 'node:crypto';
 import worker from '../src/worker.js';
+import {encryptToken} from '../src/social.js';
 import {SESSION_COOKIE} from '../src/auth.js';
 if(!globalThis.crypto)globalThis.crypto=webcrypto;
 const base='https://shoppost.example',hash=x=>createHash('sha256').update(x).digest('hex'),now=()=>Math.floor(Date.now()/1000);
@@ -51,7 +52,7 @@ test('Telegram live: per-shop permissions, idempotency, revoked credentials and 
   const currentShop=(await f.request(owner,'/session')).data.shop.id;
   const message={accountId:account.id,kind:'text',text:'Hello from test'};
   const first=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'text-send-test-1234',body:message});
-  assert.equal(first.status,200);assert.equal(first.data.job.status,'sent');assert.equal(messages,1);
+  assert.equal(first.status,200);assert.equal(first.data.job.status,'sent');assert.equal(first.data.job.provider,'telegram');assert.equal(messages,1);
   const repeat=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'text-send-test-1234',body:message});
   assert.equal(repeat.status,200);assert.equal(messages,1,'duplicate key never republishes');
   assert.equal((await f.request(owner,'/api/social/jobs',{method:'POST',idem:'text-send-test-1234',body:{...message,text:'changed'}})).status,409);
@@ -80,10 +81,10 @@ test('Telegram 429 is retryable; unknown outcomes never retry automatically',asy
   assert.equal(throttled.status,429);assert.equal(throttled.data.job.status,'retryable');
   const jobId=throttled.data.job.id;
   const early=await f.request(owner,'/api/social/jobs/'+jobId+'/retry',{method:'POST'});
-  assert.equal(early.status,429);assert.equal(called,1,'retry_after must block early delivery');
+  assert.equal(early.status,429);assert.equal(early.data.job.provider,'telegram');assert.equal(called,1,'retry_after must block early delivery');
   f.db.sqlite.prepare('UPDATE publish_jobs SET next_attempt_at=0 WHERE id=?').run(jobId);
   const retried=await f.request(owner,'/api/social/jobs/'+jobId+'/retry',{method:'POST'});
-  assert.equal(retried.status,200);assert.equal(retried.data.job.status,'sent');assert.equal(called,2);
+  assert.equal(retried.status,200);assert.equal(retried.data.job.status,'sent');assert.equal(retried.data.job.provider,'telegram');assert.equal(called,2);
   const redundant=await f.request(owner,'/api/social/jobs/'+jobId+'/retry',{method:'POST'});
   assert.equal(redundant.status,200);assert.equal(called,2);
   const unknown=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'unknown-test-key-123',body:{...data,text:'Unknown'}});
@@ -114,7 +115,7 @@ test('unified channel API stores Telegram in channels and schedules into common 
   const list=await f.request(owner,'/channels/telegram/accounts');assert.equal(list.status,200);const a=list.data.accounts[0];
   assert.equal(f.db.sqlite.prepare('SELECT provider FROM channels WHERE id=?').get(a.id).provider,'telegram');
   const queued=await f.request(owner,'/channels/telegram/schedule',{method:'POST',idem:'unified-scheduled-123',body:{accountId:a.id,kind:'text',text:'Due soon',runAt:now()+60}});
-  assert.equal(queued.status,201);assert.equal(queued.data.job.status,'pending');
+  assert.equal(queued.status,201);assert.equal(queued.data.job.status,'pending');assert.equal(queued.data.job.provider,'telegram');
   f.db.sqlite.prepare('UPDATE publish_jobs SET next_attempt_at=0 WHERE id=?').run(queued.data.job.id);
   const {runDueScheduledPosts}=await import('../src/channels.js');await runDueScheduledPosts(f.env);
   assert.equal(f.db.sqlite.prepare('SELECT status FROM publish_jobs WHERE id=?').get(queued.data.job.id).status,'sent');
@@ -153,4 +154,80 @@ test('publish-now operates the existing scheduled job and cannot duplicate it',a
   assert.equal((await f.request(owner,path,{method:'POST'})).data.job.status,'sent');
   assert.equal((await f.request(owner,path,{method:'POST'})).data.job.status,'sent');assert.equal(sent,1);
  });
+});
+
+test('Facebook composer photo payload survives the real job route and idempotent replay never posts twice',async()=>{
+ const f=fixture(),owner=f.login('email:facebook@example.com');
+ const {encryptToken}=await import('../src/social.js');
+ const shop=(await f.request(owner,'/session')).data.shop.id;
+ await f.request(owner,'/channels/all/accounts');
+ const encrypted=await encryptToken(f.env,'synthetic-fb-page-token');
+ f.db.sqlite.prepare("INSERT INTO channels(id,shop_id,provider,name,external_id,token,token_iv,status,connected_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'connected',?,?,?)").run('fb-composer',shop,'facebook','Test page','123456',encrypted.cipher,encrypted.iv,'email:facebook@example.com',now(),now());
+ const images=['data:image/png;base64,iVBORw0KGgo=','data:image/jpeg;base64,/9j/AA=='];
+ const payload={accountId:'fb-composer',kind:'photo',text:'Long caption '.repeat(150),images};
+ const original=globalThis.fetch;let uploads=0,posts=0;
+ globalThis.fetch=async(url,init)=>{
+  assert.equal(new URL(url).hostname,'graph.facebook.com');
+  if(String(url).endsWith('/photos')){uploads++;assert.equal(init.body.get('published'),'false');return Response.json({id:String(uploads)});}
+  posts++;const body=new URLSearchParams(init.body);assert.equal(body.get('message'),payload.text);assert.equal(JSON.parse(body.get('attached_media')).length,2);return Response.json({id:'123456_999'});
+ };
+ try{
+  const first=await f.request(owner,'/channels/all/jobs',{method:'POST',shop,idem:'facebook-composer-test-key',body:payload});
+  assert.equal(first.status,200);assert.equal(first.data.job.status,'sent');assert.equal(first.data.url,'https://www.facebook.com/123456_999');
+  assert.deepEqual(JSON.parse(f.db.sqlite.prepare('SELECT payload FROM publish_jobs').get().payload).images,images);
+  const replay=await f.request(owner,'/channels/all/jobs',{method:'POST',shop,idem:'facebook-composer-test-key',body:payload});
+  assert.equal(replay.status,200);assert.equal(posts,1);assert.equal(uploads,2);
+ }finally{globalThis.fetch=original;f.db.sqlite.close();}
+});
+
+test('Publishing summary counts current shop jobs by provider and date, beyond the history page',async()=>{
+ const f=fixture(),owner=f.login('email:summary@example.com'),other=f.login('email:summary-other@example.com');
+ try{await fakeTelegram(()=>{throw Error('A report must not publish');},async()=>{
+  await connect(f.request,owner);
+  const account=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
+  const ownShop=(await f.request(owner,'/session')).data.shop.id;
+  const otherShop=(await f.request(other,'/session')).data.shop.id;
+  const add=f.db.sqlite.prepare("INSERT INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at) VALUES(?,?,?,?,'text','{}',?,'test',?,?)");
+  const recent=now()-60;
+  for(let i=0;i<201;i++)add.run('sent-'+i,ownShop,account.id,'sent-'+i,'sent',recent,recent);
+  add.run('failed',ownShop,account.id,'failed','failed',recent,recent);
+  add.run('old',ownShop,account.id,'old','sent',recent-8*86400,recent);
+  add.run('other',otherShop,account.id,'other','sent',recent,recent);
+  const path='/api/social/jobs/summary?days=7';
+  const summary=await f.request(owner,path);
+  assert.equal(summary.status,200);
+  assert.deepEqual(summary.data,{days:7,rows:[{provider:'telegram',status:'failed',count:1},{provider:'telegram',status:'sent',count:201}]});
+  assert.equal((await f.request(owner,'/api/social/jobs/summary?days=0')).status,400);
+  assert.equal((await f.request(other,path,{shop:ownShop})).status,404);
+ });}finally{f.db.sqlite.close();}
+});
+
+test('Meta engagement reads sent jobs for the active shop and distinguishes denied access from zero',async()=>{
+ const f=fixture(),owner=f.login('email:meta-report@example.com'),other=f.login('email:other-report@example.com'),oldFetch=globalThis.fetch;
+ Object.assign(f.env,{META_APP_ID:'1234567890',META_APP_SECRET:'synthetic',META_REDIRECT_URI:base+'/api/social/meta/callback'});
+ try{
+  await f.request(owner,'/api/social/accounts');
+  const shop=(await f.request(owner,'/session')).data.shop.id;
+  const credential=await encryptToken(f.env,'REPORT_TOKEN');
+  const channel=f.db.sqlite.prepare("INSERT INTO channels(id,shop_id,provider,name,external_id,token,token_iv,status,connected_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'connected','test',?,?)");
+  for(const [id,provider] of [['fb','facebook'],['ig','instagram']])channel.run(id,shop,provider,provider,'1234',credential.cipher,credential.iv,now(),now());
+  const job=f.db.sqlite.prepare("INSERT INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,remote_message_id,created_by,created_at,updated_at) VALUES(?,?,?,?,'text','{}',?,?,'test',?,?)");
+  for(const [id,account,status,remote] of [['1','fb','sent','1234_5678'],['2','ig','sent','9101112'],['3','fb','failed','4444']])job.run(id,shop,account,id,status,remote,now(),now());
+  const calls=[];
+  globalThis.fetch=async(input,options)=>{
+   const url=new URL(input);calls.push(url.pathname.split('/').at(-1));
+   assert.equal(url.hostname,'graph.facebook.com');
+   assert.equal(options.method,'GET');
+   assert.equal(options.headers.Authorization,'Bearer REPORT_TOKEN');
+   if(url.pathname.endsWith('/1234_5678'))return Response.json({reactions:{summary:{total_count:0}},comments:{summary:{total_count:3}}});
+   return Response.json({error:{code:10}},{status:403});
+  };
+  const path='/api/social/meta/engagement';
+  assert.deepEqual((await f.request(other,path)).data.rows,[]);
+  const r=await f.request(owner,path);
+  assert.equal(r.status,200);
+  assert.deepEqual(r.data.rows.map(row=>[row.provider,row.reactions,row.comments,row.status]),[['instagram',null,null,'permission_required'],['facebook',0,3,'available']]);
+  assert.deepEqual(calls.sort(),['1234_5678','9101112']);
+  assert.doesNotMatch(JSON.stringify(r.data),/REPORT_TOKEN/);
+ }finally{globalThis.fetch=oldFetch;f.db.sqlite.close();}
 });

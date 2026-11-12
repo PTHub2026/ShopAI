@@ -767,9 +767,14 @@ const tot=rows=>rows.reduce((s,r)=>{for(const k in LBL)s[k]+=r[k];return s},{vie
 const PUBLISH_REPORT_STATES={sent:'Đã đăng',pending:'Đang chờ',sending:'Đang gửi',retryable:'Chờ thử lại',failed:'Thất bại',unknown:'Cần xác minh'};
 function publishReportPage(){
  $('#view').innerHTML=`<section class="card"><h3>Kết quả đăng bài</h3>
- <p class="muted small">Đếm lượt đăng theo kênh từ hàng đợi của shop trong khoảng thời gian đã chọn. Lượt xem và tương tác từ nền tảng chưa được đồng bộ.</p>
+ <p class="muted small">Đếm lượt đăng theo kênh từ hàng đợi của shop trong khoảng thời gian đã chọn. Chỉ số tương tác YouTube được hiển thị riêng bên dưới.</p>
  <div class="row"><select id="publish_report_period" aria-label="Khoảng thời gian" style="width:auto">${[7,30,90].map(days=>`<option value="${days}" ${AN.days===days?'selected':''}>${days} ngày qua</option>`).join('')}</select><button class="btn" id="publish_report_refresh">Làm mới</button><a href="#posts">Xem danh sách bài viết</a></div>
- <p id="publish_report_status" role="status"></p><div id="publish_report_result" style="overflow:auto"></div></section>`;
+ <p id="publish_report_status" role="status"></p><div id="publish_report_result" style="overflow:auto"></div></section>
+ <section class="card"><h3>Chỉ số video YouTube</h3>
+ <p class="muted small">Số tích lũy từ YouTube cho tối đa 25 video gần đây của kênh đã chọn. Bộ lọc kết quả đăng bài ở trên không áp dụng ở đây.</p>
+ <div class="row"><select id="youtube_report_account" aria-label="Kênh YouTube" hidden></select><button class="btn" id="youtube_report_load" hidden>Cập nhật chỉ số YouTube</button><a href="#accounts">Quản lý kênh</a></div>
+ <p id="youtube_report_status" role="status"></p><div id="youtube_report_result" style="overflow:auto"></div></section>`;
+ youtubeReport();
  const period=$('#publish_report_period'),refresh=$('#publish_report_refresh'),out=$('#publish_report_result'),status=$('#publish_report_status');
  let requestNumber=0;
  const load=async()=>{
@@ -790,6 +795,36 @@ function publishReportPage(){
   finally{if(current())refresh.disabled=false;}
  };
  period.onchange=load;refresh.onclick=load;load();
+}
+async function youtubeReport(){
+ const select=$('#youtube_report_account'),button=$('#youtube_report_load'),status=$('#youtube_report_status'),out=$('#youtube_report_result'),shop=SHOP.id;
+ const current=()=>out.isConnected&&route==='analytics'&&SHOP.id===shop;
+ if(!SHOP.ready){status.textContent='Đang tải thông tin shop…';return;}
+ if(!shopCan('reports.view')){status.textContent='Vai trò hiện tại chưa có quyền xem báo cáo.';return;}
+ status.textContent='Đang tải danh sách kênh YouTube…';
+ try{
+  const {accounts}=await cloudRequest('/api/social/google/accounts');
+  if(!current())return;
+  const channels=accounts.filter(a=>a.status==='connected');
+  if(!channels.length){status.textContent='Shop này chưa có kênh YouTube đang kết nối.';return;}
+  for(const channel of channels)select.add(new Option(channel.name,channel.id));
+  select.hidden=false;button.hidden=false;
+  status.textContent='Chọn kênh và cập nhật để lấy số liệu từ YouTube.';
+ }catch{if(current())status.textContent='Chưa tải được danh sách kênh YouTube. Hãy tải lại trang để thử lại.';return;}
+ select.onchange=()=>{out.replaceChildren();status.textContent='Cập nhật để lấy số liệu của kênh đã chọn.';};
+ button.onclick=async()=>{
+  button.disabled=true;select.disabled=true;out.replaceChildren();status.textContent='Đang lấy số liệu từ YouTube…';
+  try{
+   const data=await cloudRequest('/api/social/google/video-stats?'+new URLSearchParams({accountId:select.value}));
+   if(!current())return;
+   if(!Array.isArray(data.videos)||!Number.isSafeInteger(data.fetchedAt))throw Error('invalid_stats');
+   const metric=value=>typeof value==='string'&&/^\d{1,20}$/.test(value)?BigInt(value).toLocaleString('vi-VN'):'Chưa có dữ liệu';
+   status.textContent=data.videos.length?'Cập nhật lúc '+fmtT(data.fetchedAt*1000):'YouTube chưa trả về video cho kênh này.';
+   if(data.videos.length)out.innerHTML=`<table><thead><tr><th scope="col">Video</th><th scope="col">Lượt xem</th><th scope="col">Lượt thích</th><th scope="col">Bình luận</th></tr></thead><tbody>${data.videos.map(v=>`<tr><td>${esc(v.title||v.id)}</td><td>${metric(v.views)}</td><td>${metric(v.likes)}</td><td>${metric(v.comments)}</td></tr>`).join('')}</tbody></table>`;
+  }catch(error){
+   if(current())status.textContent=error.code==='google_reauth_required'?'Quyền YouTube đã hết hạn. Hãy kết nối lại trong mục Kênh.':'Chưa lấy được số liệu YouTube. Hãy thử cập nhật lại.';
+  }finally{if(current()){button.disabled=false;select.disabled=false;}}
+ };
 }
 V.analytics=()=>{if(managedApp())return publishReportPage();const now=Date.now(),since=now-AN.days*864e5;const rows=anRows(since,Infinity),prev=anRows(since-AN.days*864e5,since);const T=tot(rows),P=tot(prev);
 const byPf={};rows.forEach(r=>{const b=byPf[r.c.pf]||(byPf[r.c.pf]={views:0,likes:0,comments:0,shares:0,posts:new Set(),chs:new Set()});for(const k in LBL)b[k]+=r[k];b.posts.add(r.p.id);b.chs.add(r.c.id)});

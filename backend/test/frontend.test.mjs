@@ -62,8 +62,8 @@ test('Caption không bị ghi đè sau chỉnh sửa hoặc chuyển trang',asyn
   for(const change of ['edit','navigate']){
     const pending=deferred(),project={topic:'Chủ đề',scenes:[],caption:'caption ban đầu'},input={value:'caption ban đầu'},button={textContent:''};
     let saves=0,renders=0;
-    const context=vm.createContext({AI:{call:()=>pending.promise},VP:project,route:'video',S:{settings:{}},$:(selector)=>({'#v_cap':input,'#v_capbtn':button}[selector]),adaptText:text=>text,vSave:()=>saves++,V:{video:()=>renders++},toast:()=>{}});
-    vm.runInContext(html.slice(html.indexOf('async function vCaption()'),html.indexOf('function vSrc(')),context);
+    const context=vm.createContext({AI:{call:()=>pending.promise},VP:project,route:'video',SHOP:{id:'shop-a'},S:{settings:{}},$:(selector)=>({'#v_cap':input,'#v_capbtn':button}[selector]),adaptText:text=>text,vSave:()=>saves++,V:{video:()=>renders++},toast:()=>{}});
+    vm.runInContext(html.slice(html.indexOf('const VIDEO_CAPTION_BUSY='),html.indexOf('function vSrc(')),context);
     const request=context.vCaption();
     if(change==='edit'){project.caption='caption người dùng';input.value=project.caption}else context.route='create';
     pending.resolve('caption AI');await request;

@@ -492,6 +492,34 @@ test('channel tabs separate shop accounts from available platforms and managemen
  r.read("CHANNEL_TAB='available'");const available=r.w.connectionSummary();assert.match(available,/Instagram/);assert.match(available,/Kết nối thêm/);assert.match(available,/Kết nối Zalo OA/);
  }finally{r.close();}
 });
+test('Zalo offers replacement for an existing OA and connection for a shop without one',async()=>{
+ const r=runtime();
+ try{
+  await settle();
+  r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.configure_token'];CHANNEL_TAB='available'");
+  r.w.socialRequest=async()=>({});
+  r.w.googleRequest=async()=>({accounts:[]});
+  for(const status of ['connected','expired','revoked']){
+   const zalo={channels:[{provider:'zalo',external_id:'123',status}],setup:{zalo:{configured:true}}};
+   r.w.cloudRequest=async()=>zalo;
+   r.w.updateConnectionInventory({accounts:[]},zalo,{accounts:[]},'shop');
+   await r.w.openAddAccount();
+   const modal=r.w.document.querySelector('#mbox');
+   const button=modal.querySelector('button[onclick^="connectAdditionalAccount(\'zalo\'"]');
+   const summary=r.w.connectionSummary();
+   if(status==='revoked'){
+    assert.equal(button.textContent,'Kết nối');
+    assert.match(summary,/aria-label="Kết nối Zalo OA"/);
+    assert.doesNotMatch(modal.textContent,/sẽ thay thế/);
+   }else{
+    assert.equal(button.textContent,'Đổi Zalo OA');
+    assert.match(summary,/aria-label="Đổi Zalo OA"/);
+    assert.match(summary,/Chọn OA khác sẽ thay thế Zalo OA hiện tại của shop/);
+    assert.match(modal.textContent,/Chọn OA khác sẽ thay thế Zalo OA hiện tại của shop/);
+   }
+  }
+ }finally{r.close();}
+});
 test('account disclosure distinguishes expired login and closes on Escape without logging out',async()=>{
  const r=runtime();try{await settle();r.w.cloudRequest=async()=>{throw Object.assign(Error('expired'),{status:401});};await r.w.refreshAccountMenu();assert.equal(r.w.document.getElementById('login_btn').hidden,false);assert.equal(r.w.document.getElementById('logout_btn').hidden,true);assert.equal(r.w.document.getElementById('switch_account_btn').hidden,true);const menu=r.w.document.getElementById('account_actions');menu.open=true;menu.dispatchEvent(new r.w.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(menu.open,false);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);}finally{r.close();}
 });

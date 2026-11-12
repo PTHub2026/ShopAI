@@ -767,14 +767,19 @@ const tot=rows=>rows.reduce((s,r)=>{for(const k in LBL)s[k]+=r[k];return s},{vie
 const PUBLISH_REPORT_STATES={sent:'Đã đăng',pending:'Đang chờ',sending:'Đang gửi',retryable:'Chờ thử lại',failed:'Thất bại',unknown:'Cần xác minh'};
 function publishReportPage(){
  $('#view').innerHTML=`<section class="card"><h3>Kết quả đăng bài</h3>
- <p class="muted small">Đếm lượt đăng theo kênh từ hàng đợi của shop trong khoảng thời gian đã chọn. Chỉ số tương tác YouTube được hiển thị riêng bên dưới.</p>
+ <p class="muted small">Đếm lượt đăng theo kênh từ hàng đợi của shop trong khoảng thời gian đã chọn. Chỉ số tương tác theo nền tảng được hiển thị bên dưới.</p>
  <div class="row"><select id="publish_report_period" aria-label="Khoảng thời gian" style="width:auto">${[7,30,90].map(days=>`<option value="${days}" ${AN.days===days?'selected':''}>${days} ngày qua</option>`).join('')}</select><button class="btn" id="publish_report_refresh">Làm mới</button><a href="#posts">Xem danh sách bài viết</a></div>
  <p id="publish_report_status" role="status"></p><div id="publish_report_result" style="overflow:auto"></div></section>
+ <section class="card"><h3>Tương tác Facebook và Instagram</h3>
+ <p class="muted small">Số tích lũy của tối đa 12 bài gần đây đã đăng qua ShopPost trên các kênh đang kết nối.</p>
+ <button class="btn" id="meta_report_load">Cập nhật tương tác Meta</button>
+ <p id="meta_report_status" role="status"></p><div id="meta_report_result" style="overflow:auto"></div></section>
  <section class="card"><h3>Chỉ số video YouTube</h3>
  <p class="muted small">Số tích lũy từ YouTube cho tối đa 25 video gần đây của kênh đã chọn. Bộ lọc kết quả đăng bài ở trên không áp dụng ở đây.</p>
  <div class="row"><select id="youtube_report_account" aria-label="Kênh YouTube" hidden></select><button class="btn" id="youtube_report_load" hidden>Cập nhật chỉ số YouTube</button><a href="#accounts">Quản lý kênh</a></div>
  <p id="youtube_report_status" role="status"></p><div id="youtube_report_result" style="overflow:auto"></div></section>`;
  youtubeReport();
+ metaReport();
  const period=$('#publish_report_period'),refresh=$('#publish_report_refresh'),out=$('#publish_report_result'),status=$('#publish_report_status');
  let requestNumber=0;
  const load=async()=>{
@@ -795,6 +800,26 @@ function publishReportPage(){
   finally{if(current())refresh.disabled=false;}
  };
  period.onchange=load;refresh.onclick=load;load();
+}
+function metaReport(){
+ const button=$('#meta_report_load'),status=$('#meta_report_status'),out=$('#meta_report_result'),shop=SHOP.id;
+ const current=()=>out.isConnected&&route==='analytics'&&SHOP.id===shop;
+ if(!SHOP.ready||!shopCan('reports.view')){
+  button.disabled=true;status.textContent=SHOP.error||(!SHOP.ready?'Đang tải thông tin shop…':'Vai trò hiện tại chưa có quyền xem báo cáo.');return;
+ }
+ button.onclick=async()=>{
+  button.disabled=true;out.replaceChildren();status.textContent='Đang đọc tương tác từ Meta…';
+  try{
+   const data=await cloudRequest('/api/social/meta/engagement');
+   if(!current())return;
+   if(!Array.isArray(data.rows)||!Number.isSafeInteger(data.fetchedAt))throw Error('invalid_report');
+   status.textContent=data.rows.length?'Kiểm tra lúc '+fmtT(data.fetchedAt*1000):'Chưa có bài Facebook hoặc Instagram đã đăng qua ShopPost trên các kênh đang kết nối.';
+   const count=value=>Number.isSafeInteger(value)&&value>=0?fmtN(value):'Chưa có dữ liệu';
+   const state={available:'Có dữ liệu',unavailable:'Chưa đọc được',permission_required:'Cần kiểm tra quyền đọc'};
+   if(data.rows.length)out.innerHTML=`<table><thead><tr><th scope="col">Kênh</th><th scope="col">Mã bài</th><th scope="col">Cảm xúc / lượt thích</th><th scope="col">Bình luận</th><th scope="col">Trạng thái</th></tr></thead><tbody>${data.rows.map(row=>`<tr><td>${esc(PF[row.provider]?.n||'Meta')} · ${esc(row.channel)}</td><td>${esc(row.postId)}</td><td>${count(row.reactions)}</td><td>${count(row.comments)}</td><td>${state[row.status]||state.unavailable}</td></tr>`).join('')}</tbody></table>`;
+  }catch{if(current())status.textContent='Chưa tải được báo cáo Meta. Hãy thử cập nhật lại.';}
+  finally{if(current())button.disabled=false;}
+ };
 }
 async function youtubeReport(){
  const select=$('#youtube_report_account'),button=$('#youtube_report_load'),status=$('#youtube_report_status'),out=$('#youtube_report_result'),shop=SHOP.id;

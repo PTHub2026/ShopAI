@@ -7,10 +7,10 @@ const scope='a'.repeat(64);
 const session={userScope:scope,capabilities:{ai:true,drafts:true,publishing:false,scheduling:false,inbox:false}};
 const envelope=(id='cloud-a',content='Đã lưu từ thiết bị khác',revision=1)=>({draft:{id,type:'post',content,channels:[],status:'draft',media:[],assets:[],custom:{}},revision,updatedAt:1000});
 // api: mock cho /api/* (shop, thành viên, lời mời); mặc định trả tài khoản chưa có shop để các mock bản nháp cũ không bị lẫn yêu cầu khởi động.
-function runtime({managed=true,fetchImpl,stored={},api,invite=''}={}) {
+function runtime({managed=true,fetchImpl,stored={},api,invite='',route=''}={}) {
   const requests=[],errors=[];
   const html=managed?source.replace('<head>','<head><meta name="shopai-ai-endpoint" content="/ai"><meta name="shopai-user-scope" content="'+scope+'">'+(invite?'<meta name="shoppost-invite" content="'+invite+'">':'')):source;
-  const dom=new JSDOM(html,{url:'https://app.example/',runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:new VirtualConsole(),beforeParse(w){
+  const dom=new JSDOM(html,{url:'https://app.example/'+(route?'#'+route:''),runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:new VirtualConsole(),beforeParse(w){
     w.scrollTo=()=>{};w.AbortSignal=AbortSignal;w.TextEncoder=TextEncoder;
     for(const [k,v] of Object.entries(stored))w.localStorage.setItem(k,JSON.stringify(v));
     w.fetch=async(url,options={})=>{const path=new URL(url,w.location.href).pathname;requests.push({path,...options});if(path.startsWith('/api/'))return api?api(path,options):Response.json({shops:[],defaultShopId:null,admin:false,roles:{}});return fetchImpl?fetchImpl(path,options):Response.json(session)};
@@ -624,5 +624,23 @@ test('Publishing report shows the newest selected period from the server',async(
   await settle();
   assert.doesNotMatch(out.textContent,/Facebook/);
   assert.deepEqual(calls,['s_aaaaaaaaaa','s_aaaaaaaaaa']);
+ }finally{r.close();}
+});
+
+test('Opening analytics directly loads reports once the shop is ready',async()=>{
+ const pending=deferred();
+ const r=runtime({route:'analytics',api:async path=>{
+  if(path==='/api/shops')return pending.promise;
+  if(path==='/api/social/jobs/summary')return Response.json({days:30,rows:[]});
+  if(path==='/api/social/google/accounts')return Response.json({accounts:[{id:'yt-test',name:'ShopTrack TV',status:'connected'}]});
+  return Response.json({});
+ }});
+ try{
+  assert.match(r.w.document.querySelector('#youtube_report_status').textContent,/Đang tải thông tin shop/);
+  pending.resolve(Response.json(shopsBody('s_bbbbbbbbbb')));
+  await settle();await settle();
+  assert.equal(r.w.document.querySelector('#youtube_report_account').value,'yt-test');
+  assert.equal(r.w.document.querySelector('#youtube_report_load').hidden,false);
+  assert.match(r.w.document.querySelector('#publish_report_status').textContent,/Chưa có lượt đăng/);
  }finally{r.close();}
 });

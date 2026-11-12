@@ -122,3 +122,43 @@ test('YouTube: disconnect during session initialization prevents sending video b
   assert.equal(r.status,502);assert.equal((await r.json()).status,'failed');assert.equal(sent,0);
  }finally{globalThis.fetch=prior;f.DB.sqlite.close();}
 });
+
+test('YouTube report reads channel videos and distinguishes zero from missing statistics',async()=>{
+ const f=fixture(),url=await authorize(f),prior=globalThis.fetch,channel='UCabcdefghijklmnopqrstuv';
+ globalThis.fetch=providerFetch();
+ try{
+  assert.equal((await f.req('callback?state='+url.searchParams.get('state')+'&code=test')).status,303);
+  const account=(await (await f.req('accounts')).json()).accounts[0];
+  const calls=[];
+  globalThis.fetch=async(input,init)=>{
+   const u=new URL(String(input));
+   assert.equal(u.origin,'https://www.googleapis.com');
+   assert.equal(init.headers.Authorization,'Bearer ACCESS_PRIVATE');
+   calls.push(u.pathname);
+   if(u.pathname.endsWith('/channels'))return Response.json({items:[{id:channel,contentDetails:{relatedPlaylists:{uploads:'UUuploads'}}}]});
+   if(u.pathname.endsWith('/playlistItems')){
+    assert.equal(u.searchParams.get('playlistId'),'UUuploads');
+    return Response.json({items:['abcdefghijk','bcdefghijkl','cdefghijklm','abcdefghijk'].map(videoId=>({contentDetails:{videoId}}))});
+   }
+   assert.equal(u.searchParams.get('id'),'abcdefghijk,bcdefghijkl,cdefghijklm');
+   return Response.json({items:[
+    {id:'abcdefghijk',snippet:{channelId:channel,title:'Video ShopTrack'},statistics:{viewCount:'200',likeCount:'0'}},
+    {id:'bcdefghijkl',snippet:{channelId:'other',title:'Other'},statistics:{viewCount:'9999'}}
+   ]});
+  };
+  const path='video-stats?accountId='+account.id;
+  assert.equal((await f.req(path,'GET',undefined,{},f.other)).status,404);
+  assert.deepEqual(calls,[]);
+  const report=await f.req(path);
+  assert.equal(report.status,200);
+  assert.equal(report.headers.get('Cache-Control'),'no-store');
+  const data=await report.json();
+  assert.ok(Number.isSafeInteger(data.fetchedAt));
+  assert.deepEqual(data.videos,[
+   {id:'abcdefghijk',title:'Video ShopTrack',views:'200',likes:'0',comments:null},
+   {id:'bcdefghijkl',title:null,views:null,likes:null,comments:null},
+   {id:'cdefghijklm',title:null,views:null,likes:null,comments:null}
+  ]);
+  assert.equal(calls.length,3);
+ }finally{globalThis.fetch=prior;f.DB.sqlite.close();}
+});

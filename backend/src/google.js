@@ -40,7 +40,7 @@ export async function cleanupGoogleData(env){
 export async function handleGoogle(req,env,who,json){
  if(!env.DB)return fail(json,'db_missing',503);
  const db=env.DB,url=new URL(req.url),action=url.pathname.slice('/api/social/google/'.length);
- if(!['accounts','start','callback'].includes(action)&&!action.startsWith('accounts/')&&action!=='upload'&&action!=='uploads')return fail(json,'not_found',404);
+ if(!['accounts','start','callback'].includes(action)&&!action.startsWith('accounts/')&&!['upload','uploads','video-stats'].includes(action))return fail(json,'not_found',404);
  await db.batch(GOOGLE_SCHEMA.map(s=>db.prepare(s)));
  await cleanupGoogleData(env);
  let scoped=req,stateHash=null,stateRow=null;
@@ -78,6 +78,7 @@ export async function handleGoogle(req,env,who,json){
   await audit(db,{shopId:shop,actor:who.owner,action:'google.disconnect',target:id});return json({ok:true});
  }
  if(!googleConfigured(env))return fail(json,'google_not_configured',503);
+ if(action==='video-stats'&&req.method==='GET')return videoStats(req,env,who,json,ctx,url);
  if(action==='upload'&&req.method==='POST')return uploadVideo(req,env,who,json,ctx);
  if(action==='start'&&req.method==='POST'){
   if(!ctx.can('channels.configure_token')||ctx.shop.status!=='active')return fail(json,'forbidden',403);
@@ -136,6 +137,46 @@ export async function googleAccessToken(env,account){
   .bind(encrypted.cipher,encrypted.iv,now(),account.id,account.shop_id,account.credential).run();
  if(saved.meta.changes!==1)throw Error('google_connection_changed');
  return token.accessToken;
+}
+
+// Snapshot counters from YouTube. Unavailable counters remain null, including hidden likes or comments.
+async function videoStats(req,env,who,json,ctx,url){
+ if(!ctx.can('reports.view'))return fail(json,'forbidden',403);
+ const db=env.DB,shop=ctx.shop.id,accountId=url.searchParams.get('accountId');
+ const account=await db.prepare("SELECT * FROM google_channels WHERE id=? AND shop_id=? AND status='connected'").bind(accountId,shop).first();
+ if(!account)return fail(json,'account_missing',404);
+ const videoId=/^[\w-]{11}$/;
+ const count=value=>typeof value==='string'&&/^\d{1,20}$/.test(value)?value:null;
+ let videos=[];
+ try{
+  const access=await googleAccessToken(env,account);
+  const get=(path,parameters)=>googleFetch('https://www.googleapis.com/youtube/v3/'+path+'?'+new URLSearchParams(parameters),{headers:{Authorization:'Bearer '+access}});
+  const channels=await get('channels',{part:'contentDetails',mine:'true',maxResults:'50'});
+  const playlist=channels.items?.find(item=>item.id===account.external_id)?.contentDetails?.relatedPlaylists?.uploads;
+  if(typeof playlist!=='string'||!/^[-\w]{1,128}$/.test(playlist))return fail(json,'youtube_channel_unavailable',422);
+  const items=await get('playlistItems',{part:'contentDetails',playlistId:playlist,maxResults:'25'});
+  if(!Array.isArray(items.items))return fail(json,'youtube_stats_unavailable',502);
+  const ids=[...new Set(items.items.map(item=>item.contentDetails?.videoId).filter(id=>typeof id==='string'&&videoId.test(id)))].slice(0,25);
+  if(ids.length){
+   const result=await get('videos',{part:'snippet,statistics',id:ids.join(',')});
+   if(!Array.isArray(result.items))return fail(json,'youtube_stats_unavailable',502);
+   const byId=new Map(result.items.filter(v=>v.snippet?.channelId===account.external_id).map(v=>[v.id,v]));
+   videos=ids.map(id=>{
+    const video=byId.get(id);
+    if(!video)return {id,title:null,views:null,likes:null,comments:null};
+    return {id,title:typeof video.snippet.title==='string'?video.snippet.title.slice(0,150):null,views:count(video.statistics?.viewCount),likes:count(video.statistics?.likeCount),comments:count(video.statistics?.commentCount)};
+   });
+  }
+ }catch(error){
+  if(error.reauth)return fail(json,'google_reauth_required',409);
+  if(error.status===429)return fail(json,'youtube_stats_rate_limited',429);
+  return fail(json,'youtube_stats_unavailable',502);
+ }
+ const current=await resolveShop(env,who,req);
+ if(current.error||current.shop.id!==shop||!current.can('reports.view'))return fail(json,'forbidden',403);
+ const stillConnected=await db.prepare("SELECT id FROM google_channels WHERE id=? AND shop_id=? AND status='connected'").bind(account.id,shop).first();
+ if(!stillConnected)return fail(json,'account_missing',404);
+ return json({videos,fetchedAt:now()},200,{'Cache-Control':'no-store'});
 }
 
 async function uploadVideo(req,env,who,json,ctx){

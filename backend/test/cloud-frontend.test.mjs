@@ -562,6 +562,36 @@ test('the post composer generates the selected number of AI articles and applies
   assert.equal(r.read('D.content'),'Generated article 5');
  }finally{r.close();}
 });
+test('managed settings preview the real AI response and explain rate limiting',async()=>{
+ const pending=deferred();
+ let limited=false;
+ const r=runtime({route:'settings',fetchImpl:async path=>path==='/ai'
+  ?limited?Response.json({}, {status:429}):pending.promise
+  :Response.json(session)});
+ try{
+  await settle();
+  const doc=r.w.document;
+  const button=doc.querySelector('#st_ai_test'),status=doc.querySelector('#st_ai_status'),preview=doc.querySelector('#st_ai_preview');
+  assert.equal(doc.querySelector('#st_ai'),null);
+  assert.doesNotMatch(doc.querySelector('#view').textContent,/Đặt lại dữ liệu demo/);
+  const request=r.w.testAI();
+  await r.w.testAI();
+  assert.equal(r.requests.filter(req=>req.path==='/ai').length,1);
+  assert.equal(button.disabled,true);
+  pending.resolve(Response.json({text:'<b>Phản hồi thử</b>'}));
+  await request;
+  assert.match(status.textContent,/Kết nối AI thành công/);
+  assert.equal(preview.textContent,'<b>Phản hồi thử</b>');
+  assert.equal(preview.querySelector('b'),null);
+  assert.equal(preview.hidden,false);
+  assert.equal(button.disabled,false);
+  limited=true;
+  await r.w.testAI();
+  assert.match(status.textContent,/giới hạn/);
+  assert.equal(preview.hidden,true);
+  assert.equal(button.disabled,false);
+ }finally{r.close();}
+});
 test('AI generation blocks duplicate clicks, preserves updated forms and restores loading controls',async()=>{
  const pending=deferred(),r=runtime();try{await settle();r.w.go('ai');await settle();let calls=0;r.read('AI.call=async()=>"Generated"');r.w.eval('AI.call=async()=>window.pendingGeneration()');r.w.pendingGeneration=()=>{calls++;return pending.promise;};r.w.document.querySelector('#a_topic').value='Original';const button=r.w.document.querySelector('button[onclick="runGen(\'a\')"]'),out=r.w.document.querySelector('#a_out');const request=r.w.runGen('a');await r.w.runGen('a');assert.equal(calls,1);assert.equal(button.disabled,true);r.w.document.querySelector('#a_topic').value='Edited';pending.resolve('Old generated response');await request;assert.equal(button.disabled,false);assert.doesNotMatch(out.textContent,/Old generated response/);assert.match(out.textContent,/Yêu cầu đã dừng/);}finally{r.close();}
 });

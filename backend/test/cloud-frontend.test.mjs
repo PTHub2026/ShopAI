@@ -537,6 +537,31 @@ test('dialogs are labelled, trap focus, and return focus when dismissed',async()
 test('managed library does not offer simulated cloud connectors as real services',async()=>{
  const r=runtime();try{await settle();r.w.go('library');await settle();assert.equal(r.w.document.querySelector('#view .screen-scope'),null);assert.ok(r.w.document.querySelector('#lb_drive'));assert.ok(r.w.document.querySelector('#library_storage details'));assert.equal(r.w.document.querySelectorAll('button[onclick^="lbConnect"]').length,0);}finally{r.close();}
 });
+test('the post composer generates the selected number of AI articles and applies only the chosen result',async()=>{
+ const r=runtime();
+ try{
+  await settle();
+  r.w.go('create');
+  r.w.openGen();
+  const count=r.w.document.querySelector('#m_count');
+  assert.equal(count?.value,'3');
+  r.w.document.querySelector('#m_topic').value='ShopTrack';
+  r.w.generateTestArticle=async()=> 'Generated article '+(++calls);
+  let calls=0;
+  r.read('AI.call=window.generateTestArticle');
+  for(const requested of [1,5]){
+   calls=0;
+   count.value=String(requested);
+   await r.w.runGen('m');
+   const variants=r.w.document.querySelectorAll('#m_out .variant');
+   assert.equal(calls,requested);
+   assert.equal(variants.length,requested);
+   assert.equal(r.read('D.content'),'');
+   if(requested===5)variants[4].querySelector('button').click();
+  }
+  assert.equal(r.read('D.content'),'Generated article 5');
+ }finally{r.close();}
+});
 test('AI generation blocks duplicate clicks, preserves updated forms and restores loading controls',async()=>{
  const pending=deferred(),r=runtime();try{await settle();r.w.go('ai');await settle();let calls=0;r.read('AI.call=async()=>"Generated"');r.w.eval('AI.call=async()=>window.pendingGeneration()');r.w.pendingGeneration=()=>{calls++;return pending.promise;};r.w.document.querySelector('#a_topic').value='Original';const button=r.w.document.querySelector('button[onclick="runGen(\'a\')"]'),out=r.w.document.querySelector('#a_out');const request=r.w.runGen('a');await r.w.runGen('a');assert.equal(calls,1);assert.equal(button.disabled,true);r.w.document.querySelector('#a_topic').value='Edited';pending.resolve('Old generated response');await request;assert.equal(button.disabled,false);assert.doesNotMatch(out.textContent,/Old generated response/);assert.match(out.textContent,/Yêu cầu đã dừng/);}finally{r.close();}
 });

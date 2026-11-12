@@ -139,3 +139,42 @@ test('video recorder startup failure releases captured tracks and permits anothe
   await r.run('vExport()');assert.equal(stoppedTracks,2,'a failed recorder does not leave exporting locked');
  }finally{r.close();}
 });
+
+test('Video caption survives a redraw, deduplicates requests and preserves manual edits',async()=>{
+ const r=runtime();
+ try{
+  r.run("vDraw=()=>0;VP=vNewProject();VP.topic='ShopTrack';go('video')");
+  let calls=0,wait=deferred();
+  r.w.readCaption=()=>{calls++;return wait.promise;};
+  r.run("AI.call=()=>window.readCaption()");
+  const first=r.run('vCaption()');
+  r.run('V.video()');
+  assert.equal(r.query('#v_capbtn').disabled,true);
+  await r.run('vCaption()');
+  assert.equal(calls,1);
+  wait.resolve('Mô tả ShopTrack');
+  await first;
+  assert.match(r.query('#v_cap').value,/Mô tả ShopTrack/);
+  assert.equal(r.query('#v_capbtn').disabled,false);
+  wait=deferred();
+  const second=r.run('vCaption()');
+  change(r,r.query('#v_cap'),'Nội dung đã chỉnh tay','input');
+  wait.resolve('Kết quả đến muộn');
+  await second;
+  assert.equal(r.query('#v_cap').value,'Nội dung đã chỉnh tay');
+ }finally{r.close();}
+});
+
+test('Video scene count and duration display follow edits and clamping',async()=>{
+ const r=runtime();
+ try{
+  r.run("vDraw=()=>0;VP=vNewProject();go('video');vAdd()");
+  change(r,r.query('.vscene textarea'),'12345','input');
+  assert.equal(r.query('#v_count_0').textContent,'5/120 ký tự');
+  change(r,r.query('#v_duration_0'),'20');
+  assert.equal(r.query('#v_duration_0').value,'15');
+  assert.equal(r.query('#vtot').textContent,'15.0 s');
+  assert.equal(r.query('#vseek').max,'15');
+  await settle();
+ }finally{r.close();}
+});

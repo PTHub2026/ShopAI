@@ -665,12 +665,14 @@ async function runGen(p){
  const out=$('#'+p+'_out');if(!out||GENERATION_BUSY.has(out))return;
  let base;try{base=readGenerationForm(p);}catch{return;}
  if(!base.topic&&!base.product)return toast('Nhập chủ đề hoặc sản phẩm');
+ const countInput=$('#'+p+'_count'),count=countInput?Number(countInput.value):3;
+ if(!Number.isInteger(count)||count<1||count>5)return toast('Chọn số lượng từ 1 đến 5 bài viết.');
  const snapshot=JSON.stringify(base),page=route,generation=viewGeneration;
- const current=()=>out.isConnected&&$('#'+p+'_out')===out&&route===page&&viewGeneration===generation&&JSON.stringify(readGenerationForm(p))===snapshot;
+ const current=()=>out.isConnected&&$('#'+p+'_out')===out&&route===page&&viewGeneration===generation&&(!countInput||Number(countInput.value)===count)&&JSON.stringify(readGenerationForm(p))===snapshot;
  const buttons=[...document.querySelectorAll('button[onclick]')].filter(button=>button.getAttribute('onclick')===`runGen('${p}')`),labels=buttons.map(b=>b.textContent);
  GENERATION_BUSY.add(out);buttons.forEach(b=>{b.disabled=true;b.textContent='Đang tạo nội dung…';});out.setAttribute('aria-busy','true');
  try{const seed=rnd(0,99),outs=[];
-  for(let i=0;i<3;i++){if(!current())return;out.textContent='Đang tạo phương án '+(i+1)+'/3…';outs.push(await AI.call('generate',{...base,seed:seed+i}));}
+  for(let i=0;i<count;i++){if(!current())return;out.textContent='Đang tạo bài '+(i+1)+'/'+count+'…';outs.push(await AI.call('generate',{...base,seed:seed+i}));}
   if(!current())return;window._gen=outs;out._variants=outs;out.innerHTML=outs.map((o,i)=>`<div class="variant"><div class="row" style="justify-content:space-between"><b class="small">Phương án ${i+1}</b><span class="tag">Điểm chất lượng ${contentScore(o).score}/100</span></div><div style="white-space:pre-wrap;margin-top:6px">${esc(o)}</div><div class="row" style="margin-top:8px"><button class="btn sm pri" onclick="useGen(${i},'${p}')">Dùng nội dung này</button><button class="btn sm" onclick="copyGenerated(${i},'${p}')">Sao chép</button></div></div>`).join('');
  }catch(e){if(out.isConnected&&$('#'+p+'_out')===out){out.textContent='Chưa tạo được nội dung. Hãy thử lại.';toast('Tạo nội dung chưa hoàn tất.');}}
  finally{GENERATION_BUSY.delete(out);out.removeAttribute('aria-busy');buttons.forEach((button,i)=>{if(button.isConnected){button.disabled=false;button.textContent=labels[i];}});if(out.isConnected&&out.textContent.startsWith('Đang tạo'))out.textContent='Yêu cầu đã dừng vì nội dung hoặc màn hình thay đổi.';}
@@ -683,7 +685,11 @@ function useGen(i,p){
  const apply=()=>{if(D!==editor||D.content!==original||(page!==null&&viewGeneration!==page))return toast('Bản nháp đã thay đổi. Hãy chọn lại nội dung AI.');D.content=text;closeModal();go('create');toast('Đã đưa nội dung vào trình soạn');};
  if(D.content.trim()&&D.content.trim()!==text.trim())ask('Thay nội dung đang soạn bằng phương án AI này?',apply,{ok:'Thay nội dung'});else apply();
 }
-function openGen(){modal(`<h3>✨ AI tạo nội dung</h3>${genForm('m')}<div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" onclick="closeModal()">Đóng</button><button class="btn pri" onclick="runGen('m')">Tạo 3 phương án</button></div><div id="m_out"></div>`)}
+function openGen(){modal(`<h3>✨ AI tạo nội dung</h3>${genForm('m')}
+<div class="row" style="justify-content:space-between;align-items:flex-end;margin-top:12px">
+ <div><label for="m_count">Số lượng bài viết</label><select id="m_count"><option value="1">1 bài</option><option value="2">2 bài</option><option value="3" selected>3 bài</option><option value="4">4 bài</option><option value="5">5 bài</option></select></div>
+ <div class="row"><button class="btn" onclick="closeModal()">Đóng</button><button class="btn pri" onclick="runGen('m')">Tạo bài viết</button></div>
+</div><div id="m_out" aria-live="polite"></div>`)}
 const PILLARS=[['Mẹo vận hành','{n} mẹo giúp {a} lên đơn và xử lý đơn nhanh hơn','Carousel'],['Giới thiệu tính năng','Tính năng của {t} giúp quản lý đơn hàng tập trung','Bài viết + ảnh'],['Hướng dẫn sử dụng','Hướng dẫn tạo đơn và in vận đơn trên {t}','Video ngắn'],['Chương trình đại lý','Trở thành đại lý phân phối cước cùng {t}','Bài viết'],['Kiến thức vận chuyển','Cách tính cước vận chuyển mà {a} cần biết','Carousel'],['Tương tác','Hỏi {a}: khó khăn lớn nhất khi xử lý đơn hàng là gì?','Bài viết'],['Câu chuyện chuyển đổi','Hành trình chuyển từ quản lý đơn thủ công sang {t}','Video ngắn']];
 const TIMES=['11:30','20:00','19:30','12:00','20:30','10:00','21:00'];
 V.ai=()=>{$('#view').innerHTML=`<div class="grid two g2" style="align-items:start"><div class="card"><h3>✨ Tạo nội dung từ đầu</h3>${genForm('a')}<div style="margin-top:12px;text-align:right"><button class="btn pri" onclick="runGen('a')">Tạo 3 phương án</button></div><div id="a_out"></div></div>

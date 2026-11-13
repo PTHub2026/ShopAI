@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import {readFileSync} from 'node:fs';
-import {encryptToken,decryptToken,SOCIAL_SCHEMA,handleSocial,runDuePublishJobs} from '../src/social.js';
+import {sqliteDB} from './sqlite-fixture.mjs';
+import {encryptToken,decryptToken,SOCIAL_SCHEMA,ensureSocialSchema,handleSocial,runDuePublishJobs} from '../src/social.js';
 if(!globalThis.crypto)globalThis.crypto=webcrypto;
 const key=()=>Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64');
 test('token encrypted at rest, unique IV, decryptable with configured key',async()=>{
@@ -36,14 +37,28 @@ test('publisher safeguards: shop scoping, conditional claim and unknown no repla
  assert.match(source,/status='revoked',token='',token_iv=''/);
  assert.doesNotMatch(source,/console\.log\([^)]*token/);
 });
-test('runDuePublishJobs recovers jobs stuck in sending >5min (issue #68)',async()=>{
- const t=Math.floor(Date.now()/1000);
- const jobs=[{id:'stuck',status:'sending',error_code:null,updated_at:t-400},{id:'fresh',status:'sending',error_code:null,updated_at:t-10}];
- const stmt=(sql)=>{let args=[];const st={bind:(...a)=>{args=a;return st;},
-  run:async()=>{if(/UPDATE publish_jobs SET status='unknown',error_code='sending_interrupted'/.test(sql)){const [ts,cutoff]=args;for(const j of jobs)if(j.status==='sending'&&j.updated_at<cutoff){j.status='unknown';j.error_code='sending_interrupted';j.updated_at=ts;}}return {success:true,meta:{changes:0}};},
-  all:async()=>({results:[]}),first:async()=>null};return st;};
- const db={prepare:stmt,batch:async()=>[],exec:async()=>({})};
- await runDuePublishJobs({DB:db,SOCIAL_TOKEN_KEY:key()});
- assert.equal(jobs[0].status,'unknown');assert.equal(jobs[0].error_code,'sending_interrupted');
- assert.equal(jobs[1].status,'sending');
+test('runDuePublishJobs only recovers stale sending jobs without replaying them',async()=>{
+ const DB=sqliteDB();
+ try{
+  DB.sqlite.exec(readFileSync(new URL('../migrations/0006_scheduled.sql',import.meta.url),'utf8'));
+  await ensureSocialSchema(DB);
+  const t=Math.floor(Date.now()/1000);
+  DB.sqlite.prepare("INSERT INTO shops (id,name,owner,created_at,updated_at) VALUES ('shop','Test shop','user',?,?)").run(t,t);
+  const insert=DB.sqlite.prepare(`INSERT INTO publish_jobs
+   (id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at)
+   VALUES (?,'shop','account',?,'text','{}',?,'user',?,?)`);
+  insert.run('stuck','stuck','sending',t-400,t-400);
+  insert.run('fresh','fresh','sending',t,t);
+  insert.run('sent','sent','sent',t-400,t-400);
+
+  assert.deepEqual(await runDuePublishJobs({DB}),{processed:0});
+  const job=DB.sqlite.prepare('SELECT status,error_code,updated_at FROM publish_jobs WHERE id=?');
+  assert.equal(job.get('stuck').status,'unknown');
+  assert.equal(job.get('stuck').error_code,'sending_interrupted');
+  assert.equal(job.get('fresh').status,'sending');
+  assert.equal(job.get('fresh').updated_at,t);
+  assert.equal(job.get('sent').status,'sent');
+  assert.equal(job.get('sent').updated_at,t-400);
+  assert.deepEqual(await runDuePublishJobs({DB}),{processed:0});
+ }finally{DB.sqlite.close();}
 });

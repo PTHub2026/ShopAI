@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {webcrypto} from 'node:crypto';
 import {readFileSync} from 'node:fs';
-import {encryptToken,decryptToken,SOCIAL_SCHEMA,handleSocial} from '../src/social.js';
+import {sqliteDB} from './sqlite-fixture.mjs';
+import {encryptToken,decryptToken,SOCIAL_SCHEMA,ensureSocialSchema,handleSocial,runDuePublishJobs} from '../src/social.js';
 if(!globalThis.crypto)globalThis.crypto=webcrypto;
 const key=()=>Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64');
 test('token encrypted at rest, unique IV, decryptable with configured key',async()=>{
@@ -45,4 +46,29 @@ test('jobView includes provider from channel in publish and retry/run responses'
  assert.match(source,/jobView\(\{\.\.\.j,provider:a\.provider\}\)/);
  // retry/run path: provider from 'account' must be spread into j before deliver
  assert.match(source,/deliver\(\{\.\.\.j,provider:account\?\.provider\?\?null\}/);
+});
+test('runDuePublishJobs only recovers stale sending jobs without replaying them',async()=>{
+ const DB=sqliteDB();
+ try{
+  DB.sqlite.exec(readFileSync(new URL('../migrations/0006_scheduled.sql',import.meta.url),'utf8'));
+  await ensureSocialSchema(DB);
+  const t=Math.floor(Date.now()/1000);
+  DB.sqlite.prepare("INSERT INTO shops (id,name,owner,created_at,updated_at) VALUES ('shop','Test shop','user',?,?)").run(t,t);
+  const insert=DB.sqlite.prepare(`INSERT INTO publish_jobs
+   (id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at)
+   VALUES (?,'shop','account',?,'text','{}',?,'user',?,?)`);
+  insert.run('stuck','stuck','sending',t-400,t-400);
+  insert.run('fresh','fresh','sending',t,t);
+  insert.run('sent','sent','sent',t-400,t-400);
+
+  assert.deepEqual(await runDuePublishJobs({DB}),{processed:0});
+  const job=DB.sqlite.prepare('SELECT status,error_code,updated_at FROM publish_jobs WHERE id=?');
+  assert.equal(job.get('stuck').status,'unknown');
+  assert.equal(job.get('stuck').error_code,'sending_interrupted');
+  assert.equal(job.get('fresh').status,'sending');
+  assert.equal(job.get('fresh').updated_at,t);
+  assert.equal(job.get('sent').status,'sent');
+  assert.equal(job.get('sent').updated_at,t-400);
+ assert.deepEqual(await runDuePublishJobs({DB}),{processed:0});
+}finally{DB.sqlite.close();}
 });

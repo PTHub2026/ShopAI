@@ -167,6 +167,7 @@ async function deliver(j,db,env,shop,json){
 export async function runDuePublishJobs(env){
  const db=env.DB;await ensureSocialSchema(db);
  await importLegacyScheduledPosts(db);
+ await db.prepare("UPDATE publish_jobs SET status='unknown',error_code='sending_interrupted',updated_at=? WHERE status='sending' AND updated_at<?").bind(now(),now()-300).run();
  const {results}=await db.prepare("SELECT j.* FROM publish_jobs j JOIN shops s ON s.id=j.shop_id WHERE j.status IN ('pending','retryable') AND j.next_attempt_at<=? AND s.status='active' ORDER BY j.next_attempt_at,j.created_at LIMIT 25").bind(now()).all();
  let processed=0;
  for(const j of results){try{await deliver(j,db,env,j.shop_id,(v,status=200)=>({status,data:v}));}catch{console.error(JSON.stringify({event:'publish.result',code:'job_processing_failed'}));}processed++;}

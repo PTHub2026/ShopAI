@@ -492,6 +492,34 @@ test('channel tabs separate shop accounts from available platforms and managemen
  r.read("CHANNEL_TAB='available'");const available=r.w.connectionSummary();assert.match(available,/Instagram/);assert.match(available,/Kết nối thêm/);assert.match(available,/Kết nối Zalo OA/);
  }finally{r.close();}
 });
+test('Zalo offers replacement for an existing OA and connection for a shop without one',async()=>{
+ const r=runtime();
+ try{
+  await settle();
+  r.read("SHOP.ready=true;SHOP.id='shop';SHOP.permissions=['channels.configure_token'];CHANNEL_TAB='available'");
+  r.w.socialRequest=async()=>({});
+  r.w.googleRequest=async()=>({accounts:[]});
+  for(const status of ['connected','expired','revoked']){
+   const zalo={channels:[{provider:'zalo',external_id:'123',status}],setup:{zalo:{configured:true}}};
+   r.w.cloudRequest=async()=>zalo;
+   r.w.updateConnectionInventory({accounts:[]},zalo,{accounts:[]},'shop');
+   await r.w.openAddAccount();
+   const modal=r.w.document.querySelector('#mbox');
+   const button=modal.querySelector('button[onclick^="connectAdditionalAccount(\'zalo\'"]');
+   const summary=r.w.connectionSummary();
+   if(status==='revoked'){
+    assert.equal(button.textContent,'Kết nối');
+    assert.match(summary,/aria-label="Kết nối Zalo OA"/);
+    assert.doesNotMatch(modal.textContent,/sẽ thay thế/);
+   }else{
+    assert.equal(button.textContent,'Đổi Zalo OA');
+    assert.match(summary,/aria-label="Đổi Zalo OA"/);
+    assert.match(summary,/Chọn OA khác sẽ thay thế Zalo OA hiện tại của shop/);
+    assert.match(modal.textContent,/Chọn OA khác sẽ thay thế Zalo OA hiện tại của shop/);
+   }
+  }
+ }finally{r.close();}
+});
 test('account disclosure distinguishes expired login and closes on Escape without logging out',async()=>{
  const r=runtime();try{await settle();r.w.cloudRequest=async()=>{throw Object.assign(Error('expired'),{status:401});};await r.w.refreshAccountMenu();assert.equal(r.w.document.getElementById('login_btn').hidden,false);assert.equal(r.w.document.getElementById('logout_btn').hidden,true);assert.equal(r.w.document.getElementById('switch_account_btn').hidden,true);const menu=r.w.document.getElementById('account_actions');menu.open=true;menu.dispatchEvent(new r.w.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert.equal(menu.open,false);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);}finally{r.close();}
 });
@@ -508,6 +536,61 @@ test('dialogs are labelled, trap focus, and return focus when dismissed',async()
 });
 test('managed library does not offer simulated cloud connectors as real services',async()=>{
  const r=runtime();try{await settle();r.w.go('library');await settle();assert.equal(r.w.document.querySelector('#view .screen-scope'),null);assert.ok(r.w.document.querySelector('#lb_drive'));assert.ok(r.w.document.querySelector('#library_storage details'));assert.equal(r.w.document.querySelectorAll('button[onclick^="lbConnect"]').length,0);}finally{r.close();}
+});
+test('the post composer generates the selected number of AI articles and applies only the chosen result',async()=>{
+ const r=runtime();
+ try{
+  await settle();
+  r.w.go('create');
+  r.w.openGen();
+  const count=r.w.document.querySelector('#m_count');
+  assert.equal(count?.value,'3');
+  r.w.document.querySelector('#m_topic').value='ShopTrack';
+  r.w.generateTestArticle=async()=> 'Generated article '+(++calls);
+  let calls=0;
+  r.read('AI.call=window.generateTestArticle');
+  for(const requested of [1,5]){
+   calls=0;
+   count.value=String(requested);
+   await r.w.runGen('m');
+   const variants=r.w.document.querySelectorAll('#m_out .variant');
+   assert.equal(calls,requested);
+   assert.equal(variants.length,requested);
+   assert.equal(r.read('D.content'),'');
+   if(requested===5)variants[4].querySelector('button').click();
+  }
+  assert.equal(r.read('D.content'),'Generated article 5');
+ }finally{r.close();}
+});
+test('managed settings preview the real AI response and explain rate limiting',async()=>{
+ const pending=deferred();
+ let limited=false;
+ const r=runtime({route:'settings',fetchImpl:async path=>path==='/ai'
+  ?limited?Response.json({}, {status:429}):pending.promise
+  :Response.json(session)});
+ try{
+  await settle();
+  const doc=r.w.document;
+  const button=doc.querySelector('#st_ai_test'),status=doc.querySelector('#st_ai_status'),preview=doc.querySelector('#st_ai_preview');
+  assert.equal(doc.querySelector('#st_ai'),null);
+  assert.doesNotMatch(doc.querySelector('#view').textContent,/Đặt lại dữ liệu demo/);
+  const request=r.w.testAI();
+  await r.w.testAI();
+  assert.equal(r.requests.filter(req=>req.path==='/ai').length,1);
+  assert.equal(button.disabled,true);
+  pending.resolve(Response.json({text:'<b>Phản hồi thử</b>'}));
+  await request;
+  assert.match(status.textContent,/Kết nối AI thành công/);
+  assert.equal(preview.textContent,'<b>Phản hồi thử</b>');
+  assert.equal(preview.querySelector('b'),null);
+  assert.equal(preview.hidden,false);
+  assert.equal(button.disabled,false);
+  limited=true;
+  await r.w.testAI();
+  assert.match(status.textContent,/giới hạn/);
+  assert.equal(preview.hidden,true);
+  assert.equal(button.disabled,false);
+ }finally{r.close();}
 });
 test('AI generation blocks duplicate clicks, preserves updated forms and restores loading controls',async()=>{
  const pending=deferred(),r=runtime();try{await settle();r.w.go('ai');await settle();let calls=0;r.read('AI.call=async()=>"Generated"');r.w.eval('AI.call=async()=>window.pendingGeneration()');r.w.pendingGeneration=()=>{calls++;return pending.promise;};r.w.document.querySelector('#a_topic').value='Original';const button=r.w.document.querySelector('button[onclick="runGen(\'a\')"]'),out=r.w.document.querySelector('#a_out');const request=r.w.runGen('a');await r.w.runGen('a');assert.equal(calls,1);assert.equal(button.disabled,true);r.w.document.querySelector('#a_topic').value='Edited';pending.resolve('Old generated response');await request;assert.equal(button.disabled,false);assert.doesNotMatch(out.textContent,/Old generated response/);assert.match(out.textContent,/Yêu cầu đã dừng/);}finally{r.close();}

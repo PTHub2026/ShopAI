@@ -70,7 +70,7 @@ export async function publishMeta(e,account,job){
    if(status.status_code==='IN_PROGRESS'){
     const wait=Error('IG_MEDIA_PROCESSING');wait.status=429;wait.retryAfter=30;throw wait;
    }
-   throw Error('IG_MEDIA_UNAVAILABLE');
+   const unavailable=Error('IG_MEDIA_UNAVAILABLE');unavailable.permanent=true;throw unavailable;
   }
   const publish=await graphRequest(e,encodeURIComponent(account.external_id)+'/media_publish',token,{creation_id:String(container.id)},'POST');
   if(!publish.id)throw Error('META_MISSING_ID');return String(publish.id);

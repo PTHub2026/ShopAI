@@ -43,6 +43,23 @@ test('Draft revisions prevent overwrites and isolate owners', async()=>{
     assert.equal((await call(db,{owner:'bob',method:'GET'})).status,404);
   } finally { db.sqlite.close(); }
 });
+test('Concurrent creates in the same shop retain the revision conflict and saved draft',async()=>{
+  const db=database();
+  try {
+    const contents=['First concurrent draft','Second concurrent draft'];
+    const responses=await Promise.all(contents.map(content=>call(db,{body:{draft:draft('draft-a',content),revision:0}})));
+    assert.deepEqual(responses.map(response=>response.status).sort(),[200,409]);
+    const conflict=responses.find(response=>response.status===409);
+    assert.equal((await conflict.json()).error,'Bản nháp đã thay đổi trên máy chủ. Mở lại hoặc lưu thành bản mới.');
+    const winner=responses.findIndex(response=>response.status===200);
+    const reopened=await call(db,{method:'GET'});
+    assert.equal(reopened.status,200);
+    const saved=await reopened.json();
+    assert.equal(saved.revision,1);
+    assert.equal(saved.draft.content,contents[winner]);
+    assert.equal(db.sqlite.prepare('SELECT count(*) AS n FROM drafts').get().n,1);
+  } finally { db.sqlite.close(); }
+});
 test('Pagination reaches every draft, including identical timestamps',async()=>{
   const db=database();
   try {
@@ -110,5 +127,24 @@ test('Giới hạn tần suất chỉ áp cho ghi (PUT/DELETE), không áp cho �
     // DELETE bị giới hạn → 429.
     assert.equal((await call(db,{method:'DELETE',limiter:deny})).status,429);
     assert.deepEqual(keys,['drafts-write:alice','drafts-write:alice']);
+  } finally { db.sqlite.close(); }
+});
+
+
+test('Xung đột ID bản nháp giữa hai shop trả lỗi rõ ràng thay vì "đã thay đổi trên máy chủ"',async()=>{
+  const db=database();
+  try {
+    // alice tạo draft-a trong shop A (ctxFor mặc định).
+    assert.equal((await call(db)).status,200);
+    // alice tạo cùng ID draft-a trong shop B (shop_id khác) → phải báo lỗi cross-shop.
+    const shopBCtx={shop:{id:'s_shopBxxx'},membership:{role:'owner',can_publish:true},can:action=>can({role:'owner',can_publish:true},action)};
+    const url='https://app.example/storage/drafts/draft-a';
+    const req=new Request(url,{method:'PUT',headers:{Origin:'https://app.example','Content-Type':'application/json'},body:JSON.stringify({draft:draft(),revision:0})});
+    const r=await drafts(req,{DB:db,AI_RATE_LIMITER:{limit:async()=>({success:true})}},
+      'alice',json,shopBCtx);
+    assert.equal(r.status,409);
+    const body=await r.json();
+    // Thông điệp phải đề cập "shop khác", không phải "đã thay đổi trên máy chủ".
+    assert.ok(body.error.includes('shop khác'),'Thông điệp lỗi phải chỉ rõ xung đột cross-shop: '+body.error);
   } finally { db.sqlite.close(); }
 });

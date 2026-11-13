@@ -132,7 +132,16 @@ export async function drafts(request, env, owner, json, ctx) {
     const result = media.length || hasStoredMedia
       ? await draftMediaWrite(env.DB, statement, { shopId, id, revision: body.revision + 1, payload, files, media })
       : await statement.run();
-    if (result.meta.changes !== 1) return json({ error: 'Bản nháp đã thay đổi trên máy chủ. Mở lại hoặc lưu thành bản mới.' }, 409);
+    if (result.meta.changes !== 1) {
+      // Khi tạo mới (revision=0): xung đột PRIMARY KEY (owner, id) có thể xảy ra nếu owner
+      // đã tạo bản nháp cùng ID trong một shop khác (shop_id khác). Phân biệt trường hợp này
+      // để trả thông điệp lỗi rõ ràng thay vì thông điệp "đã thay đổi trên máy chủ" gây nhầm lẫn.
+      if (body.revision === 0) {
+        const crossShop = await env.DB.prepare('SELECT shop_id FROM drafts WHERE owner = ? AND id = ?').bind(owner, id).first();
+        if (crossShop && crossShop.shop_id !== shopId) return json({ error: 'Mã bản nháp này đã được dùng trong shop khác. Hãy lưu với mã khác.' }, 409);
+      }
+      return json({ error: 'Bản nháp đã thay đổi trên máy chủ. Mở lại hoặc lưu thành bản mới.' }, 409);
+    }
     return json({ draft: JSON.parse(payload), revision: body.revision + 1, updatedAt: now, status, createdBy: existing ? existing.created_by || existing.owner : owner, assignedTo: existing ? existing.assigned_to || null : null });
   } catch { return json({ error: 'Không thể truy cập kho bản nháp; không xác nhận đã lưu.' }, 503); }
 }

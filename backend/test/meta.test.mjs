@@ -46,6 +46,17 @@ test('OAuth callback refuses missing configuration before touching database',asy
  assert.equal(r.status,503);
 });
 
+test('Instagram ERROR or EXPIRED container marks publish job failed permanently, not unknown',async()=>{
+ const {retryDecision}=await import('../src/provider-adapters.js');
+ const e=env(),enc=await encryptToken(e,token),account={provider:'instagram',external_id:'987654',token:enc.cipher,token_iv:enc.iv};
+ for(const code of ['ERROR','EXPIRED']){
+  const original=globalThis.fetch;
+  globalThis.fetch=async(url)=>{const path=new URL(url).pathname.split('/').at(-1);if(path==='media')return Response.json({id:'c1'});if(path==='c1')return Response.json({status_code:code});throw Error('must not publish');};
+  try{
+   await assert.rejects(publishMeta(e,account,{kind:'photo',payload:JSON.stringify({text:'hi',photoUrl:'https://example.com/img.jpg'})}),err=>{const d=retryDecision(err,1);return err.message==='IG_MEDIA_UNAVAILABLE'&&err.permanent===true&&d.status==='failed';});
+  }finally{globalThis.fetch=original;}
+ }
+});
 test('Instagram never calls media_publish until container reaches FINISHED',async()=>{
  const e=env(),enc=await encryptToken(e,token),account={provider:'instagram',external_id:'987654',token:enc.cipher,token_iv:enc.iv};
  const original=globalThis.fetch,called=[];

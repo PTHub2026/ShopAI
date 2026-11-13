@@ -139,6 +139,7 @@ export async function handleSocial(req,env,who,json){
    }
   }
   if(action==='run'&&j.status==='pending'){await db.prepare("UPDATE publish_jobs SET next_attempt_at=0,updated_at=? WHERE shop_id=? AND id=? AND status='pending'").bind(now(),shop,j.id).run();j.next_attempt_at=0;}
+  // Propagate provider from channels into j so jobView() returns a complete job object.
   return deliver({...j,provider:account?.provider??null},db,env,shop,json);
  }
  return fail(json,404,'not_found');

@@ -37,6 +37,16 @@ test('publisher safeguards: shop scoping, conditional claim and unknown no repla
  assert.match(source,/status='revoked',token='',token_iv=''/);
  assert.doesNotMatch(source,/console\.log\([^)]*token/);
 });
+test('jobView includes provider from channel in publish and retry/run responses',()=>{
+ // Regression: publish_jobs has no provider column; before fix, jobView(j) returned provider:undefined
+ // in responses from POST /jobs (publish) and POST /jobs/:id/retry. The fix spreads provider from
+ // the already-fetched channel account into j before calling deliver() / jobView().
+ const source=readFileSync(new URL('../src/social.js',import.meta.url),'utf8');
+ // publish path: provider from 'a' (the channel) must be spread into j before deliver/jobView
+ assert.match(source,/jobView\(\{\.\.\.j,provider:a\.provider\}\)/);
+ // retry/run path: provider from 'account' must be spread into j before deliver
+ assert.match(source,/deliver\(\{\.\.\.j,provider:account\?\.provider\?\?null\}/);
+});
 test('runDuePublishJobs only recovers stale sending jobs without replaying them',async()=>{
  const DB=sqliteDB();
  try{
@@ -59,6 +69,6 @@ test('runDuePublishJobs only recovers stale sending jobs without replaying them'
   assert.equal(job.get('fresh').updated_at,t);
   assert.equal(job.get('sent').status,'sent');
   assert.equal(job.get('sent').updated_at,t-400);
-  assert.deepEqual(await runDuePublishJobs({DB}),{processed:0});
- }finally{DB.sqlite.close();}
+ assert.deepEqual(await runDuePublishJobs({DB}),{processed:0});
+}finally{DB.sqlite.close();}
 });

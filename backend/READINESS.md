@@ -2,7 +2,9 @@
 
 ## Kết luận
 
-Mã hiện có hỗ trợ AI qua Workers AI và thao tác lưu/mở bản nháp văn bản qua D1. Cloudflare đã xác nhận build và triển khai preview của PR #6 thành công qua kiểm tra GitHub và bình luận deployment. Chưa xác minh được hoạt động AI/D1 bên trong ứng dụng sau đăng nhập. Không coi deployment thành công là bằng chứng tích hợp đã hoạt động.
+Production đã được kiểm chứng trực tiếp ngày 08/11/2026: AI tạo nội dung thật và bản nháp văn bản lưu/mở qua D1. Bản phát hành `aac8980750d2962a6b39bd947e857356d5f383ce`, Cloudflare version `5a2507c2-5aea-409f-988a-2232220c39c6`. Production build theo nhánh `main`, PR #6 đã merge. Chưa phải sản phẩm đa kênh hoàn chỉnh: đăng bài, lịch đăng và hộp thư thật chưa bật.
+
+Ứng dụng thật: https://shopai-backend.ct-3f8.workers.dev/ (yêu cầu Cloudflare Access). GitHub Pages vẫn là bản demo và có liên kết sang ứng dụng thật.
 
 ## Đã kiểm chứng trong môi trường phát triển
 
@@ -25,13 +27,20 @@ Mã hiện có hỗ trợ AI qua Workers AI và thao tác lưu/mở bản nháp 
 - Giao diện gửi `X-ShopAI-User-Scope`; backend từ chối nếu tài khoản Access đã đổi giữa lúc mở trang và gọi API. Subject owner luôn lấy từ JWT đã kiểm chứng, không từ body/header này.
 - Không có endpoint xóa trong phạm vi thay đổi này. Các bản nháp cũ vẫn tồn tại khi lưu thành bản mới.
 
+## Đã kiểm chứng trên cloud
+
+- Preview: generate, improve, adapt và reply trả nội dung Workers AI thật. Đã thay model nghỉ cung cấp bằng `@cf/google/gemma-4-26b-a4b-it`, tắt thinking để giữ ngân sách đầu ra cho nội dung, chỉ nhận kết quả hoàn chỉnh.
+- Production: `/session.release` đúng commit phát hành; generate trả đủ ba phương án. CI GitHub và Cloudflare build đều thành công.
+- D1 production `shopai-drafts-production` tách khỏi preview. Schema `0001_drafts.sql` được áp dụng; lưu bản nháp kiểm thử `d_rjs4ak2c`, revision 1, đọc qua API và mở từ tab thứ hai thành công. Không dùng dữ liệu khách hàng.
+- Xung đột revision và phân quyền chéo tài khoản được kiểm thử bằng SQLite/workerd cục bộ; chưa có hai tài khoản cloud để chứng minh phân quyền bằng E2E cloud.
+
 ## Chưa xác minh hoặc chưa triển khai
 
-1. Preview của PR #6 đã được Cloudflare build/deploy tự động. Trình duyệt điều khiển khi mở preview vẫn được chuyển tới Cloudflare Access và yêu cầu đăng nhập bằng Cloudflare. Chưa xác nhận phiên đăng nhập hoàn tất, chưa thử Workers AI thật hoặc D1 từ UI trên cloud.
-2. Binding D1 chỉ có trong cấu hình `previews`, không có DB production. Không trỏ production vào database preview.
-3. Hồ sơ, cài đặt, kho ảnh/video, hội thoại và tệp gốc vẫn lưu tại thiết bị. Chỉ bản nháp văn bản được người dùng lưu rõ ràng có luồng máy chủ; không phải đồng bộ toàn bộ ứng dụng.
-4. OAuth, webhook, đăng bài, lịch đăng server, nhập hộp thư và gửi tin thật của các kênh chưa có. Trên bản server các thao tác mô phỏng bị chặn; chưa thể gọi đây là sản phẩm đa kênh hoàn chỉnh.
-5. Không có migration mới so với bảng `drafts` hiện tại. Cần xác minh migration 0001 đã hiện diện trong chính DB preview được gắn khi phát hành.
+1. Hồ sơ, cài đặt, kho ảnh/video, hội thoại và tệp gốc vẫn ở thiết bị; chỉ bản nháp văn bản được lưu rõ ràng lên máy chủ.
+2. Lịch sử adapter `facebook.js`: OAuth **tắt mặc định**. Chưa có grant/token cloud tại mốc này. Kết nối Meta thật chưa được kiểm chứng. `FACEBOOK_SETUP.md` lưu hướng dẫn cũ. Luồng hiện hành dùng `social.js`/`meta.js`. Xem cấu hình và nghiệm thu tại [META_STAGING.md](META_STAGING.md).
+3. App Meta ShopAI `1690219679401963` có Pages và Messenger, chế độ phát triển. Quan sát console: `pages_show_list` và `pages_manage_metadata` sẵn sàng thử nghiệm; `pages_manage_posts` và `pages_read_engagement` chưa thêm. Chưa xác minh quyền Messenger đầy đủ.
+4. Webhook, đăng bài, lịch đăng server, nhập hộp thư và gửi tin thật chưa triển khai. Không mở các thao tác mô phỏng trên server. Các adapter còn lại chưa có.
+5. Điều kiện lịch sử của adapter `facebook.js`: áp dụng migration `0002_facebook.sql` trước khi bật OAuth. App Secret chưa được thiết lập tại mốc này. Khóa mã hóa, origin callback và config Login for Business cũng chưa được thiết lập. Luồng hiện hành dùng checklist tại [META_STAGING.md](META_STAGING.md). Tài liệu đó quy định migration, bảng dữ liệu, khóa `SOCIAL_TOKEN_KEY` và callback `META_REDIRECT_URI`. Không đưa bí mật vào GitHub.
 
 ## Cổng phát hành
 

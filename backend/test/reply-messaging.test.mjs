@@ -119,3 +119,19 @@ test('authenticated payloads enforce byte and event limits before persistence',a
  const body={object:'page',entry:[{id:'page',messaging:Array.from({length:51},(_,i)=>({sender:{id:'s'},recipient:{id:'page'},timestamp:Date.now(),message:{mid:String(i),text:'hi'}}))}]},raw=JSON.stringify(body),sig=createHmac('sha256',f.env.META_APP_SECRET).update(raw).digest('hex');
  const response=await handleReplyWebhook(new Request(origin+'/webhooks/replies/meta',{method:'POST',headers:{'X-Hub-Signature-256':'sha256='+sig},body:raw}),f.env);assert.equal(response.status,400);assert.equal(f.sqlite.prepare('SELECT count(*) n FROM reply_events').get().n,0);
 }finally{f.sqlite.close();}});
+
+
+test('conversation deleted mid-flight skips event as state_changed, not processing_failed',async()=>{const f=await fixture();try{
+ // Intercept the state re-fetch (SELECT paused,status ...) to return null BEFORE enqueueing,
+ // so when the webhook handler's automatic runPendingReplies fires, the null guard applies.
+ // This simulates the conversation being deleted between the lock UPDATE and the state SELECT.
+ const original=f.env.DB.prepare;f.env.DB.prepare=sql=>{const stmt=original(sql);if(sql==='SELECT paused,status FROM reply_conversations WHERE id=?'){const bind=stmt.bind;stmt.bind=(...args)=>{const bound=bind(...args),first=bound.first;bound.first=async()=>null;return bound;};}return stmt;};
+ // The webhook handler enqueues then immediately calls runPendingReplies; mockFetch guards
+ // against any accidental send reaching the network.
+ await mockFetch(()=>{throw Error('must not send when conversation is gone');},()=>f.webhook(f.inbound(1)));
+ const e=f.sqlite.prepare('SELECT status,error_code FROM reply_events').get();
+ // Before fix: status='failed', error_code='processing_failed' (TypeError swallowed by catch).
+ // After fix: status='skipped', error_code='state_changed' (null guard short-circuits correctly).
+ assert.equal(e.status,'skipped','event must be skipped, not failed, when conversation is missing');
+ assert.equal(e.error_code,'state_changed');
+}finally{f.sqlite.close();}});

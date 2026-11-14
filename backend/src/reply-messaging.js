@@ -186,7 +186,7 @@ async function processEvent(env,event){
   if(hit.text.length>(c.provider==='facebook'?2000:4096))return await finish('failed','response_too_long',hit.scriptName);
   const token=await decryptToken(env,c.token,c.token_iv);
   const currentConfig=await db.prepare('SELECT revision FROM reply_configs WHERE shop_id=?').bind(event.shop_id).first(),state=await db.prepare('SELECT paused,status FROM reply_conversations WHERE id=?').bind(v.id).first();
-  if(!await live(db,b)||currentConfig?.revision!==config.revision||state.paused||state.status!=='open')return await finish('skipped','state_changed');
+  if(!await live(db,b)||currentConfig?.revision!==config.revision||!state||state.paused||state.status!=='open')return await finish('skipped','state_changed');
   const action=hit.extraAction?.action||hit.action;
   if(action==='handoff'||action==='close')await db.prepare('UPDATE reply_conversations SET paused=?,status=? WHERE id=?').bind(action==='handoff'?1:v.paused,action==='handoff'?'handoff':'closed',v.id).run();
   // From this point a thrown network/provider error is ambiguous. Never requeue automatically.

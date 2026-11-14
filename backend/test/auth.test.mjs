@@ -694,8 +694,8 @@ test('Thương hiệu Shoppost: giao diện hiển thị Shoppost, giữ định
   const index = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
   const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
   const TECH = /shopai-ai-endpoint|shopai-user-scope|X-ShopAI-User-Scope|__Host-shopai_\w+|SHOPAI_RELEASE_SHA|shopai-backend|shopai-drafts[\w-]*/g;
-  for (const [name, text] of [['login.html', LOGIN_FILE], ['index.html', index], ['README.md', readme]]) {
-    assert.ok(text.includes('Shoppost'), name);
+  for (const [name, text, brand] of [['login.html', LOGIN_FILE, 'Shoppost'], ['index.html', index, 'Shoppost'], ['README.md', readme, 'ShopPost']]) {
+    assert.ok(text.includes(brand), name);
     assert.doesNotMatch(text.replace(TECH, ''), /shop\s?ai/i, name);
   }
   assert.match(index, /<title>Shoppost × ShopTrack/); assert.match(index, /name="shopai-ai-endpoint"/); assert.match(index, /name="shopai-user-scope"/);

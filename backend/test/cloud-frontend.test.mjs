@@ -168,6 +168,7 @@ test('Opening a cloud draft uses the latest server revision and protects unsaved
     await r.w.cloudOpenDraft('cloud-a');assert.equal(r.read('D.content'),'Nội dung máy chủ');assert.equal(r.read('D.cloud.revision'),3);
     edit(r,'Giữ bản mới');await r.w.cloudOpenDraft('cloud-a');
     assert.equal(r.read('D.content'),'Giữ bản mới');
+    assert.doesNotMatch(r.read('CLOUD.message'),/Đang mở/);
     r.w.document.querySelector('#ask_yes').click();assert.equal(r.read('D.content'),'Nội dung máy chủ');
   }finally{r.close()}
 });
@@ -727,3 +728,4 @@ test('Opening analytics directly loads reports once the shop is ready',async()=>
   assert.match(r.w.document.querySelector('#publish_report_status').textContent,/Chưa có lượt đăng/);
  }finally{r.close();}
 });
+

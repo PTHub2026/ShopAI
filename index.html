@@ -281,7 +281,8 @@ function closeModal(){driveCancel();modalGeneration++;$('#modal').classList.remo
 $('#modal').onclick=e=>{if(e.target.id==='modal')closeModal()};
 let localShop="";
 const shopLocalKey=(key,shop=localShop)=>managedApp()&&shop?key+":shop:"+shop:key;
-const fileKey=(key,shop=localShop)=>managedApp()&&shop?shop+":"+key:key;
+const fileKey=(key,shop=localShop)=>managedApp()?(shop||'unassigned')+":"+key:key;
+const draftStorageKey=key=>managedApp()&&!localShop?key+':unassigned':shopLocalKey(key);
 function load(){try{const s=JSON.parse(LS.getItem(shopLocalKey(KEY)));if(s&&s.v===3)return fixState(s);if(s&&s.v===2)return migrate3(s)}catch(e){}return managedApp()?emptyState():migrate3(seed())}
 function emptyState(){return {v:3,channels:[],posts:[],convos:[],scripts:[],hashtags:[],groups:[],feedback:[],assets:[],folders:defaultFolders(),connectors:{drive:null,dropbox:null,onedrive:null,email:null},fbEmail:'',settings:{...DEFAULT_PROFILE,open:8,close:22,slaMin:15,botOn:false,aiEndpoint:'',tone:'chuyen_nghiep'},lastSync:null}}
 const IDB={db:null,open(){return new Promise(res=>{try{const r=indexedDB.open(IDB_NAME,1);r.onupgradeneeded=()=>{const d=r.result;if(!d.objectStoreNames.contains('kv'))d.createObjectStore('kv');if(!d.objectStoreNames.contains('files'))d.createObjectStore('files')};r.onsuccess=()=>{IDB.db=r.result;res(r.result)};r.onerror=()=>res(null);r.onblocked=()=>res(null)}catch(e){res(null)}})},
@@ -444,11 +445,11 @@ document.addEventListener('click',e=>{const a=e.target.closest('a[href^="#"]');i
 
 /* ================= CREATE POST ================= */
 const DKEY='pdk_draft_v1'+(managedApp()?':'+(APP_SCOPE||'unverified'):'')+PROJ_SUFFIX;
-function saveDraft(key){if(window.QA_RUNNING&&!key)return;try{LS.setItem(key||shopLocalKey(DKEY),JSON.stringify({...D,media:D.media.map(({name,type,size,thumb,assetId,fid})=>({name,type,size,thumb,assetId,fid})),savedAt:Date.now()}))}catch(e){}}
-function loadDraft(key){try{const d=JSON.parse(LS.getItem(key||shopLocalKey(DKEY)));if(d&&typeof d.content==='string'){const n=Object.assign(newDraft(),d);n.media=(d.media||[]).map(m=>({...m,url:null}));return n}}catch(e){}return newDraft()}
+function saveDraft(key){if(window.QA_RUNNING&&!key)return;try{LS.setItem(key||draftStorageKey(DKEY),JSON.stringify({...D,media:D.media.map(({name,type,size,thumb,assetId,fid})=>({name,type,size,thumb,assetId,fid})),savedAt:Date.now()}))}catch(e){}}
+function loadDraft(key){try{const d=JSON.parse(LS.getItem(key||draftStorageKey(DKEY)));if(d&&typeof d.content==='string'){const n=Object.assign(newDraft(),d);n.media=(d.media||[]).map(m=>({...m,url:null}));return n}}catch(e){}return newDraft()}
 function draftDirty(){return !!(D.content.trim()||D.media.length)}
 function freshDraft(then){const ok=()=>{D=newDraft();saveDraft();if(then)then()};if(!draftDirty())return ok();ask('Bài đang soạn chưa đăng sẽ bị thay thế. Tiếp tục?',ok,{ok:'Bỏ nháp & tạo mới',danger:true})}
-let D=managedApp()?newDraft():loadDraft();
+let D=loadDraft();
 function newDraft(){return {content:'',media:[],channels:[],custom:{},when:'now',date:'',time:'',more:false,textAssets:[]}}
 /* ================= CLOUD DRAFTS ================= */
 const CLOUD={busy:false,items:[],nextCursor:null,message:'',error:false};
@@ -2232,9 +2233,9 @@ const VKEY='pdk_video_v1'+(managedApp()?':'+(APP_SCOPE||'unverified'):'')+PROJ_S
 const VRATIO={'9:16':[720,1280,'Dọc 9:16 – TikTok, Reels, Shorts'],'1:1':[720,720,'Vuông 1:1 – Facebook, Instagram'],'16:9':[1280,720,'Ngang 16:9 – YouTube, Facebook']};
 const VTHEME={dark:['#030213','#1e1b4b','#ffffff','Tối (thương hiệu)'],teal:['#009588','#104e64','#ffffff','Xanh ShopTrack'],orange:['#f05100','#f99c00','#ffffff','Cam năng động'],light:['#f8fafc','#e2e8f0','#030213','Sáng']};
 function vNewProject(){return {topic:'',dur:30,ratio:'9:16',theme:'dark',pos:'center',logo:true,fit:'fit',caption:'',scenes:[]}}
-function vLoad(){try{const v=JSON.parse(LS.getItem(shopLocalKey(VKEY)));if(v&&Array.isArray(v.scenes))return Object.assign(vNewProject(),v)}catch(e){}return vNewProject()}
-let VP=managedApp()?vNewProject():vLoad();const VS={playing:false,t:0,raf:0,last:0,rec:null,out:null,media:{},busy:false};
-function vSave(){if(window.QA_RUNNING)return;try{LS.setItem(shopLocalKey(VKEY),JSON.stringify(VP))}catch(e){}}
+function vLoad(){try{const v=JSON.parse(LS.getItem(draftStorageKey(VKEY)));if(v&&Array.isArray(v.scenes))return Object.assign(vNewProject(),v)}catch(e){}return vNewProject()}
+let VP=vLoad();const VS={playing:false,t:0,raf:0,last:0,rec:null,out:null,media:{},busy:false};
+function vSave(){if(window.QA_RUNNING)return;try{LS.setItem(draftStorageKey(VKEY),JSON.stringify(VP))}catch(e){}}
 function vTotal(p=VP){return p.scenes.reduce((s,x)=>s+(+x.d||0),0)}
 const VHOOK=['{a} vẫn lên đơn thủ công mỗi ngày?','Quản lý đơn hàng rối vì quá nhiều kênh?','Làm đại lý phân phối cước – bắt đầu từ đâu?','Đối soát COD mất cả buổi?','{n} giây để hiểu {b}','Shop online đang lên đơn như thế nào?'];
 const VPAIN=['Nhập tay từng đơn, dễ sai thông tin người nhận','Đơn nằm rải rác ở nhiều nơi, khó theo dõi trạng thái','Đối soát COD thủ công, mất thời gian kiểm tra','Khó quản lý mạng lưới đại lý và cộng tác viên'];

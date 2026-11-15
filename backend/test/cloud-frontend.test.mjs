@@ -43,12 +43,15 @@ test('YouTube UI distinguishes setup from connection and sends the chosen video 
 function edit(r,text='Bản nháp cần lưu') {r.w.document.querySelector('#ct').value=text;r.w.document.querySelector('#ct').dispatchEvent(new r.w.Event('input'));}
 
 test('Managed application starts empty and separates local state from demo',async()=>{
-  const r=runtime();try{
+  const original={content:'Nháp trước khi tách shop',media:[]};
+  const r=runtime({stored:{['pdk_draft_v1:'+scope]:original}});try{
     await settle();assert.deepEqual(r.errors,[]);
+    assert.equal(r.read('D.content'),'');
     assert.equal(r.read('S.posts.length'),0);assert.equal(r.read('S.channels.length'),0);assert.equal(r.read('S.convos.length'),0);
     assert.ok(r.w.document.querySelector('#cloud_save'));
     edit(r,'Nháp của Alice');
-    assert.equal(JSON.parse(r.w.localStorage.getItem('pdk_draft_v1:'+scope)).content,'Nháp của Alice');
+    assert.equal(JSON.parse(r.w.localStorage.getItem('pdk_draft_v1:'+scope+':unassigned')).content,'Nháp của Alice');
+    assert.deepEqual(JSON.parse(r.w.localStorage.getItem('pdk_draft_v1:'+scope)),original);
     assert.equal(r.w.localStorage.getItem('pdk_draft_v1'),null);
   } finally {r.close()}
 });
@@ -484,7 +487,7 @@ test('add-account respects viewer permissions and refuses a stale shop action',a
 });
 
 test('login recovery preserves draft and uses the normal authentication gate for an expired session',async()=>{
- const r=runtime();try{await settle();edit(r,'Preserve before login');r.w.cloudRequest=async()=>{throw Object.assign(Error('Session expired'),{status:401});};await r.w.openShopPostLogin();assert.equal(r.read('D.content'),'Preserve before login');assert.match(r.w.localStorage.getItem('pdk_draft_v1:'+scope),/Preserve before login/);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);}finally{r.close();}
+ const r=runtime();try{await settle();edit(r,'Preserve before login');r.w.cloudRequest=async()=>{throw Object.assign(Error('Session expired'),{status:401});};await r.w.openShopPostLogin();assert.equal(r.read('D.content'),'Preserve before login');assert.match(r.w.localStorage.getItem('pdk_draft_v1:'+scope+':unassigned'),/Preserve before login/);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);}finally{r.close();}
 });
 
 test('channel tabs separate shop accounts from available platforms and management menus use exact actions',async()=>{

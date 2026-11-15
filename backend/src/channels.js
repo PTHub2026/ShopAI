@@ -408,7 +408,7 @@ export async function channels(request, env, who, json) {
     await ensureSocialSchema(env.DB);
     await importLegacyScheduledPosts(env.DB);
     const {results}=await env.DB.prepare("SELECT j.id,c.provider,j.payload,j.status,j.result_url,j.error_code,j.created_at,COALESCE(j.scheduled_for,s.run_at,NULLIF(j.next_attempt_at,0),j.created_at) AS run_at FROM publish_jobs j LEFT JOIN channels c ON c.id=j.account_id AND c.shop_id=j.shop_id LEFT JOIN scheduled_posts s ON s.id=j.id AND s.shop_id=j.shop_id WHERE j.shop_id=? ORDER BY j.created_at DESC,j.id DESC LIMIT 200").bind(ctx.shop.id).all();
-    const list=(results||[]).map(j=>{const p=JSON.parse(j.payload);return {id:j.id,provider:j.provider,title:p.title||'',content:(p.text||'').slice(0,280),run_at:j.run_at,status:({sent:'posted',pending:'scheduled',retryable:'scheduled',sending:'processing'})[j.status]||j.status,url:j.result_url,error:j.error_code,created_at:j.created_at};});
+    const list=(results||[]).map(j=>{const p=JSON.parse(j.payload);return {id:j.id,provider:j.provider,type:j.provider==='youtube'||p.kind==='video'?'video':'post',title:p.title||'',content:(p.text||'').slice(0,280),run_at:j.run_at,status:({sent:'posted',pending:'scheduled',retryable:'scheduled',sending:'processing'})[j.status]||j.status,url:j.result_url,error:j.error_code,created_at:j.created_at};});
     return json({ scheduled: list });
   }
 

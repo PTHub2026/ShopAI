@@ -815,3 +815,58 @@ test('Library offers OAuth and import only for configured sources and permitted 
   for(const name of Object.keys(statuses))assert.ok(r.requests.some(req=>req.path==='/api/library/'+name+'/status'&&req.headers['X-ShopPost-Shop']==='s_aaaaaaaaaa'));
  }finally{r.close();}
 });
+
+test('Library writes to the selected shop, restores its composer, and discards a late list from another shop', async () => {
+ const a='s_aaaaaaaaaa',b='s_bbbbbbbbbb',firstB=deferred();
+ const records=new Map([[a,new Map()],[b,new Map()]]);
+ const lateAsset={id:'other',name:'Tệp shop B',kind:'text',text:'B riêng',source:'upload',created:1,tags:[],size:0};
+ let waitB=true;
+ const shops={defaultShopId:a,shops:[a,b].map((id,i)=>({id,name:'Shop '+(i?'B':'A'),role:'owner',permissions:['drafts.view','drafts.create']}))};
+ const root='/api/library/storage';
+ const api=async(path,options)=>{
+  if(path==='/api/shops')return Response.json(shops);
+  const shop=options.headers['X-ShopPost-Shop'];
+  if(path===root){
+   if(shop===b&&waitB){waitB=false;await firstB.promise;}
+   return Response.json({records:[...records.get(shop).values()],next:null});
+  }
+  if(path.startsWith(root+'/')){
+   const [bucket,id]=path.slice(root.length+1).split('/');
+   const {record,revision}=JSON.parse(options.body);
+   assert.equal(revision,null);
+   const stored={bucket,id,record,revision:'one',file:null};
+   records.get(shop).set(id,stored);
+   return Response.json(stored);
+  }
+  return Response.json({});
+ };
+ const r=runtime({api,route:'library'});
+ try {
+  await settleMore();
+  r.read("D.content='Nháp shop A';saveDraft();lbAddText()");
+  r.w.document.querySelector('#lt_t').value='Tài nguyên A';
+  r.w.lbSaveText();
+  await settleMore();
+  assert.equal(records.get(a).size,1);
+  assert.match(r.w.document.querySelector('#view').textContent,/Tài nguyên A/);
+  r.w.shopSwitch(b);
+  assert.equal(r.read('D.content'),'');
+  assert.doesNotMatch(r.w.document.querySelector('#view').textContent,/Tài nguyên A/);
+  r.w.shopSwitch(a);
+  assert.equal(r.read('D.content'),'Nháp shop A');
+  records.get(b).set('other',{bucket:'assets',id:'other',record:lateAsset,revision:'two',file:null});
+  firstB.resolve();
+  await settleMore();
+  assert.doesNotMatch(r.w.document.querySelector('#view').textContent,/Tệp shop B/);
+  const second=runtime({api,route:'library'});
+  try {
+   await settleMore();
+   assert.match(second.w.document.querySelector('#view').textContent,/Tài nguyên A/);
+   assert.equal(second.read('D.content'),'');
+   second.w.shopSwitch(b);
+   await settleMore();
+   assert.match(second.w.document.querySelector('#view').textContent,/Tệp shop B/);
+   assert.doesNotMatch(second.w.document.querySelector('#view').textContent,/Tài nguyên A/);
+  } finally {second.close()}
+ } finally {r.close()}
+});

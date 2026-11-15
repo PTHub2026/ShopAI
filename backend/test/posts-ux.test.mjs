@@ -26,8 +26,20 @@ test('history deletion describes platform scope and rechecks state before confir
 });
 test('unknown and processing filters and calendar describe records and draft action',()=>{
  const r=runtime();r.state.posts=[post({status:'unknown'}),post({id:'p2',status:'processing'})];assert.match(r.run("filterBar('posts')"),/value="unknown"/);assert.match(r.run("filterBar('calendar')"),/value="processing"/);assert.match(r.run("filterBar('posts')"),/value="facebook"/);
- assert.equal(r.run("F.posts.status='unknown';fpost('posts').length"),1);assert.equal(r.run("F.posts.status='processing';fpost('posts')[0].id"),'p2');
+ r.run('CAL.shop=SHOP.id;CAL.rows=S.posts');assert.equal(r.run("F.posts.status='unknown';fpost('posts').length"),1);assert.equal(r.run("F.posts.status='processing';fpost('posts')[0].id"),'p2');
  r.run("CAL.shop=SHOP.id;CAL.rows=S.posts;V.calendar()");assert.match(r.view.innerHTML,/bài chỉ được lên lịch khi bạn xác nhận/);assert.match(r.view.innerHTML,/Cần kiểm tra kết quả/);
- r.state.posts=[];r.run('V.posts()');assert.match(r.view.innerHTML,/Chưa có lịch sử đăng bài/);r.run('CAL.rows=[];V.calendar()');assert.match(r.view.innerHTML,/Chưa có bài trong khoảng/);
+ r.state.posts=[];r.run('CAL.rows=[];V.posts()');assert.match(r.view.innerHTML,/Chưa có lịch sử đăng bài/);r.run('CAL.rows=[];V.calendar()');assert.match(r.view.innerHTML,/Chưa có bài trong khoảng/);
 });
 test('offline simulated schedule can still be deleted locally',()=>{const r=runtime(false);r.state.posts=[post({status:'scheduled'})];r.run("delPost('p')");r.calls.ask.cb();assert.equal(r.state.posts.length,0);r.state.posts=[post()];assert.match(r.run('postCard(S.posts[0])'),/lượt xem/);});
+
+test('managed history uses shared shop queue and rejects local or other-shop rows',()=>{
+ const r=runtime();r.state.posts=[post({content:'local-only'})];
+ r.run("CAL.shop=SHOP.id;CAL.rows=[{id:'server',server:true,content:'from-server',provider:'facebook',channels:[],status:'published',time:1,url:'https://facebook.com/123'}];V.posts()");
+ assert.match(r.view.innerHTML,/from-server/);assert.doesNotMatch(r.view.innerHTML,/local-only|onclick="pubNow|onclick="dupPost|onclick="delPost/);assert.match(r.view.innerHTML,/Mở bài trên nền tảng/);
+ assert.equal(r.run("fpost('posts')[0].id"),r.run("fpost('calendar')[0].id"));
+ r.run("SHOP.id='other-shop'");assert.equal(r.run("fpost('posts').length"),0);assert.equal(r.run("fpost('calendar').length"),0);
+});
+test('server history escapes hostile payloads and rejects unsafe result URLs',()=>{
+ const r=runtime();r.state.posts=[post({server:true,content:'<img src=x onerror=alert(1)>',error:'<script>x</script>',url:'javascript:alert(1)'})];
+ const html=r.run('postCard(S.posts[0])');assert.doesNotMatch(html,/<img|<script|Mở bài trên nền tảng/);
+});

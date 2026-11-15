@@ -271,11 +271,11 @@ function load(){try{const s=JSON.parse(LS.getItem(KEY));if(s&&s.v===3)return fix
 function emptyState(){return {v:3,channels:[],posts:[],convos:[],scripts:[],hashtags:[],groups:[],feedback:[],assets:[],folders:defaultFolders(),connectors:{drive:null,dropbox:null,onedrive:null,email:null},fbEmail:'',settings:{...DEFAULT_PROFILE,open:8,close:22,slaMin:15,botOn:false,aiEndpoint:'',tone:'chuyen_nghiep'},lastSync:null}}
 const IDB={db:null,open(){return new Promise(res=>{try{const r=indexedDB.open(IDB_NAME,1);r.onupgradeneeded=()=>{const d=r.result;if(!d.objectStoreNames.contains('kv'))d.createObjectStore('kv');if(!d.objectStoreNames.contains('files'))d.createObjectStore('files')};r.onsuccess=()=>{IDB.db=r.result;res(r.result)};r.onerror=()=>res(null);r.onblocked=()=>res(null)}catch(e){res(null)}})},
 op(s,mode,fn){return new Promise(res=>{if(!IDB.db)return res(null);try{const tx=IDB.db.transaction(s,mode);const rq=fn(tx.objectStore(s));tx.oncomplete=()=>res(rq?rq.result:null);tx.onerror=()=>res(null);tx.onabort=()=>res(null)}catch(e){res(null)}})},
-get(s,k){return IDB.op(s,'readonly',st=>st.get(k))},put(s,k,v){return IDB.op(s,'readwrite',st=>st.put(v,k))},del(s,k){return IDB.op(s,'readwrite',st=>st.delete(k))},clear(s){return IDB.op(s,'readwrite',st=>st.clear())},
+get(s,k){return IDB.op(s,'readonly',st=>st.get(k))},put(s,k,v){if(s==='kv'&&k==='state'&&lbZipWriting)return lbZipCommitQueue.then(()=>IDB.put(s,k,JSON.stringify({...S,channels:S.channels.filter(c=>!c.real)})));return IDB.op(s,'readwrite',st=>st.put(v,k))},del(s,k){return IDB.op(s,'readwrite',st=>st.delete(k))},clear(s){return IDB.op(s,'readwrite',st=>st.clear())},
 all(s){return new Promise(res=>{const out=[];if(!IDB.db)return res(out);try{const rq=IDB.db.transaction(s).objectStore(s).openCursor();rq.onsuccess=()=>{const c=rq.result;if(c){out.push([c.key,c.value]);c.continue()}else res(out)};rq.onerror=()=>res(out)}catch(e){res(out)}})}};
 const STORE={mode:LS._mem?'bộ nhớ tạm – trình duyệt đang chặn lưu trữ (khung nhúng sandbox), dữ liệu sẽ mất khi tải lại trang':'localStorage',lsFull:false};let _svT=null;
 function save(){if(window.QA_RUNNING)return;clearTimeout(_svT);_svT=setTimeout(persist,120)}
-function persist(){clearTimeout(_svT);_svT=null;if(window.QA_RUNNING)return;S.savedAt=Date.now();const j=JSON.stringify(S.channels.some(c=>c&&c.real)?{...S,channels:S.channels.filter(c=>!c.real)}:S);if(IDB.db)IDB.put('kv','state',j);try{LS.setItem(KEY,j);STORE.lsFull=false}catch(e){if(!STORE.lsFull&&!IDB.db)toast('Bộ nhớ trình duyệt đầy – hãy xóa bớt dữ liệu');STORE.lsFull=true}}
+function persist(){clearTimeout(_svT);_svT=null;if(window.QA_RUNNING)return;if(lbZipWriting){lbZipSavePending=true;return;}S.savedAt=Date.now();const j=JSON.stringify(S.channels.some(c=>c&&c.real)?{...S,channels:S.channels.filter(c=>!c.real)}:S);if(IDB.db)IDB.put('kv','state',j);try{LS.setItem(KEY,j);STORE.lsFull=false}catch(e){if(!STORE.lsFull&&!IDB.db)toast('Bộ nhớ trình duyệt đầy – hãy xóa bớt dữ liệu');STORE.lsFull=true}}
 addEventListener('beforeunload',()=>{if(_svT)persist()});
 function putFile(id,blob){if(blob&&IDB.db)IDB.put('files',id,blob)}
 async function loadFiles(){const all=await IDB.all('files');const keep=new Set(D.media.map(m=>m.fid&&'d_'+m.fid).filter(Boolean));all.forEach(([k,b])=>{if(String(k).startsWith('d_')&&!keep.has(k)){IDB.del('files',k);return}if(!BLOBS[k]&&b instanceof Blob)BLOBS[k]=URL.createObjectURL(b)});
@@ -1514,6 +1514,7 @@ function lbLoadZip(){
   return lbZipLibrary;
 }
 // Commit file bytes and metadata together: abort rolls both stores back.
+let lbZipWriting=false,lbZipSavePending=false;
 let lbZipCommitQueue=Promise.resolve();
 function lbZipCommit(batch,report){
   const pending=lbZipCommitQueue.then(()=>lbZipCommitBatch(batch,report));
@@ -1522,6 +1523,7 @@ function lbZipCommit(batch,report){
 async function lbZipCommitBatch(batch,report){
   if(!batch.length)return;
   const items=batch.splice(0),assets=items.map(item=>item.asset).reverse();
+  const hadPendingSave=!!_svT;lbZipWriting=true;
   try{
     if(!IDB.db)throw new Error('IndexedDB chưa sẵn sàng; hãy thử lại sau.');
     clearTimeout(_svT);_svT=null;
@@ -1540,9 +1542,12 @@ async function lbZipCommitBatch(batch,report){
     for(const item of items)BLOBS[item.asset.id]=item.url;
     report.added+=items.length;report.zipAdded+=items.length;
     // IndexedDB is authoritative. Cache only, without a second database write.
-    try{LS.setItem(KEY,snapshot);STORE.lsFull=false}catch(e){STORE.lsFull=true}
+    try{LS.setItem(KEY,JSON.stringify({...S,channels:S.channels.filter(c=>!c.real)}));STORE.lsFull=false}catch(e){STORE.lsFull=true}
   }catch(error){
     for(const item of items){URL.revokeObjectURL(item.url);report.failed++;report.details.push(item.asset.name+': lỗi, '+error.message)}
+  }finally{
+    lbZipWriting=false;
+    if(hadPendingSave||lbZipSavePending){lbZipSavePending=false;persist()}
   }
 }
 async function lbZipAsset(file){

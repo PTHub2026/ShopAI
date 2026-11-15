@@ -766,3 +766,52 @@ test('Messaging activation explains when the page is active in another shop',asy
   assert.doesNotMatch(messages[0],/target_already_active/);
  }finally{r.close();}
 });
+
+test('Calendar reads the current shop queue and discards a late response from the previous shop',async()=>{
+ const previous=deferred();
+ const day=Math.floor(Date.now()/1000);
+ const r=runtime({route:'calendar',api:async path=>Response.json(path==='/api/shops'?shopsBody():{}),
+  fetchImpl:async(path,options)=>{
+   if(path==='/channels/scheduled'){
+    if(options.headers['X-ShopPost-Shop']==='s_aaaaaaaaaa')return previous.promise;
+    return Response.json({scheduled:[{id:'new-job',content:'Nội dung shop phụ',provider:'facebook',run_at:day,status:'scheduled'}]});
+   }
+   return Response.json({});
+  },
+ });
+ try{
+  await settleMore();
+  r.read("S.posts=[{id:'shared',content:'Lịch chưa gắn shop',status:'scheduled',channels:[],time:Date.now()}]");
+  r.w.shopSwitch('s_bbbbbbbbbb');
+  await settleMore();
+  const view=r.w.document.querySelector('#view');
+  assert.match(view.textContent,/Nội dung shop phụ/);
+  previous.resolve(Response.json({scheduled:[{id:'old-job',content:'Nội dung shop trước',run_at:day,status:'scheduled'}]}));
+  await settleMore();
+  assert.match(view.textContent,/Nội dung shop phụ/);
+  assert.doesNotMatch(view.textContent,/Lịch chưa gắn shop|Nội dung shop trước/);
+ }finally{r.close();}
+});
+
+test('Library offers OAuth and import only for configured sources and permitted actions',async()=>{
+ const statuses={
+  dropbox:{configured:true,connected:false,canConnect:true,canImport:true},
+  onedrive:{configured:false,connected:true,canConnect:true,canImport:true},
+  email:{configured:true,connected:true,canConnect:false,canImport:true,name:'Hộp thư thử'},
+ };
+ const r=runtime({route:'library',api:async path=>{
+  if(path==='/api/shops')return Response.json(shopsBody());
+  const provider=path.split('/')[3];
+  return Response.json(statuses[provider]||{});
+ }});
+ try{
+  await settleMore();
+  const doc=r.w.document;
+  assert.ok(doc.querySelector('#lb_dropbox button[aria-label="Kết nối Dropbox"]'));
+  assert.match(doc.querySelector('#lb_onedrive').textContent,/Chưa thiết lập/);
+  assert.equal(doc.querySelector('#lb_onedrive button'),null);
+  assert.match(doc.querySelector('#lb_email').textContent,/Chọn tệp đính kèm/);
+  assert.equal(doc.querySelector('#lb_email details'),null);
+  for(const name of Object.keys(statuses))assert.ok(r.requests.some(req=>req.path==='/api/library/'+name+'/status'&&req.headers['X-ShopPost-Shop']==='s_aaaaaaaaaa'));
+ }finally{r.close();}
+});

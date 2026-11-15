@@ -62,3 +62,46 @@ test('runDuePublishJobs only recovers stale sending jobs without replaying them'
   assert.deepEqual(await runDuePublishJobs({DB}),{processed:0});
  }finally{DB.sqlite.close();}
 });
+test('manual retry resets unknown+sending_interrupted job to pending, leaves other statuses unchanged',async()=>{
+ const DB=sqliteDB();
+ try{
+  DB.sqlite.exec(readFileSync(new URL('../migrations/0006_scheduled.sql',import.meta.url),'utf8'));
+  await ensureSocialSchema(DB);
+  const t=Math.floor(Date.now()/1000);
+  // Set up shop + membership so resolveShop can resolve 'user' to shop via defaultMembership.
+  // Shop ID must match /^s_[A-Za-z0-9_-]{8,32}$/ for X-ShopPost-Shop header; use defaultMembership instead.
+  const shopId='s_testshop';
+  DB.sqlite.prepare("INSERT INTO shops (id,name,owner,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)").run(shopId,'Test shop','user',t,t);
+  DB.sqlite.prepare("INSERT INTO shop_members (shop_id,user_id,role,can_publish,created_at) VALUES (?,?,'owner',1,?)").run(shopId,'user',t);
+  DB.sqlite.prepare("INSERT INTO channels (id,shop_id,provider,external_id,name,token,token_iv,status,connected_by,created_at,updated_at) VALUES ('ch1',?,'telegram','tg1','TG','tok','iv','connected','user',?,?)").run(shopId,t,t);
+  const insert=DB.sqlite.prepare(`INSERT INTO publish_jobs (id,shop_id,account_id,idempotency_key,kind,payload,status,error_code,created_by,created_at,updated_at) VALUES (?,?,'ch1',?,'text','{}',?,?,'user',?,?)`);
+  insert.run('j_unknown',shopId,'uk1','unknown','sending_interrupted',t,t);
+  insert.run('j_failed',shopId,'fk1','failed','other_error',t,t);
+  insert.run('j_sent',shopId,'sk1','sent',null,t,t);
+
+  const json=(v,s=200)=>({status:s,data:v});
+  // SOCIAL_TOKEN_KEY must be a valid base64-encoded 32-byte key
+  const env={DB,SOCIAL_TOKEN_KEY:Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64')};
+  const who={owner:'user'};
+  // No X-ShopPost-Shop header: defaultMembership resolves to the only active shop for 'user'
+
+  // Manual retry of unknown+sending_interrupted → resets to pending, then deliver() runs (account_revoked since no real Telegram)
+  const req1=new Request('https://x.com/api/social/jobs/j_unknown/retry',{method:'POST'});
+  await handleSocial(req1,env,who,json);
+  // Job must no longer be in 'unknown' state — the fix allowed deliver() to run
+  const after1=DB.sqlite.prepare('SELECT status FROM publish_jobs WHERE id=?').get('j_unknown');
+  assert.notEqual(after1.status,'unknown','unknown+sending_interrupted job must escape stuck state after manual retry');
+
+  // Manual retry of failed+other_error → deliver() returns 409 immediately (not reset by the fix)
+  const req2=new Request('https://x.com/api/social/jobs/j_failed/retry',{method:'POST'});
+  const r2=await handleSocial(req2,env,who,json);
+  assert.equal(r2.status,409);
+  assert.equal(DB.sqlite.prepare('SELECT status FROM publish_jobs WHERE id=?').get('j_failed').status,'failed');
+
+  // Manual retry of sent → deliver() returns 200 immediately, status stays 'sent'
+  const req3=new Request('https://x.com/api/social/jobs/j_sent/retry',{method:'POST'});
+  const r3=await handleSocial(req3,env,who,json);
+  assert.equal(r3.status,200);
+  assert.equal(DB.sqlite.prepare('SELECT status FROM publish_jobs WHERE id=?').get('j_sent').status,'sent');
+ }finally{DB.sqlite.close();}
+});

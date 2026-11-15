@@ -259,3 +259,16 @@ test('Shop calendar preserves the original scheduled time after a retry and only
   });
  }finally{f.db.sqlite.close();}
 });
+test('shop history filters by display period and paginates ties without omissions',async()=>{
+ const f=fixture(),owner=f.login('email:history@example.com');
+ try{
+  const shop=(await f.request(owner,'/session')).data.shop.id;
+  await f.request(owner,'/channels/scheduled',{shop});
+  for(let i=0;i<205;i++)f.db.sqlite.prepare("INSERT INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at,scheduled_for) VALUES(?,?,?,?,'text',?,'sent',?,?,?,?)").run('h'+String(i).padStart(3,'0'),shop,'missing','hist-'+i,JSON.stringify({text:'history '+i}),'owner',1,1,1000);
+  f.db.sqlite.prepare("INSERT INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at,scheduled_for) VALUES('old',?,'missing','old','text','{}','sent','owner',9999,9999,500)").run(shop);
+  let cursor='',ids=[];do{const r=await f.request(owner,'/channels/scheduled?from=900&to=1100&limit=50'+(cursor?'&cursor='+encodeURIComponent(cursor):''),{shop});assert.equal(r.status,200);assert.ok(r.data.scheduled.length<=50);ids.push(...r.data.scheduled.map(x=>x.id));cursor=r.data.cursor;}while(cursor);
+  assert.equal(ids.length,205);assert.equal(new Set(ids).size,205);assert.ok(!ids.includes('old'));
+  assert.equal((await f.request(owner,'/channels/scheduled?from=bad',{shop})).status,400);
+  assert.equal((await f.request(owner,'/channels/scheduled?cursor=bad',{shop})).status,400);
+ }finally{f.db.sqlite.close();}
+});

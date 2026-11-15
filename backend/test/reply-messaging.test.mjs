@@ -174,3 +174,42 @@ test('Zalo unknown send outcomes never automatically retry',async()=>{
  assert.equal(sends,1);assert.equal(f.sqlite.prepare('SELECT status FROM reply_events').get().status,'unknown');
  }finally{f.sqlite.close();}
 });
+test('Zalo diagnostics names missing configuration without leaking secrets and includes callback',async()=>{
+ const f=await zaloFixture();try{
+  delete f.env.ZALO_OA_WEBHOOK_SECRET;
+  const r=await f.api('channels/a/diagnostics');const body=await r.json();
+  assert.equal(r.status,200);assert.equal(body.ready,false);assert.ok(body.setup.missing.includes('ZALO_OA_WEBHOOK_SECRET'));assert.equal(body.setup.callback,origin+'/webhooks/replies/zalo');assert.doesNotMatch(JSON.stringify(body),/test-app-secret|test-webhook-secret|zalo-test-token/);
+ }finally{f.sqlite.close();}
+});
+test('manual Zalo reply requires recent inbound, is idempotent, and records agent message',async()=>{
+ const f=await zaloFixture();try{let sends=0;await mockFetch(async(input)=>String(input).endsWith('/getoa')?Response.json({error:0,data:{oa_id:'987654'}}):(sends++,Response.json({error:0,data:{message_id:'sent'}})),async()=>{
+  await f.api('channels/a','PATCH',{enabled:true});f.doc.scripts=[];f.sqlite.prepare('UPDATE reply_configs SET document=?').run(JSON.stringify(f.doc));await f.zaloWebhook(f.zaloBody());
+  const c=f.sqlite.prepare('SELECT id FROM reply_conversations').get().id;
+  const payload={id:'manual-test-1234',text:'Nhân viên đã tiếp nhận.'};
+  assert.equal((await f.api('conversations/'+c+'/send','POST',payload)).status,200);
+  assert.equal((await f.api('conversations/'+c+'/send','POST',payload)).status,200);assert.equal(sends,1);
+  assert.equal(f.sqlite.prepare("SELECT count(*) n FROM reply_messages WHERE author='agent'").get().n,1);
+  assert.equal((await f.api('conversations/'+c+'/send','POST',{...payload,text:'Changed'})).status,409);
+  f.sqlite.exec("UPDATE reply_messages SET created_at=1 WHERE author='customer'");assert.equal((await f.api('conversations/'+c+'/send','POST',{...payload,id:'too-late-1234'})).status,409);
+ });}finally{f.sqlite.close();}
+});
+test('manual reply timeout stays unknown, cannot resend, and support cannot access another assignment',async()=>{
+ const f=await zaloFixture();try{let sends=0;await mockFetch(async(input)=>{if(String(input).endsWith('/getoa'))return Response.json({error:0,data:{oa_id:'987654'}});sends++;throw Error('lost response');},async()=>{
+  await f.api('channels/a','PATCH',{enabled:true});f.doc.scripts=[];f.sqlite.prepare('UPDATE reply_configs SET document=?').run(JSON.stringify(f.doc));await f.zaloWebhook(f.zaloBody());
+  const c=f.sqlite.prepare('SELECT id FROM reply_conversations').get().id,body={id:'manual-unknown-1234',text:'Reply'};
+  f.sqlite.prepare("INSERT INTO shop_members(shop_id,user_id,role,can_publish,created_at) VALUES('s_testshop1','support','support',0,?)").run(sec());
+  assert.equal((await f.api('conversations/'+c+'/send','POST',body,'support')).status,404);
+  assert.equal((await f.api('conversations/'+c+'/send','POST',body)).status,502);
+  assert.equal((await f.api('conversations/'+c+'/send','POST',body)).status,409);assert.equal(sends,1);
+  assert.equal(f.sqlite.prepare('SELECT status FROM reply_manual_sends').get().status,'unknown');assert.equal(f.sqlite.prepare("SELECT count(*) n FROM reply_messages WHERE author='agent'").get().n,0);
+ });}finally{f.sqlite.close();}
+});
+test('manual send reservation and conversation lock roll back together if insertion fails',async()=>{
+ const f=await zaloFixture();try{let sends=0;await mockFetch(async(input)=>String(input).endsWith('/getoa')?Response.json({error:0,data:{oa_id:'987654'}}):(sends++,Response.json({error:0})),async()=>{
+  await f.api('channels/a','PATCH',{enabled:true});f.doc.scripts=[];f.sqlite.prepare('UPDATE reply_configs SET document=?').run(JSON.stringify(f.doc));await f.zaloWebhook(f.zaloBody());
+  const c=f.sqlite.prepare('SELECT id FROM reply_conversations').get().id;
+  f.sqlite.exec("CREATE TRIGGER fail_reservation BEFORE INSERT ON reply_manual_sends BEGIN SELECT RAISE(ABORT,'storage_interrupted'); END");
+  await assert.rejects(f.api('conversations/'+c+'/send','POST',{id:'manual-atomic-1234',text:'Reply'}),/storage_interrupted/);
+  assert.equal(sends,0);assert.equal(f.sqlite.prepare('SELECT processing_event FROM reply_conversations').get().processing_event,null);assert.equal(f.sqlite.prepare('SELECT count(*) n FROM reply_manual_sends').get().n,0);
+ });}finally{f.sqlite.close();}
+});

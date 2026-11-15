@@ -1,3 +1,4 @@
+import {handleShopData} from './shop-data.js';
 import {handleLibrarySource} from './library-sources.js';
 import { handleShopConfig } from './shop-config.js';
 import { handleLibraryStorage } from './library-storage.js';
@@ -121,6 +122,7 @@ export default {
       if (expectedScope && expectedScope !== await scopeFor(who.owner)) return json({ code: 'ACCOUNT_CHANGED', error: 'Tài khoản đã thay đổi. Tải lại trang trước khi tiếp tục.' }, 403);
       if (path==='/api/replies/config'||path==='/api/replies/preview') return handleReplies(request, env, who, json);
       if (path.startsWith('/api/replies/')) return handleMessaging(request,env,who,json);
+      if(path==='/api/backup'||path==='/api/feedback'||path.startsWith('/api/feedback/'))return handleShopData(request,env,who,json);
       if (path.startsWith('/api/shop-config/')) return handleShopConfig(request, env, who, json);
       if (path === '/api/library/storage' || path.startsWith('/api/library/storage/')) return handleLibraryStorage(request, env, who, json);
       if (path.startsWith('/api/library/drive/')) return handleDrive(request, env, who, json);

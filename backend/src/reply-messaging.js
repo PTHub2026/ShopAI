@@ -1,3 +1,4 @@
+import {replyBrand} from './shop-config.js';
 import {zaloReplyToken,verifyZaloReplyTarget,sendZaloReply} from './channels.js';
 import {graphRequest} from './meta.js';
 import {ensureReplySchema,matchReply} from './replies.js';
@@ -8,6 +9,7 @@ import {can} from './permissions.js';
 const now=()=>Math.floor(Date.now()/1000),uid=p=>p+crypto.randomUUID();
 const json=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
 const schema=[
+ `CREATE TABLE IF NOT EXISTS reply_manual_sends(shop_id TEXT NOT NULL,conversation_id TEXT NOT NULL,id TEXT NOT NULL,text TEXT NOT NULL,status TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(shop_id,conversation_id,id))`,
  `CREATE TABLE IF NOT EXISTS reply_bindings(account_id TEXT PRIMARY KEY,shop_id TEXT NOT NULL,provider TEXT NOT NULL,external_id TEXT NOT NULL,bot_id TEXT,credential TEXT NOT NULL,activation_id TEXT NOT NULL DEFAULT '',enabled INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)`,
  `CREATE UNIQUE INDEX IF NOT EXISTS reply_active_target ON reply_bindings(provider,external_id) WHERE enabled=1`,
  `CREATE TABLE IF NOT EXISTS reply_conversations(id TEXT PRIMARY KEY,shop_id TEXT NOT NULL,account_id TEXT NOT NULL,remote_id TEXT NOT NULL,name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'open',paused INTEGER NOT NULL DEFAULT 0,tags TEXT NOT NULL DEFAULT '[]',last_message_at INTEGER NOT NULL,last_message TEXT NOT NULL,processing_event TEXT,assigned_to TEXT,UNIQUE(account_id,remote_id))`,
@@ -84,13 +86,18 @@ export async function handleMessaging(req,env,who,respond=json){
   const channel=await db.prepare("SELECT * FROM channels WHERE id=? AND shop_id=? AND provider IN ('facebook','zalo')").bind(parts[1],shop).first();
   if(!channel)return fail(404,'not_found');
   const reason=readiness(env,channel);
-  if(reason)return respond({ready:false,reason});
+  const required=channel.provider==='zalo'?['ZALO_APP_ID','ZALO_APP_SECRET','ZALO_OA_WEBHOOK_SECRET','SOCIAL_TOKEN_KEY','PUBLIC_ORIGIN']:['META_APP_ID','META_APP_SECRET','META_REPLY_VERIFY_TOKEN','SOCIAL_TOKEN_KEY','PUBLIC_ORIGIN'];
+  const flag=channel.provider==='zalo'?'ZALO_REPLY_WEBHOOK_READY':'META_REPLY_WEBHOOK_READY';
+  const missing=required.filter(key=>!env[key]);if(env[flag]!=='true')missing.push(flag);
+  const recent=await db.prepare('SELECT status,created_at AS receivedAt,error_code AS errorCode FROM reply_events WHERE shop_id=? AND account_id=? ORDER BY created_at DESC LIMIT 1').bind(shop,channel.id).first();
+  const setup={missing,callback:(env.PUBLIC_ORIGIN||url.origin).replace(/\/$/,'')+'/webhooks/replies/'+(channel.provider==='zalo'?'zalo':'meta'),lastEvent:recent||null};
+  if(reason)return respond({ready:false,reason,setup});
   try{
    if(channel.provider==='zalo')await verifyZaloReplyTarget(env,channel);else await verifyMessenger(env,channel,await decryptToken(env,channel.token,channel.token_iv));
-   return respond({ready:true,reason:null});
+   return respond({ready:true,reason:null,setup});
   }catch(error){
    const reason=['meta_messaging_permissions_missing','meta_page_mismatch','zalo_oa_mismatch','zalo_token_expired'].includes(error.message)?error.message:'provider_verification_failed';
-   return respond({ready:false,reason});
+   return respond({ready:false,reason,setup});
   }
  }
  if(parts[0]==='channels'&&parts[1]&&!parts[2]&&req.method==='PATCH'){
@@ -119,9 +126,46 @@ export async function handleMessaging(req,env,who,respond=json){
   const split=cursor.indexOf(':'),cursorTime=cursor?Number(cursor.slice(0,split)):0,cursorId=cursor.slice(split+1);if(cursor&&(split<1||!Number.isSafeInteger(cursorTime)||cursorTime<0||cursorId.length>100))return fail(400,'invalid_cursor');
   const {results}=await db.prepare("SELECT v.*,c.provider FROM reply_conversations v JOIN channels c ON c.id=v.account_id WHERE v.shop_id=? AND (?='' OR v.name LIKE ? OR v.last_message LIKE ?) AND (?='' OR v.status=?) AND (?=1 OR v.assigned_to=?) AND (?='' OR v.last_message_at<? OR (v.last_message_at=? AND v.id<?)) ORDER BY v.last_message_at DESC,v.id DESC LIMIT 51").bind(shop,q,'%'+q+'%','%'+q+'%',status,status,Number(allConversations),who.owner,cursor,cursorTime,cursorTime,cursorId).all();const rows=results.slice(0,50);return respond({conversations:rows.map(conversation),cursor:results.length>50?rows.at(-1).last_message_at+':'+rows.at(-1).id:null});
  }
+ if(parts[0]==='conversations'&&parts[1]&&parts[2]==='send'&&parts.length===3&&req.method==='POST'){
+  let data;try{data=JSON.parse(await bounded(req,12000));}catch{return fail(400,'invalid_input');}
+  if(!data||typeof data.text!=='string'||!data.text.trim()||data.text.length>2000||typeof data.id!=='string'||!/^[A-Za-z0-9_-]{12,100}$/.test(data.id))return fail(400,'invalid_input');
+  const c=await db.prepare('SELECT * FROM reply_conversations WHERE id=? AND shop_id=?').bind(parts[1],shop).first();
+  if(!c||!allConversations&&c.assigned_to!==who.owner)return fail(404,'not_found');
+  const previous=await db.prepare('SELECT text,status FROM reply_manual_sends WHERE shop_id=? AND conversation_id=? AND id=?').bind(shop,c.id,data.id).first();
+  if(previous)return previous.text!==data.text?fail(409,'idempotency_conflict'):respond({status:previous.status},previous.status==='sent'?200:409);
+  const channel=await db.prepare("SELECT * FROM channels WHERE id=? AND shop_id=? AND status='connected'").bind(c.account_id,shop).first();
+  if(!channel||!['facebook','zalo'].includes(channel.provider))return fail(409,'channel_not_supported');
+  const inbound=await db.prepare("SELECT MAX(created_at) AS t FROM reply_messages WHERE conversation_id=? AND author='customer'").bind(c.id).first();
+  if(!inbound?.t||inbound.t<now()-86400)return fail(409,'response_window_expired');
+  let token;try{token=channel.provider==='zalo'?await zaloReplyToken(env,channel):await decryptToken(env,channel.token,channel.token_iv);}catch{return fail(409,'credential_changed');}
+  const key='manual_'+data.id;
+  const [claim,inserted]=await db.batch([
+   db.prepare('UPDATE reply_conversations SET processing_event=?,paused=1 WHERE id=? AND shop_id=? AND processing_event IS NULL AND (?=1 OR assigned_to=?) AND NOT EXISTS(SELECT 1 FROM reply_manual_sends WHERE shop_id=? AND conversation_id=? AND id=?)').bind(key,c.id,shop,Number(allConversations),who.owner,shop,c.id,data.id),
+   db.prepare("INSERT INTO reply_manual_sends(shop_id,conversation_id,id,text,status,created_at) SELECT ?,?,?,?,'sending',? FROM reply_conversations WHERE id=? AND shop_id=? AND processing_event=? AND changes()=1").bind(shop,c.id,data.id,data.text,now(),c.id,shop,key)
+  ]);
+  if(claim.meta.changes!==1||inserted.meta.changes!==1)return fail(409,'conversation_busy');
+  let started=false;
+  try{
+   const current=await db.prepare('SELECT * FROM channels WHERE id=? AND shop_id=?').bind(channel.id,shop).first();
+   const context=await resolveShop(env,who,req);
+   const state=await db.prepare('SELECT assigned_to FROM reply_conversations WHERE id=? AND shop_id=?').bind(c.id,shop).first();
+   if(!current||current.status!=='connected'||current.token!==channel.token||context.error||context.shop.status!=='active'||!context.can('conversations.reply')||!state||!context.can('conversations.assign')&&state.assigned_to!==who.owner)throw Error('state_changed');
+   started=true;
+   if(channel.provider==='zalo')await sendZaloReply(env,token,{remote:c.remote_id,time:inbound.t},data.text);
+   else await graph(env,token,encodeURIComponent(channel.external_id)+'/messages',{messaging_type:'RESPONSE',recipient:{id:c.remote_id},message:{text:data.text}});
+   await db.batch([
+    db.prepare("INSERT INTO reply_messages(id,conversation_id,event_id,author,text,created_at) VALUES(?,?,?,'agent',?,?)").bind(uid('rm_'),c.id,key+':'+c.id,data.text,now()),
+    db.prepare("UPDATE reply_manual_sends SET status='sent' WHERE shop_id=? AND conversation_id=? AND id=?").bind(shop,c.id,data.id)
+   ]);
+   return respond({status:'sent'});
+  }catch{
+   await db.prepare('UPDATE reply_manual_sends SET status=? WHERE shop_id=? AND conversation_id=? AND id=?').bind(started?'unknown':'failed',shop,c.id,data.id).run();
+   return respond({status:started?'unknown':'failed',error:started?'delivery_uncertain':'state_changed'},started?502:409);
+  }finally{await db.prepare('UPDATE reply_conversations SET processing_event=NULL WHERE id=? AND processing_event=?').bind(c.id,key).run();}
+ }
  if(parts[0]==='conversations'&&parts[1]&&!parts[2]){
   const c=await db.prepare('SELECT v.*,c.provider FROM reply_conversations v JOIN channels c ON c.id=v.account_id WHERE v.id=? AND v.shop_id=?').bind(parts[1],shop).first();if(!c||!allConversations&&c.assigned_to!==who.owner)return fail(404,'not_found');
-  if(req.method==='GET'){const {results}=await db.prepare('SELECT id,author AS "from",text,created_at AS createdAt,script_name AS scriptName FROM reply_messages WHERE conversation_id=? ORDER BY created_at,rowid LIMIT 500').bind(c.id).all();return respond({conversation:conversation(c),messages:results});}
+  if(req.method==='GET'){const {results}=await db.prepare('SELECT id,author AS "from",text,created_at AS createdAt,script_name AS scriptName FROM (SELECT rowid AS sequence,* FROM reply_messages WHERE conversation_id=? ORDER BY created_at DESC,rowid DESC LIMIT 500) ORDER BY created_at,sequence').bind(c.id).all();return respond({conversation:conversation(c),messages:results});}
   if(req.method==='PATCH'){
    let d;try{d=JSON.parse(await bounded(req,8192));}catch{return fail(400,'invalid_input');}
    if(!d||typeof d!=='object'||Array.isArray(d)||Object.keys(d).some(k=>!['paused','status','tags','assignedTo'].includes(k))||d.paused!==undefined&&typeof d.paused!=='boolean'||d.status!==undefined&&!['open','closed','handoff'].includes(d.status)||d.tags!==undefined&&(!Array.isArray(d.tags)||d.tags.length>20||d.tags.some(t=>typeof t!=='string'||!t.trim()||t.length>100)))return fail(400,'invalid_input');
@@ -192,11 +236,11 @@ async function processEvent(env,event){
   ]);
   if(e.time<now()-86400)return await finish('skipped','response_window_expired');
   const config=await db.prepare('SELECT document,revision FROM reply_configs WHERE shop_id=?').bind(event.shop_id).first();if(!config)return await finish('skipped','config_missing');
-  const d=JSON.parse(config.document),hit=matchReply(d.scripts,d.settings,{text:e.text,name:e.name,provider:c.provider,now:Date.now(),firstMessage:previous.n===0,paused:!!v.paused||v.status!=='open'});if(!hit)return await finish('skipped','no_match');
+  const d=JSON.parse(config.document);d.settings=await replyBrand(db,event.shop_id,d.settings);const hit=matchReply(d.scripts,d.settings,{text:e.text,name:e.name,provider:c.provider,now:Date.now(),firstMessage:previous.n===0,paused:!!v.paused||v.status!=='open'});if(!hit)return await finish('skipped','no_match');
   if(hit.text.length>(['facebook','zalo'].includes(c.provider)?2000:4096))return await finish('failed','response_too_long',hit.scriptName);
   const token=c.provider==='zalo'?await zaloReplyToken(env,c):await decryptToken(env,c.token,c.token_iv);
   const currentConfig=await db.prepare('SELECT revision FROM reply_configs WHERE shop_id=?').bind(event.shop_id).first(),state=await db.prepare('SELECT paused,status FROM reply_conversations WHERE id=?').bind(v.id).first();
-  if(!await live(db,b)||currentConfig?.revision!==config.revision||!state||state.paused||state.status!=='open')return await finish('skipped','state_changed');
+  if(JSON.stringify(await replyBrand(db,event.shop_id,d.settings))!==JSON.stringify(d.settings)||!await live(db,b)||currentConfig?.revision!==config.revision||!state||state.paused||state.status!=='open')return await finish('skipped','state_changed');
   const action=hit.extraAction?.action||hit.action;
   if(action==='handoff'||action==='close')await db.prepare('UPDATE reply_conversations SET paused=?,status=? WHERE id=?').bind(action==='handoff'?1:v.paused,action==='handoff'?'handoff':'closed',v.id).run();
   // From this point a thrown network/provider error is ambiguous. Never requeue automatically.
@@ -217,5 +261,7 @@ export async function runPendingReplies(env){
  if(!env.DB)return {processed:0};await ensureMessagingSchema(env.DB);
  await env.DB.prepare("UPDATE reply_events SET status='unknown',error_code='processing_interrupted',updated_at=? WHERE status='processing' AND updated_at<?").bind(now(),now()-300).run();
  await env.DB.prepare("UPDATE reply_conversations SET processing_event=NULL WHERE processing_event IN (SELECT id FROM reply_events WHERE status='unknown')").run();
+ await env.DB.prepare("UPDATE reply_manual_sends SET status='unknown' WHERE status='sending' AND created_at<?").bind(now()-300).run();
+ await env.DB.prepare("UPDATE reply_conversations SET processing_event=NULL WHERE EXISTS(SELECT 1 FROM reply_manual_sends m WHERE m.conversation_id=reply_conversations.id AND m.shop_id=reply_conversations.shop_id AND 'manual_'||m.id=reply_conversations.processing_event AND m.status='unknown')").run();
  const {results}=await env.DB.prepare("SELECT * FROM reply_events WHERE status='queued' ORDER BY created_at,rowid LIMIT 50").all();for(const e of results)await processEvent(env,e);return {processed:results.length};
 }

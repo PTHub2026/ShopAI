@@ -792,3 +792,26 @@ test('Calendar reads the current shop queue and discards a late response from th
   assert.doesNotMatch(view.textContent,/Lịch chưa gắn shop|Nội dung shop trước/);
  }finally{r.close();}
 });
+
+test('Library offers OAuth and import only for configured sources and permitted actions',async()=>{
+ const statuses={
+  dropbox:{configured:true,connected:false,canConnect:true,canImport:true},
+  onedrive:{configured:false,connected:true,canConnect:true,canImport:true},
+  email:{configured:true,connected:true,canConnect:false,canImport:true,name:'Hộp thư thử'},
+ };
+ const r=runtime({route:'library',api:async path=>{
+  if(path==='/api/shops')return Response.json(shopsBody());
+  const provider=path.split('/')[3];
+  return Response.json(statuses[provider]||{});
+ }});
+ try{
+  await settleMore();
+  const doc=r.w.document;
+  assert.ok(doc.querySelector('#lb_dropbox button[aria-label="Kết nối Dropbox"]'));
+  assert.match(doc.querySelector('#lb_onedrive').textContent,/Chưa thiết lập/);
+  assert.equal(doc.querySelector('#lb_onedrive button'),null);
+  assert.match(doc.querySelector('#lb_email').textContent,/Chọn tệp đính kèm/);
+  assert.equal(doc.querySelector('#lb_email details'),null);
+  for(const name of Object.keys(statuses))assert.ok(r.requests.some(req=>req.path==='/api/library/'+name+'/status'&&req.headers['X-ShopPost-Shop']==='s_aaaaaaaaaa'));
+ }finally{r.close();}
+});

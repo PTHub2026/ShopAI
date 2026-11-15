@@ -1515,18 +1515,47 @@ async function lbImportZip(file,report){
       if(e.uncompressedSize>Math.max(1,e.compressedSize)*limit.ratio)throw new Error('ZIP có tỷ lệ nén vượt 200:1');
       if(!e.directory&&![0,8].includes(e.compressionMethod))throw new Error('ZIP dùng phương thức nén không được hỗ trợ');
     }
+    let emitted=0; // Tính cả byte đã xuất của entry lỗi; không hoàn lại ngân sách.
     for(const e of entries){
       const path=e.filename.replace(/\\/g,'/'),parts=path.split('/'),name=parts[parts.length-1];
       if(e.directory||parts.includes('__MACOSX')||parts.some(p=>p.startsWith('._'))){report.skipped++;report.details.push(file.name+' / '+path+': bỏ qua thư mục hoặc metadata macOS');continue}
-      const ext=name.includes('.')?name.split('.').pop().toLowerCase():'',type=LB_ZIP_MIME[ext];
+      const ext=name.includes('.')?name.split('.').pop().toLowerCase():'',type=Object.prototype.hasOwnProperty.call(LB_ZIP_MIME,ext)?LB_ZIP_MIME[ext]:null;
       if(!type){report.skipped++;report.details.push(file.name+' / '+path+': bỏ qua, không phải ảnh/video được hỗ trợ');continue}
+      let asset;
       try{
-        const blob=await e.getData(new zip.BlobWriter(type),{checkSignature:true,useWebWorkers:false});
+        if(emitted>=limit.total)throw new Error('Đã hết ngân sách giải nén 300 MiB');
+        let size=0;const chunks=[],controller=new AbortController();
+        const writable=new WritableStream({write(chunk){
+          size+=chunk.byteLength;emitted+=chunk.byteLength;
+          if(size>e.uncompressedSize||size>limit.file||emitted>limit.total){
+            controller.abort();throw new Error('Dung lượng giải nén vượt metadata hoặc giới hạn cho phép');
+          }
+          chunks.push(chunk.slice());
+        }});
+        await e.getData(writable,{checkSignature:true,useWebWorkers:false,signal:controller.signal});
+        const blob=new Blob(chunks,{type});
         if(blob.size!==e.uncompressedSize||blob.size>limit.file)throw new Error('Dung lượng giải nén không khớp metadata');
-        const asset=await lbZipAsset(new File([blob],name,{type}));
-        // Chỉ công bố metadata sau khi transaction lưu blob đã complete.
-        S.assets.unshift(asset);report.added++;report.zipAdded++;save();
-      }catch(err){report.failed++;report.details.push(file.name+' / '+path+': lỗi, '+err.message)}
+        asset=await lbZipAsset(new File([blob],name,{type}));
+        S.assets.unshift(asset);S.savedAt=Date.now();
+        const snapshot=JSON.stringify({...S,channels:S.channels.filter(c=>!c.real)});
+        await new Promise((resolve,reject)=>{
+          const tx=IDB.db.transaction('kv','readwrite');
+          tx.oncomplete=()=>resolve();
+          tx.onerror=tx.onabort=()=>reject(new Error('Không lưu được thông tin tài nguyên ZIP'));
+          tx.objectStore('kv').put(snapshot,'state');
+        });
+        const durable=JSON.parse(await IDB.get('kv','state')||'null');
+        if(!durable?.assets?.some(item=>item.id===asset.id))throw new Error('Chưa xác minh được thông tin tài nguyên ZIP đã lưu');
+        persist();report.added++;report.zipAdded++;
+      }catch(err){
+        if(asset){
+          S.assets=S.assets.filter(item=>item.id!==asset.id);persist();
+          try{await IDB.del('files',asset.id)}finally{
+            if(BLOBS[asset.id])URL.revokeObjectURL(BLOBS[asset.id]);delete BLOBS[asset.id];
+          }
+        }
+        report.failed++;report.details.push(file.name+' / '+path+': lỗi, '+err.message);
+      }
     }
   }finally{await reader.close()}
 }

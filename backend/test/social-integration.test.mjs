@@ -227,7 +227,14 @@ test('Meta engagement reads sent jobs for the active shop and distinguishes deni
   const r=await f.request(owner,path);
   assert.equal(r.status,200);
   assert.deepEqual(r.data.rows.map(row=>[row.provider,row.reactions,row.comments,row.status]),[['instagram',null,null,'permission_required'],['facebook',0,3,'available']]);
+  assert.equal(r.data.rows[0].reason,'meta_read_permission_missing');
   assert.deepEqual(calls.sort(),['1234_5678','9101112']);
+  globalThis.fetch=async()=>Response.json({error:{code:190}},{status:400});
+  assert.ok((await f.request(owner,path)).data.rows.every(row=>row.reason==='meta_token_invalid'));
+  globalThis.fetch=async()=>Response.json({error:{code:100}},{status:400});
+  assert.ok((await f.request(owner,path)).data.rows.every(row=>row.reason==='meta_object_unavailable'&&row.status==='unavailable'));
+  globalThis.fetch=async()=>Response.json({error:{code:613}},{status:429});
+  assert.ok((await f.request(owner,path)).data.rows.every(row=>row.reason==='meta_rate_limited'));
   assert.doesNotMatch(JSON.stringify(r.data),/REPORT_TOKEN/);
  }finally{globalThis.fetch=oldFetch;f.db.sqlite.close();}
 });

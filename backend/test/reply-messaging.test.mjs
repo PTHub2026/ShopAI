@@ -135,3 +135,42 @@ test('conversation deleted mid-flight skips event as state_changed, not processi
  assert.equal(e.status,'skipped','event must be skipped, not failed, when conversation is missing');
  assert.equal(e.error_code,'state_changed');
 }finally{f.sqlite.close();}});
+async function zaloFixture(){
+ const f=await fixture();Object.assign(f.env,{ZALO_APP_ID:'123456',ZALO_APP_SECRET:'test-app',ZALO_OA_WEBHOOK_SECRET:'test-webhook',ZALO_REPLY_WEBHOOK_READY:'true'});
+ f.sqlite.exec("UPDATE channels SET provider='zalo',external_id='987654',token='zalo-test-token',token_iv=NULL,expires_at="+(sec()+3600));
+ f.sqlite.exec('DELETE FROM reply_bindings');f.doc.scripts[0].channels=['zalo'];f.sqlite.prepare('UPDATE reply_configs SET document=?').run(JSON.stringify(f.doc));
+ f.zaloBody=(id='message1')=>({app_id:'123456',sender:{id:'3333'},recipient:{id:'987654'},event_name:'user_send_text',message:{text:'hello',msg_id:id},timestamp:String(Date.now())});
+ f.zaloWebhook=async(body,signature)=>{const raw=JSON.stringify(body),sig=signature??'mac='+createHash('sha256').update(f.env.ZALO_APP_ID+raw+body.timestamp+f.env.ZALO_OA_WEBHOOK_SECRET).digest('hex');return handleReplyWebhook(new Request(origin+'/webhooks/replies/zalo',{method:'POST',headers:{'X-ZEvent-Signature':sig},body:raw}),f.env);};return f;
+}
+test('Zalo explicitly activates verified OA; signed inbound deduplicates and replies to sender only',async()=>{
+ const f=await zaloFixture();try{const sent=[];await mockFetch(async(input,options)=>{
+  const url=new URL(input);assert.equal(url.search,'');assert.equal(options.headers.access_token,'zalo-test-token');
+  if(url.pathname.endsWith('/getoa'))return Response.json({error:0,data:{oa_id:'987654'}});
+  assert.equal(url.pathname,'/v3.0/oa/message/cs');sent.push(JSON.parse(options.body));return Response.json({error:0,data:{message_id:'sent1'}});
+ },async()=>{
+  assert.equal((await f.api('channels/a','PATCH',{enabled:true})).status,200);
+  const body=f.zaloBody();assert.equal((await f.zaloWebhook(body,'mac='+'0'.repeat(64))).status,403);
+  assert.equal((await f.zaloWebhook(body)).status,200);await f.zaloWebhook(body);
+  await f.zaloWebhook({...f.zaloBody('echo'),event_name:'oa_send_text'});
+  await f.zaloWebhook({...f.zaloBody('wrong-target'),recipient:{id:'999'}});
+  assert.deepEqual(sent,[{recipient:{user_id:'3333'},message:{text:'Hello Zalo',quote_message_id:'message1'}}]);
+  const listing=await(await f.api('channels')).json();assert.equal(listing.channels[0].enabled,true);assert.doesNotMatch(JSON.stringify(listing),/zalo-test-token|test-webhook|test-app/);
+  f.sqlite.exec("UPDATE channels SET token='rotated'");await f.zaloWebhook(f.zaloBody('changed'));assert.equal(sent.length,1);
+ });}finally{f.sqlite.close();}
+});
+test('Zalo activation fails closed on missing webhook setup, expired token or mismatched OA',async()=>{
+ const f=await zaloFixture();try{
+  delete f.env.ZALO_OA_WEBHOOK_SECRET;assert.equal((await(await f.api('channels/a','PATCH',{enabled:true})).json()).code,'zalo_webhook_not_ready');
+  f.env.ZALO_OA_WEBHOOK_SECRET='secret';f.sqlite.exec('UPDATE channels SET expires_at=1');assert.equal((await(await f.api('channels/a','PATCH',{enabled:true})).json()).code,'zalo_token_expired');
+  f.sqlite.exec('UPDATE channels SET expires_at='+(sec()+1000));await mockFetch(async()=>Response.json({error:0,data:{oa_id:'1111'}}),async()=>assert.equal((await(await f.api('channels/a','PATCH',{enabled:true})).json()).code,'zalo_oa_mismatch'));
+  assert.equal(f.sqlite.prepare('SELECT enabled FROM reply_bindings').get().enabled,0);
+ }finally{f.sqlite.close();}
+});
+test('Zalo unknown send outcomes never automatically retry',async()=>{
+ const f=await zaloFixture();try{let sends=0;await mockFetch(async input=>{
+  if(String(input).endsWith('/getoa'))return Response.json({error:0,data:{oa_id:'987654'}});
+  sends++;throw Error('network interrupted');
+ },async()=>{await f.api('channels/a','PATCH',{enabled:true});const body=f.zaloBody();await f.zaloWebhook(body);await f.zaloWebhook(body);await runPendingReplies(f.env);});
+ assert.equal(sends,1);assert.equal(f.sqlite.prepare('SELECT status FROM reply_events').get().status,'unknown');
+ }finally{f.sqlite.close();}
+});

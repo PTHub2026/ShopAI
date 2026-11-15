@@ -471,3 +471,23 @@ export async function zaloCallback(request, env, who) {
 }
 
 export { CONNECT_COOKIE };
+
+// Reply workers only read the current credential; rotation remains in the channel manager.
+export async function zaloReplyToken(env, channel) {
+ if (!channel.expires_at || Number(channel.expires_at) <= now()) throw Error('zalo_token_expired');
+ return unprotectToken(env, channel.shop_id, 'access', channel.token);
+}
+export async function verifyZaloReplyTarget(env, channel) {
+ const token = await zaloReplyToken(env, channel), result = await getOaInfo(env, token);
+ if (!result.ok || Number(result.data?.error) !== 0) throw Error('provider_verification_failed');
+ if (String(result.data?.data?.oa_id || '') !== String(channel.external_id)) throw Error('zalo_oa_mismatch');
+}
+export async function sendZaloReply(env, token, event, text) {
+ const response = await fetch('https://openapi.zalo.me/v3.0/oa/message/cs', {
+  method:'POST', headers:{...await oaHeaders(env, token),'Content-Type':'application/json'},
+  body:JSON.stringify({recipient:{user_id:event.remote},message:{text,quote_message_id:event.key}}),
+  redirect:'manual',signal:AbortSignal.timeout(12000)
+ });
+ const data = await response.json().catch(()=>null);
+ if (!response.ok || data?.error !== 0 || !data?.data?.message_id) throw Error('zalo_delivery_unconfirmed');
+}

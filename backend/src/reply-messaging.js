@@ -1,3 +1,4 @@
+import {zaloReplyToken,verifyZaloReplyTarget,sendZaloReply} from './channels.js';
 import {graphRequest} from './meta.js';
 import {ensureReplySchema,matchReply} from './replies.js';
 import {ensureChannelStore} from './channel-store.js';
@@ -32,7 +33,7 @@ async function mac(secret,text){const k=await crypto.subtle.importKey('raw',new 
 function equal(a,b){if(typeof a!=='string'||typeof b!=='string'||a.length!==b.length)return false;let n=0;for(let i=0;i<a.length;i++)n|=a.charCodeAt(i)^b.charCodeAt(i);return n===0;}
 async function bounded(req,max=1048576){const reader=req.body?.getReader();if(!reader)throw Error('invalid_body');const chunks=[];let size=0;while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>max){await reader.cancel();throw Error('body_too_large');}chunks.push(value);}const bytes=new Uint8Array(size);let p=0;for(const c of chunks){bytes.set(c,p);p+=c.length;}return new TextDecoder('utf-8',{fatal:true}).decode(bytes);}
 async function graph(env,token,path,body){const r=await fetch('https://graph.facebook.com/'+(env.META_GRAPH_VERSION||'v26.0')+'/'+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),redirect:'manual',signal:AbortSignal.timeout(12000)});const data=await r.json().catch(()=>({}));if(!r.ok||data.error)throw Error('meta_request_failed');return data;}
-function readiness(env,c){if(c.status!=='connected')return 'channel_disconnected';if(!env.SOCIAL_TOKEN_KEY)return 'social_key_missing';if(!env.PUBLIC_ORIGIN||!/^https:\/\//.test(env.PUBLIC_ORIGIN))return 'public_origin_missing';if(c.provider==='telegram')return null;if(c.provider==='facebook')return env.META_REPLY_WEBHOOK_READY==='true'&&env.META_APP_SECRET&&env.META_APP_ID&&env.META_REPLY_VERIFY_TOKEN?null:'meta_webhook_not_ready';return 'provider_unsupported';}
+function readiness(env,c){if(c.status!=='connected')return 'channel_disconnected';if(!env.SOCIAL_TOKEN_KEY)return 'social_key_missing';if(!env.PUBLIC_ORIGIN||!/^https:\/\//.test(env.PUBLIC_ORIGIN))return 'public_origin_missing';if(c.provider==='telegram')return null;if(c.provider==='zalo'){if(!env.ZALO_APP_ID||!env.ZALO_APP_SECRET||!env.ZALO_OA_WEBHOOK_SECRET||env.ZALO_REPLY_WEBHOOK_READY!=='true')return 'zalo_webhook_not_ready';return Number(c.expires_at)>now()?null:'zalo_token_expired';}if(c.provider==='facebook')return env.META_REPLY_WEBHOOK_READY==='true'&&env.META_APP_SECRET&&env.META_APP_ID&&env.META_REPLY_VERIFY_TOKEN?null:'meta_webhook_not_ready';return 'provider_unsupported';}
 const conversation=c=>({id:c.id,accountId:c.account_id,provider:c.provider,name:c.name,status:c.status,paused:!!c.paused,assignedTo:c.assigned_to||null,tags:JSON.parse(c.tags),lastMessageAt:c.last_message_at,lastMessage:c.last_message});
 async function live(db,b){const c=await db.prepare("SELECT c.* FROM channels c JOIN reply_bindings b ON b.account_id=c.id AND b.shop_id=c.shop_id JOIN shops s ON s.id=c.shop_id WHERE c.id=? AND b.enabled=1 AND b.bot_id IS NOT NULL AND c.status='connected' AND s.status='active'").bind(b.account_id).first();return c&&await fingerprint(c)===b.credential?c:null;}
 async function verifyMessenger(env,channel,token){
@@ -45,7 +46,7 @@ async function verifyMessenger(env,channel,token){
 }
 async function activate(env,c,activationId){
  const stillRequested=async()=>{const b=await env.DB.prepare('SELECT enabled,activation_id FROM reply_bindings WHERE account_id=?').bind(c.id).first();if(!b?.enabled||b.activation_id!==activationId)throw Error('channel_disabled');};
- const token=await decryptToken(env,c.token,c.token_iv);let botId='';
+ const token=c.provider==='zalo'?await zaloReplyToken(env,c):await decryptToken(env,c.token,c.token_iv);let botId='';
  if(c.provider==='telegram'){
   const bot=await callTelegram(token,'getMe',{}),chat=await callTelegram(token,'getChat',{chat_id:c.external_id});
   if(!bot?.is_bot||!Number.isSafeInteger(bot.id)||bot.id<=0||String(chat?.id)!==c.external_id||!['group','supergroup','private'].includes(chat.type))throw Error('telegram_target_unsupported');
@@ -54,6 +55,8 @@ async function activate(env,c,activationId){
   const current=await env.DB.prepare('SELECT * FROM channels WHERE id=?').bind(c.id).first();if(!current||current.status!=='connected'||await fingerprint(c)!==await fingerprint(current))throw Error('credential_changed');
   await stillRequested();
   await callTelegram(token,'setWebhook',{url,secret_token:await mac(env.SOCIAL_TOKEN_KEY,'reply-telegram:'+botId),allowed_updates:['message'],drop_pending_updates:false});
+ }else if(c.provider==='zalo'){
+  await verifyZaloReplyTarget(env,c);await stillRequested();
  }else{
   await verifyMessenger(env,c,token);
   const current=await env.DB.prepare('SELECT * FROM channels WHERE id=?').bind(c.id).first();if(!current||current.status!=='connected'||await fingerprint(c)!==await fingerprint(current))throw Error('credential_changed');
@@ -78,15 +81,15 @@ export async function handleMessaging(req,env,who,respond=json){
  }
  if(parts[0]==='channels'&&parts[1]&&parts[2]==='diagnostics'&&parts.length===3&&req.method==='GET'){
   if(!ctx.can('channels.configure_token')||ctx.shop.status!=='active')return fail(403,'forbidden');
-  const channel=await db.prepare("SELECT * FROM channels WHERE id=? AND shop_id=? AND provider='facebook'").bind(parts[1],shop).first();
+  const channel=await db.prepare("SELECT * FROM channels WHERE id=? AND shop_id=? AND provider IN ('facebook','zalo')").bind(parts[1],shop).first();
   if(!channel)return fail(404,'not_found');
   const reason=readiness(env,channel);
   if(reason)return respond({ready:false,reason});
   try{
-   await verifyMessenger(env,channel,await decryptToken(env,channel.token,channel.token_iv));
+   if(channel.provider==='zalo')await verifyZaloReplyTarget(env,channel);else await verifyMessenger(env,channel,await decryptToken(env,channel.token,channel.token_iv));
    return respond({ready:true,reason:null});
   }catch(error){
-   const reason=['meta_messaging_permissions_missing','meta_page_mismatch'].includes(error.message)?error.message:'provider_verification_failed';
+   const reason=['meta_messaging_permissions_missing','meta_page_mismatch','zalo_oa_mismatch','zalo_token_expired'].includes(error.message)?error.message:'provider_verification_failed';
    return respond({ready:false,reason});
   }
  }
@@ -97,10 +100,10 @@ export async function handleMessaging(req,env,who,respond=json){
   const reason=readiness(env,c);if(reason)return fail(409,reason);
   const fp=await fingerprint(c),activationId=uid('ra_');let botId;
   // Reserve before provider IO to enforce one shop per immutable target, including concurrent activations.
-  try{await db.prepare('INSERT INTO reply_bindings(account_id,shop_id,provider,external_id,credential,activation_id,enabled,updated_at) VALUES(?,?,?,?,?,?,1,?) ON CONFLICT(account_id) DO UPDATE SET credential=excluded.credential,activation_id=excluded.activation_id,bot_id=NULL,enabled=1,updated_at=excluded.updated_at').bind(c.id,shop,c.provider,c.external_id,fp,activationId,now()).run();}catch{return fail(409,'target_already_active');}
+  try{await db.prepare('INSERT INTO reply_bindings(account_id,shop_id,provider,external_id,credential,activation_id,enabled,updated_at) VALUES(?,?,?,?,?,?,1,?) ON CONFLICT(account_id) DO UPDATE SET provider=excluded.provider,external_id=excluded.external_id,credential=excluded.credential,activation_id=excluded.activation_id,bot_id=NULL,enabled=1,updated_at=excluded.updated_at').bind(c.id,shop,c.provider,c.external_id,fp,activationId,now()).run();}catch{return fail(409,'target_already_active');}
   try{botId=await activate(env,c,activationId);const current=await db.prepare('SELECT * FROM channels WHERE id=?').bind(c.id).first();if(!current||current.status!=='connected'||await fingerprint(current)!==fp)throw Error('credential_changed');
    const updated=await db.prepare('UPDATE reply_bindings SET bot_id=? WHERE account_id=? AND credential=? AND activation_id=? AND enabled=1').bind(botId,c.id,fp,activationId).run();if(updated.meta.changes!==1)throw Error('channel_disabled');
-  }catch(e){await db.prepare('UPDATE reply_bindings SET enabled=0 WHERE account_id=? AND credential=? AND activation_id=?').bind(c.id,fp,activationId).run();return fail(422,['telegram_webhook_owned_elsewhere','telegram_target_unsupported','meta_messaging_permissions_missing','meta_page_mismatch','credential_changed','channel_disabled'].includes(e.message)?e.message:'provider_verification_failed');}
+  }catch(e){await db.prepare('UPDATE reply_bindings SET enabled=0 WHERE account_id=? AND credential=? AND activation_id=?').bind(c.id,fp,activationId).run();return fail(422,['telegram_webhook_owned_elsewhere','telegram_target_unsupported','meta_messaging_permissions_missing','meta_page_mismatch','credential_changed','channel_disabled','zalo_oa_mismatch','zalo_token_expired'].includes(e.message)?e.message:'provider_verification_failed');}
   await audit(db,{shopId:shop,actor:who.owner,action:'replies.channel.enable',target:c.id});return respond({ok:true,enabled:true});
  }
  if(parts[0]==='metrics'&&!parts[1]&&req.method==='GET'){
@@ -140,21 +143,28 @@ async function enqueue(env,b,e){
  ]);
 }
 export async function handleReplyWebhook(req,env,ctx={}){
- const url=new URL(req.url),meta=url.pathname==='/webhooks/replies/meta',telegram=url.pathname.match(/^\/webhooks\/replies\/telegram\/(\d{1,20})$/);
- if(!meta&&!telegram)return json({error:'not_found'},404);
+ const url=new URL(req.url),meta=url.pathname==='/webhooks/replies/meta',zalo=url.pathname==='/webhooks/replies/zalo',telegram=url.pathname.match(/^\/webhooks\/replies\/telegram\/(\d{1,20})$/);
+ if(!meta&&!telegram&&!zalo)return json({error:'not_found'},404);
  if(meta&&req.method==='GET')return env.META_REPLY_VERIFY_TOKEN&&url.searchParams.get('hub.mode')==='subscribe'&&equal(url.searchParams.get('hub.verify_token'),env.META_REPLY_VERIFY_TOKEN)?new Response(url.searchParams.get('hub.challenge')||''):json({error:'verification_failed'},403);
  if(req.method!=='POST')return json({error:'method_not_allowed'},405);
  // Authenticate before reading/parsing/persisting incoming content.
  if(telegram&&(!env.SOCIAL_TOKEN_KEY||!equal(req.headers.get('X-Telegram-Bot-Api-Secret-Token'),await mac(env.SOCIAL_TOKEN_KEY,'reply-telegram:'+telegram[1]))))return json({error:'invalid_secret'},403);
  if(meta&&(!env.META_APP_SECRET||!/^sha256=[a-f0-9]{64}$/.test(req.headers.get('X-Hub-Signature-256')||'')))return json({error:'invalid_signature'},403);
+ if(zalo&&(!env.ZALO_APP_ID||!env.ZALO_OA_WEBHOOK_SECRET||env.ZALO_REPLY_WEBHOOK_READY!=='true'||!/^mac=[a-f0-9]{64}$/.test(req.headers.get('X-ZEvent-Signature')||'')))return json({error:'invalid_signature'},403);
  let raw;try{raw=await bounded(req);}catch{return json({error:'invalid_body'},400);}
  if(meta&&!equal(req.headers.get('X-Hub-Signature-256'),'sha256='+await mac(env.META_APP_SECRET,raw)))return json({error:'invalid_signature'},403);
  let body;try{body=JSON.parse(raw);if(!body||Array.isArray(body)||typeof body!=='object')throw Error();}catch{return json({error:'invalid_json'},400);}
+ if(zalo&&(String(body.app_id)!==String(env.ZALO_APP_ID)||typeof body.timestamp!=='string'||!/^\d{10,16}$/.test(body.timestamp)||!equal(req.headers.get('X-ZEvent-Signature'),'mac='+await digest(String(env.ZALO_APP_ID)+raw+body.timestamp+env.ZALO_OA_WEBHOOK_SECRET))))return json({error:'invalid_signature'},403);
  if(!env.DB)return json({error:'db_missing'},503);await ensureMessagingSchema(env.DB);
  if(telegram){
   const m=body.message;if(m&&!m.from?.is_bot&&typeof m.text==='string'&&Number.isSafeInteger(body.update_id)&&Number.isSafeInteger(m.message_id)){
    const {results}=await env.DB.prepare("SELECT * FROM reply_bindings WHERE provider='telegram' AND bot_id=? AND external_id=? AND enabled=1").bind(telegram[1],String(m.chat?.id)).all();
    for(const b of results)await enqueue(env,b,{key:String(body.update_id),remote:String(m.chat.id),name:String(m.from?.first_name||m.chat.title||'Telegram'),text:m.text,time:Number(m.date),messageId:m.message_id});
+  }
+ }else if(zalo){
+  if(body.event_name==='user_send_text'&&/^\d{1,32}$/.test(body.sender?.id||'')&&/^\d{1,32}$/.test(body.recipient?.id||'')&&typeof body.message?.text==='string'&&typeof body.message?.msg_id==='string'&&body.message.msg_id.length>0&&body.message.msg_id.length<=256){
+   const b=await env.DB.prepare("SELECT * FROM reply_bindings WHERE provider='zalo' AND external_id=? AND enabled=1").bind(body.recipient.id).first();
+   if(b)await enqueue(env,b,{key:body.message.msg_id,remote:body.sender.id,name:'Zalo',text:body.message.text,time:Math.floor(Number(body.timestamp)/1000)});
   }
  }else{
   if(body.object!=='page'||!Array.isArray(body.entry))return json({error:'invalid_event'},400);
@@ -171,7 +181,7 @@ async function processEvent(env,event){
  const finish=(status,code=null,name=null)=>db.prepare('UPDATE reply_events SET status=?,error_code=?,script_name=?,updated_at=? WHERE id=?').bind(status,code,name,now(),event.id).run();
  try{
   const b=await db.prepare('SELECT * FROM reply_bindings WHERE account_id=? AND shop_id=?').bind(event.account_id,event.shop_id).first();
-  const c=b&&b.credential===event.credential&&await live(db,b);if(!c)return await finish('skipped','channel_inactive');
+  const c=b&&b.credential===event.credential&&await live(db,b);if(c?.provider==='zalo'&&readiness(env,c))return await finish('skipped',readiness(env,c));if(!c)return await finish('skipped','channel_inactive');
   const lock=await db.prepare('UPDATE reply_conversations SET processing_event=? WHERE id=? AND processing_event IS NULL').bind(event.id,event.conversation_id).run();
   if(lock.meta.changes!==1)return await finish('queued');locked=true;
   const v=await db.prepare('SELECT * FROM reply_conversations WHERE id=? AND shop_id=?').bind(event.conversation_id,event.shop_id).first(),e=JSON.parse(event.payload);
@@ -183,8 +193,8 @@ async function processEvent(env,event){
   if(e.time<now()-86400)return await finish('skipped','response_window_expired');
   const config=await db.prepare('SELECT document,revision FROM reply_configs WHERE shop_id=?').bind(event.shop_id).first();if(!config)return await finish('skipped','config_missing');
   const d=JSON.parse(config.document),hit=matchReply(d.scripts,d.settings,{text:e.text,name:e.name,provider:c.provider,now:Date.now(),firstMessage:previous.n===0,paused:!!v.paused||v.status!=='open'});if(!hit)return await finish('skipped','no_match');
-  if(hit.text.length>(c.provider==='facebook'?2000:4096))return await finish('failed','response_too_long',hit.scriptName);
-  const token=await decryptToken(env,c.token,c.token_iv);
+  if(hit.text.length>(['facebook','zalo'].includes(c.provider)?2000:4096))return await finish('failed','response_too_long',hit.scriptName);
+  const token=c.provider==='zalo'?await zaloReplyToken(env,c):await decryptToken(env,c.token,c.token_iv);
   const currentConfig=await db.prepare('SELECT revision FROM reply_configs WHERE shop_id=?').bind(event.shop_id).first(),state=await db.prepare('SELECT paused,status FROM reply_conversations WHERE id=?').bind(v.id).first();
   if(!await live(db,b)||currentConfig?.revision!==config.revision||!state||state.paused||state.status!=='open')return await finish('skipped','state_changed');
   const action=hit.extraAction?.action||hit.action;
@@ -192,6 +202,7 @@ async function processEvent(env,event){
   // From this point a thrown network/provider error is ambiguous. Never requeue automatically.
   started=true;
   if(c.provider==='telegram')await callTelegram(token,'sendMessage',{chat_id:c.external_id,text:hit.text,reply_parameters:{message_id:e.messageId,allow_sending_without_reply:false},...(hit.quick.length?{reply_markup:{keyboard:[hit.quick.map(text=>({text}))],resize_keyboard:true,one_time_keyboard:true}}:{})});
+  else if(c.provider==='zalo')await sendZaloReply(env,token,e,hit.text);
   else await graph(env,token,encodeURIComponent(c.external_id)+'/messages',{messaging_type:'RESPONSE',recipient:{id:e.remote},message:{text:hit.text,...(hit.quick.length?{quick_replies:hit.quick.map(text=>({content_type:'text',title:text.slice(0,20),payload:text.slice(0,1000)}))}:{})}});
   const tags=JSON.parse(v.tags);if(hit.action==='tag'&&hit.tagName&&!tags.includes(hit.tagName))tags.push(hit.tagName);
   await db.batch([

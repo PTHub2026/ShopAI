@@ -160,7 +160,11 @@ async function metaEngagement(req,env,who,ctx,json){
    entry.reactions=number(facebook?data.reactions?.summary?.total_count:data.like_count);
    entry.comments=number(facebook?data.comments?.summary?.total_count:data.comments_count);
    if(entry.reactions!==null||entry.comments!==null)entry.status='available';
-  }catch(e){if(metaDenied(e))entry.status='permission_required';}
+  }catch(e){
+   const code=Number(e?.code);
+   entry.reason=code===190||e?.status===401?'meta_token_invalid':[10,200,283].includes(code)?'meta_read_permission_missing':code===100?'meta_object_unavailable':[4,17,32,613].includes(code)||e?.status===429?'meta_rate_limited':'meta_request_failed';
+   if(entry.reason==='meta_token_invalid'||entry.reason==='meta_read_permission_missing')entry.status='permission_required';
+  }
   return entry;
  };
  const rows=[];

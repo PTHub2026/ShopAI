@@ -225,7 +225,7 @@ test('Managed feedback identity never reads or overwrites global/demo contact ca
     r.w.localStorage.setItem('pdk_fb_by','Account A');r.w.localStorage.setItem('pdk_fb_email','a@example.com');
     r.w.fbQuick();assert.equal(r.w.document.querySelector('#fb_by').value,'');assert.equal(r.w.document.querySelector('#fb_email').value,'');
     for(const [id,value] of Object.entries({fb_by:'Account B',fb_email:'b@example.com',fb_title:'Đề xuất cá nhân',fb_desc:'Nội dung góp ý thử nghiệm'}))r.w.document.querySelector('#'+id).value=value;
-    r.w.fbSubmit(true);
+    await r.w.fbSubmit(true);
     assert.equal(r.w.localStorage.getItem('pdk_fb_by:'+scope),'Account B');assert.equal(r.w.localStorage.getItem('pdk_fb_email:'+scope),'b@example.com');
     assert.equal(r.w.localStorage.getItem('pdk_fb_email'),'a@example.com');
     r.w.fbQuick();r.w.document.querySelector('#fb_title').value='Góp ý trong QA';r.w.document.querySelector('#fb_desc').value='Kiểm tra bảo toàn danh tính';r.w.document.querySelector('#fb_email').value='qa@example.com';

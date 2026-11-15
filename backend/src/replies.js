@@ -1,3 +1,4 @@
+import {replyBrand} from './shop-config.js';
 import { resolveShop, audit } from './shops.js';
 
 const PROVIDERS = {facebook:'Facebook',tiktok:'TikTok',youtube:'YouTube',instagram:'Instagram',zalo:'Zalo OA',telegram:'Telegram',x:'X',linkedin:'LinkedIn',threads:'Threads'};
@@ -103,13 +104,14 @@ export async function handleReplies(req,env,who,json) {
     if(req.method==='GET'||preview){
       const row=await env.DB.prepare('SELECT document,revision FROM reply_configs WHERE shop_id = ?').bind(shopId).first();
       const document=row?JSON.parse(row.document):{scripts:[],settings:{...DEFAULT_SETTINGS}};
+      document.settings=await replyBrand(env.DB,shopId,document.settings);
       if(!preview){await audit(env.DB,{shopId,actor:who.owner,action:'replies.read',detail:{revision:row?.revision||0}});return json({...document,revision:row?.revision||0,canEdit});}
       let input;try{input=await readBody(req);}catch(e){return json({error:e.message},e.status||400);}
       if(!string(input.text,10000)||('name'in input&&!string(input.name,100))||!Object.hasOwn(PROVIDERS,input.provider)||('now'in input&&(!Number.isSafeInteger(input.now)||!Number.isFinite(new Date(input.now).getTime())))||['firstMessage','forceOff','paused'].some(k=>k in input&&typeof input[k]!=='boolean'))return json({error:'Dữ liệu mô phỏng không hợp lệ.'},400);
       return json({reply:matchReply(document.scripts,document.settings,input),sent:false});
     }
     let body,document;
-    try{body=await readBody(req);document=validateDocument(body);if(!Number.isSafeInteger(body.revision)||body.revision<0||body.revision>=Number.MAX_SAFE_INTEGER)fail('Phiên bản không hợp lệ.');}catch(e){return json({error:e.message},e.status||400);}
+    try{body=await readBody(req);body.settings=await replyBrand(env.DB,shopId,body.settings);document=validateDocument(body);if(!Number.isSafeInteger(body.revision)||body.revision<0||body.revision>=Number.MAX_SAFE_INTEGER)fail('Phiên bản không hợp lệ.');}catch(e){return json({error:e.message},e.status||400);}
     const now=Date.now(),payload=JSON.stringify(document);
     const write=body.revision===0?env.DB.prepare('INSERT INTO reply_configs (shop_id,document,revision,updated_by,updated_at) VALUES (?,?,1,?,?) ON CONFLICT(shop_id) DO NOTHING').bind(shopId,payload,who.owner,now):env.DB.prepare('UPDATE reply_configs SET document=?,revision=revision+1,updated_by=?,updated_at=? WHERE shop_id=? AND revision=?').bind(payload,who.owner,now,shopId,body.revision);
     const result=await write.run();

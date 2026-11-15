@@ -40,3 +40,16 @@ test('legacy settings never upload without explicit recovery; conflicts stop aut
  const pending=c.configReload();await new Promise(r=>setImmediate(r));requests.forEach(r=>r.resolve({bucket:r.path.split('/').pop(),revision:null,value:null}));await pending;c.configCapture();await new Promise(r=>setImmediate(r));assert.equal(requests.length,3);
  c.cloudRequest=async()=>{throw Error('conflict')};c.S.settings.brand='Edited';c.configCapture();await new Promise(r=>setImmediate(r));assert.match(vm.runInContext('CONFIG.error',c),/conflict/);assert.equal(c.S.settings.brand,'Edited');
 });
+test('brand falls back to existing chatbot then canonical settings control chatbot preview',async()=>{
+ const {handleReplies,ensureReplySchema}=await import('../src/replies.js');
+ const env={DB:sqliteDB(),AI_RATE_LIMITER:{limit:async()=>({success:true})}},who={owner:'brand-owner',email:'brand@example.com'};
+ const ctx=await resolveShop(env,who,new Request('https://app.example/'));await ensureReplySchema(env.DB);
+ const document={scripts:[],settings:{brand:'Legacy brand',signup:'https://old.example',open:8,close:22,slaMin:15,timeZone:'Asia/Ho_Chi_Minh'}};
+ await env.DB.prepare('INSERT INTO reply_configs VALUES(?,?,1,?,?)').bind(ctx.shop.id,JSON.stringify(document),who.owner,Date.now()).run();
+ const req=(path,body)=>new Request('https://app.example'+path,{method:body?'PUT':'GET',headers:{Origin:'https://app.example','X-ShopPost-Shop':ctx.shop.id,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const json=(b,status=200)=>Response.json(b,{status});
+ try{
+  const initial=await(await handleShopConfig(req('/api/shop-config/settings'),env,who,json)).json();assert.equal(initial.value.brand,'Legacy brand');
+  await handleShopConfig(req('/api/shop-config/settings',{revision:null,value:{brand:'Canonical',signup:'https://new.example'}}),env,who,json);
+  const reply=await(await handleReplies(req('/api/replies/config'),env,who,json)).json();assert.equal(reply.settings.brand,'Canonical');assert.equal(reply.settings.signup,'https://new.example');
+ }finally{env.DB.sqlite.close();}
+});

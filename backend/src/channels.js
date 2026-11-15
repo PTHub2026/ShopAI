@@ -407,9 +407,18 @@ export async function channels(request, env, who, json) {
     if (!ctx.can('drafts.view')) return json({ error: 'Vai trò của bạn trong shop này không được xem lịch đăng.', code: 'forbidden' }, 403);
     await ensureSocialSchema(env.DB);
     await importLegacyScheduledPosts(env.DB);
-    const {results}=await env.DB.prepare("SELECT j.id,c.provider,j.payload,j.status,j.result_url,j.error_code,j.created_at,COALESCE(j.scheduled_for,s.run_at,NULLIF(j.next_attempt_at,0),j.created_at) AS run_at FROM publish_jobs j LEFT JOIN channels c ON c.id=j.account_id AND c.shop_id=j.shop_id LEFT JOIN scheduled_posts s ON s.id=j.id AND s.shop_id=j.shop_id WHERE j.shop_id=? ORDER BY j.created_at DESC,j.id DESC LIMIT 200").bind(ctx.shop.id).all();
-    const list=(results||[]).map(j=>{const p=JSON.parse(j.payload);return {id:j.id,provider:j.provider,type:j.provider==='youtube'||p.kind==='video'?'video':'post',title:p.title||'',content:(p.text||'').slice(0,280),run_at:j.run_at,status:({sent:'posted',pending:'scheduled',retryable:'scheduled',sending:'processing'})[j.status]||j.status,url:j.result_url,error:j.error_code,created_at:j.created_at};});
-    return json({ scheduled: list });
+    const params=new URL(request.url).searchParams,limit=Number(params.get('limit')||200);
+    const from=params.has('from')?Number(params.get('from')):0,to=params.has('to')?Number(params.get('to')):8640000000000;
+    const provider=params.get('provider')||'all',status=params.get('status')||'all',type=params.get('type')||'all',q=params.get('q')||'';
+    let cursor=null;try{if(params.has('cursor'))cursor=JSON.parse(params.get('cursor'));}catch{return json({error:'Con trỏ phân trang không hợp lệ.'},400);}
+    if(!Number.isInteger(limit)||limit<1||limit>200||!Number.isSafeInteger(from)||!Number.isSafeInteger(to)||from<0||to<=from||q.length>200||!['all','post','video'].includes(type)||!['all','published','scheduled','failed','unknown','processing'].includes(status)||!['all','facebook','instagram','zalo','youtube','telegram','tiktok','x','linkedin','threads'].includes(provider)||cursor&&(!Array.isArray(cursor)||cursor.length!==2||!Number.isSafeInteger(cursor[0])||typeof cursor[1]!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(cursor[1])))return json({error:'Bộ lọc lịch sử không hợp lệ.'},400);
+    const time='COALESCE(j.scheduled_for,s.run_at,NULLIF(j.next_attempt_at,0),j.created_at)';
+    const displayStatus="CASE j.status WHEN 'sent' THEN 'published' WHEN 'pending' THEN 'scheduled' WHEN 'retryable' THEN 'scheduled' WHEN 'sending' THEN 'processing' ELSE j.status END";
+    const displayType="CASE WHEN c.provider='youtube' OR json_extract(j.payload,'$.kind')='video' THEN 'video' ELSE 'post' END";
+    const {results}=await env.DB.prepare(`SELECT j.id,j.account_id,c.provider,j.payload,j.status,j.result_url,j.error_code,j.created_at,${time} AS run_at FROM publish_jobs j LEFT JOIN channels c ON c.id=j.account_id AND c.shop_id=j.shop_id LEFT JOIN scheduled_posts s ON s.id=j.id AND s.shop_id=j.shop_id WHERE j.shop_id=? AND ${time}>=? AND ${time}<? AND (?='all' OR c.provider=?) AND (?='all' OR ${displayStatus}=?) AND (?='all' OR ${displayType}=?) AND (?='' OR instr(lower(COALESCE(json_extract(j.payload,'$.text'),'')||' '||COALESCE(json_extract(j.payload,'$.title'),'')),lower(?))>0) AND (?=0 OR ${time}<? OR (${time}=? AND j.id<?)) ORDER BY run_at DESC,j.id DESC LIMIT ?`).bind(ctx.shop.id,from,to,provider,provider,status,status,type,type,q,q,Number(!!cursor),cursor?.[0]||0,cursor?.[0]||0,cursor?.[1]||'',limit+1).all();
+    const rows=results.slice(0,limit);
+    const list=rows.map(j=>{const p=JSON.parse(j.payload);return {id:j.id,accountId:j.account_id,provider:j.provider,type:j.provider==='youtube'||p.kind==='video'?'video':'post',title:p.title||'',content:p.text||'',run_at:j.run_at,status:({sent:'posted',pending:'scheduled',retryable:'scheduled',sending:'processing'})[j.status]||j.status,url:j.result_url,error:j.error_code,created_at:j.created_at};});
+    return json({scheduled:list,cursor:results.length>limit?JSON.stringify([rows.at(-1).run_at,rows.at(-1).id]):null,from,to});
   }
 
   // Hủy một lịch đăng chưa chạy.

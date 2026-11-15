@@ -17,7 +17,7 @@ function runtime({managed=true,fetchImpl,stored={},api,invite='',route=''}={}) {
     w.addEventListener('error',e=>errors.push(e.error));
   }});
   const w=dom.window;
-  return {dom,w,requests,errors,read:s=>w.eval(s),close:()=>w.close()};
+  return {dom,w,requests,errors,read:s=>w.eval(s),close:()=>{w.eval('calendarRequest++;SHOP.ready=false');w.close()}};
 }
 const settle=()=>new Promise(r=>setImmediate(r));
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}};
@@ -872,4 +872,18 @@ test('Library writes to the selected shop, restores its composer, and discards a
    assert.doesNotMatch(second.w.document.querySelector('#view').textContent,/Tài nguyên A/);
   } finally {second.close()}
  } finally {r.close()}
+});
+
+test('invitation and admin timestamps convert seconds without altering draft milliseconds',async()=>{
+ const r=runtime();try{
+  await settle();const seconds=1794744000;
+  r.read(`SHOP.invites=[{id:'i',email:'qa@example.test',role:'viewer',expiresAt:${seconds}}]`);
+  const expected=r.read(`fmtT(${seconds}*1000)`);
+  assert.ok(r.read('invitesTable()').includes(expected));
+  r.w.document.querySelector('#view').innerHTML='<div id="adm_counts"></div><div id="adm_shops"></div><div id="adm_audit"></div>';
+  r.w.cloudRequest=async path=>path.includes('overview')?{counts:{shops:1},shops:[{id:'s',name:'QA',status:'active',createdAt:seconds}]}:{entries:[{createdAt:seconds,action:'test'}]};
+  await r.w.adminLoad();
+  assert.ok(r.w.document.querySelector('#adm_shops').textContent.includes(expected));
+  assert.ok(r.w.document.querySelector('#adm_audit').textContent.includes(expected));
+ }finally{r.close();}
 });

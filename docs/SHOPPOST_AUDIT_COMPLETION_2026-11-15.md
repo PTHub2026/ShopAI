@@ -19,12 +19,20 @@ Coverage includes signed webhook rejection/acceptance, automatic response proces
 
 Provider requests in automated tests are simulated. They do not prove live outbound delivery or publishing to production accounts. Live acceptance must distinguish provider test events, real incoming conversations, actual outgoing provider message IDs, and actual published URLs.
 
-## Runtime configuration completed separately
+## Production verification and remaining gates
 
-Existing Zalo app webhook URL before this task: `https://shoptrack.abacusai.app/webhook/zalo`.
+PR #87 was merged as `b5559af9dc331ed0498302d2120654003bae3735`; backend CI and CodeQL both succeeded. Cloudflare showed version `01f5e498` Ready with 100% traffic.
 
-Updated to `https://shoppost.net/webhooks/replies/zalo`, with the existing OA secret saved as encrypted `ZALO_OA_WEBHOOK_SECRET` in the existing production Worker and `ZALO_REPLY_WEBHOOK_READY=true`. Existing Zalo `user_send_text` subscription and retry setting were already enabled.
+Production UI checks confirmed:
+- All four existing Facebook posts display explicit missing-read-permission results, preserved after navigating away and returning.
+- The 390px calendar is a vertical date agenda without horizontal page overflow.
+- Shop settings correctly inherit ShopTrack / shoptrack.vn from the existing chatbot settings.
+- Feedback creation succeeded on the server; the remaining provider gates were recorded as a real feedback item for the selected shop.
 
-Zalo's configuration UI warned that the Cloudflare URL resolves outside Vietnam and some returned data may be restricted. Its developer test event uses a sample recipient OA, so it cannot by itself establish delivery for the connected ShopTrack-CSKH OA.
+Zalo's existing OA secret was saved encrypted as `ZALO_OA_WEBHOOK_SECRET` in the existing production Worker. The webhook route was briefly changed to `https://shoppost.net/webhooks/replies/zalo` for setup testing. Reauthorization then failed with Zalo `-14068` / `User don't own any Official Accounts`; the connected OA token is expired.
 
-Rollback of webhook routing, if needed, is to the former URL above; do not reset the OA secret. Cloudflare retains existing runtime secrets through `keep_vars=true`.
+Final state: the webhook URL was **restored** to `https://shoptrack.abacusai.app/webhook/zalo`, and `ZALO_REPLY_WEBHOOK_READY=false`. This preserves the existing routing until the correct OA administrator can reconnect and the ShopPost binding can be activated. Do not reset the OA secret. The first restoration check timed out (408); the second passed and the restored URL was verified in Zalo's UI.
+
+Meta still denies interaction reads for the four existing posts. Live incoming/outgoing messaging and a new live publication are not yet accepted end to end. Automated provider tests are simulated and are not evidence of production delivery.
+
+Zalo's developer console also warned that both Cloudflare URLs resolve outside Vietnam and some returned data may be restricted.

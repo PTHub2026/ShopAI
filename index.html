@@ -1480,15 +1480,149 @@ function lbMove(fid){moveAssets([...LB.sel],fid)}
 function lbTag(){askText('Nhập nhãn (cách nhau dấu phẩy)','',v=>{const tg=splitTags(v);if(!tg.length)return;LB.sel.forEach(i=>{const a=aById(i);if(a)a.tags=[...new Set([...a.tags,...tg])]});save();V.library();toast('Đã gắn nhãn')})}
 function lbDelete(ids){const used=ids.filter(id=>assetPosts(id).some(p=>p.status==='scheduled'));ask(`Xóa ${ids.length} tài nguyên khỏi Kho?`+(used.length?`\n⚠ ${used.length} tài nguyên đang gắn với bài sắp đăng (bài vẫn giữ nội dung đã soạn).`:''),()=>{
 S.assets=S.assets.filter(a=>!ids.includes(a.id));ids.forEach(id=>{LB.sel.delete(id);delete BLOBS[id];IDB.del('files',id)});S.posts.forEach(p=>{if(p.assets)p.assets=p.assets.filter(x=>!ids.includes(x))});save();closeModal();V.library();toast(`Đã xóa ${ids.length} tài nguyên`)},{ok:'Xóa',danger:true})}
-function lbDownload(ids){let n=0;ids.forEach(id=>{const a=aById(id);if(!a)return;let href=null,name=a.name;if(['drive','dropbox','onedrive','email'].includes(a.source)&&BLOBS[id])href=BLOBS[id];else if(a.kind==='text'){href=URL.createObjectURL(new Blob([a.text||''],{type:'text/plain;charset=utf-8'}));if(!/\.txt$/i.test(name))name+='.txt'}else if(BLOBS[id])href=BLOBS[id];else if(a.kind==='image'&&(a.thumb||a.url))href=a.thumb||a.url;else if(a.url)href=a.url;if(!href)return;const d=n*350;n++;setTimeout(()=>{const l=document.createElement('a');l.href=href;l.download=name;l.target='_blank';l.rel='noopener';document.body.appendChild(l);l.click();l.remove()},d)});
+function lbDownload(ids){let n=0;ids.forEach(id=>{const a=aById(id);if(!a)return;let href=null,name=a.name;if(['drive','dropbox','onedrive','email'].includes(a.source)&&BLOBS[id])href=BLOBS[id];else if(a.kind==='text'){href=URL.createObjectURL(new Blob([a.text||''],{type:'text/plain;charset=utf-8'}));if(!/\.txt$/i.test(name))name+='.txt'}else if(BLOBS[id])href=BLOBS[id];else if(a.kind==='image'&&(a.thumb||a.url))href=a.thumb||a.url;else if(a.url)href=a.url;if(!href)return;
+// Only application-owned blobs or explicit web/raster URLs may become links.
+let downloadHref;
+if(href===BLOBS[id]||a.kind==='text')downloadHref='blob:'+href.slice(5);
+else if(/^https:\/\//i.test(href))downloadHref='https://'+href.slice(8);
+else if(/^http:\/\//i.test(href))downloadHref='http://'+href.slice(7);
+else if(/^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i.test(href))downloadHref='data:image/'+href.slice(11);
+else return;
+const d=n*350;n++;setTimeout(()=>{const l=document.createElement('a');l.href=downloadHref;l.download=name;l.rel='noopener';document.body.appendChild(l);l.click();l.remove()},d)});
 const miss=ids.length-n;toast(`Đang tải ${n} file`+(miss?` · ${miss} mục không còn file gốc trong trình duyệt này`:''))}
-function compressImage(file,max=800,q=.82){return new Promise(res=>{const url=URL.createObjectURL(file);const img=new Image();img.onload=()=>{try{const k=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=Math.max(1,Math.round(img.width*k));c.height=Math.max(1,Math.round(img.height*k));const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(img,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',q))}catch(e){res(null)}};img.onerror=()=>res(null);img.src=url})}
+function compressImage(file,max=800,q=.82){return new Promise(res=>{const url=URL.createObjectURL(file);const img=new Image();let settled=false;const done=value=>{if(settled)return;settled=true;clearTimeout(timer);URL.revokeObjectURL(url);img.onload=img.onerror=null;res(value)};const timer=setTimeout(()=>done(null),10000);img.onload=()=>{try{const k=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=Math.max(1,Math.round(img.width*k));c.height=Math.max(1,Math.round(img.height*k));const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(img,0,0,c.width,c.height);done(c.toDataURL('image/jpeg',q))}catch(e){done(null)}};img.onerror=()=>done(null);img.src=url})}
 function videoPoster(url){return new Promise(res=>{const v=document.createElement('video');v.muted=true;v.preload='auto';let t;const done=x=>{clearTimeout(t);res(x)};t=setTimeout(()=>done(null),6000);v.onloadeddata=()=>{try{v.currentTime=Math.min(1,(v.duration||2)/2)}catch(e){done(null)}};v.onseeked=()=>{try{const k=Math.min(1,480/Math.max(v.videoWidth,v.videoHeight));const c=document.createElement('canvas');c.width=Math.round(v.videoWidth*k);c.height=Math.round(v.videoHeight*k);c.getContext('2d').drawImage(v,0,0,c.width,c.height);done(c.toDataURL('image/jpeg',.7))}catch(e){done(null)}};v.onerror=()=>done(null);v.src=url})}
 function kindOf(f){const t=f.type||'',n=f.name.toLowerCase();if(t.startsWith('image/'))return 'image';if(t.startsWith('video/'))return 'video';if(t.startsWith('text/')||/\.(txt|md)$/.test(n))return 'text';return 'doc'}
 function targetFolder(k){if(LB.folder!=='all'&&LB.folder!=='none'&&S.folders.some(f=>f.id===LB.folder))return LB.folder;const f=KIND_FOLDER[k];return S.folders.some(x=>x.id===f)?f:null}
 async function makeAsset(f){const kind=kindOf(f);const a={id:uid(),kind,name:f.name,folder:targetFolder(kind),tags:[],source:'upload',created:Date.now(),size:f.size};
 if(kind!=='text')putFile(a.id,f);if(kind==='image'){BLOBS[a.id]=URL.createObjectURL(f);a.thumb=await compressImage(f)}else if(kind==='video'){BLOBS[a.id]=URL.createObjectURL(f);a.thumb=await videoPoster(BLOBS[a.id])}else if(kind==='text'){a.text=(await f.text()).slice(0,20000);a.name=a.name.replace(/\.(txt|md)$/i,'')}else BLOBS[a.id]=URL.createObjectURL(f);return a}
-async function lbUpload(files){const fl=[...files];if(!fl.length)return;toast(`Đang tải lên ${fl.length} file…`);const docs=fl.filter(f=>kindOf(f)==='doc').length;for(const f of fl)S.assets.unshift(await makeAsset(f));save();if(route==='library')V.library();toast(`Đã thêm ${fl.length} tài nguyên vào Kho`+(IDB.db?' · đã lưu file gốc trong trình duyệt':''))}
+// ZIP: giới hạn trước giải nén; không thay đổi luồng tải file thường/Drive.
+const LB_ZIP_LIMIT={entries:500,file:100*1024*1024,total:300*1024*1024,archive:256*1024*1024,ratio:200};
+const LB_ZIP_MIME={jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp',avif:'image/avif',bmp:'image/bmp',mp4:'video/mp4',m4v:'video/mp4',mov:'video/quicktime',webm:'video/webm',ogv:'video/ogg'};
+let lbZipLibrary;
+function lbIsZip(f){return /\.zip$/i.test(f.name)||['application/zip','application/x-zip-compressed'].includes(f.type)}
+function lbLoadZip(){
+  if(!lbZipLibrary)lbZipLibrary=new Promise((resolve,reject)=>{
+    const script=document.createElement('script');
+    const fail=()=>{clearTimeout(timer);script.remove();lbZipLibrary=null;reject(new Error('Không tải được thư viện ZIP. Hãy kiểm tra mạng/CDN rồi thử lại.'))};
+    const timer=setTimeout(fail,20000);
+    script.src='https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.7.57/dist/zip-full.min.js';
+    script.crossOrigin='anonymous';script.referrerPolicy='no-referrer';
+    script.onload=()=>{if(!window.zip?.ZipReader)return fail();clearTimeout(timer);resolve(window.zip)};
+    script.onerror=fail;document.head.appendChild(script);
+  });
+  return lbZipLibrary;
+}
+// Commit file bytes and metadata together: abort rolls both stores back.
+let lbZipCommitQueue=Promise.resolve();
+function lbZipCommit(batch,report){
+  const pending=lbZipCommitQueue.then(()=>lbZipCommitBatch(batch,report));
+  lbZipCommitQueue=pending.catch(()=>{});return pending;
+}
+async function lbZipCommitBatch(batch,report){
+  if(!batch.length)return;
+  const items=batch.splice(0),assets=items.map(item=>item.asset).reverse();
+  try{
+    if(!IDB.db)throw new Error('IndexedDB chưa sẵn sàng; hãy thử lại sau.');
+    clearTimeout(_svT);_svT=null;
+    const savedAt=Date.now();
+    const snapshot=JSON.stringify({...S,savedAt,assets:[...assets,...S.assets],channels:S.channels.filter(c=>!c.real)});
+    await new Promise((resolve,reject)=>{
+      const tx=IDB.db.transaction(['files','kv'],'readwrite');
+      tx.oncomplete=resolve;
+      tx.onerror=tx.onabort=()=>reject(new Error('Không lưu được ZIP vào trình duyệt (có thể đã đầy bộ nhớ).'));
+      try{
+        for(const item of items)tx.objectStore('files').put(item.file,item.asset.id);
+        tx.objectStore('kv').put(snapshot,'state');
+      }catch(error){tx.abort();reject(error)}
+    });
+    S.assets.unshift(...assets);S.savedAt=savedAt;
+    for(const item of items)BLOBS[item.asset.id]=item.url;
+    report.added+=items.length;report.zipAdded+=items.length;
+    // IndexedDB is authoritative. Cache only, without a second database write.
+    try{LS.setItem(KEY,snapshot);STORE.lsFull=false}catch(e){STORE.lsFull=true}
+  }catch(error){
+    for(const item of items){URL.revokeObjectURL(item.url);report.failed++;report.details.push(item.asset.name+': lỗi, '+error.message)}
+  }
+}
+async function lbZipAsset(file){
+  const kind=kindOf(file),id=uid();
+  const asset={id,kind,name:file.name,folder:targetFolder(kind),tags:[],source:'upload',created:Date.now(),size:file.size};
+  const url=URL.createObjectURL(file);
+  try{asset.thumb=kind==='image'?await compressImage(file):await videoPoster(url);return {asset,file,url}}
+  catch(error){URL.revokeObjectURL(url);throw error}
+}
+async function lbImportZip(file,report){
+  const limit=LB_ZIP_LIMIT;
+  if(file.size>limit.archive)throw new Error('ZIP vượt giới hạn 256 MiB');
+  const zip=await lbLoadZip();
+  const reader=new zip.ZipReader(new zip.BlobReader(file),{useWebWorkers:false});
+  try{
+    const entries=[];
+    // Đếm cả thư mục/tệp bỏ qua, dừng đọc metadata khi vượt giới hạn.
+    for await(const entry of reader.getEntriesGenerator()){
+      entries.push(entry);
+      if(entries.length>limit.entries)throw new Error('ZIP vượt giới hạn 500 entry');
+    }
+    let total=0;
+    // Kiểm tra TOÀN BỘ metadata trước khi giải nén bất kỳ entry nào.
+    for(const e of entries){
+      if(e.encrypted)throw new Error('Không nhận ZIP có mã hóa/mật khẩu');
+      if(!Number.isSafeInteger(e.uncompressedSize)||e.uncompressedSize<0||!Number.isSafeInteger(e.compressedSize)||e.compressedSize<0)throw new Error('Metadata dung lượng ZIP không hợp lệ');
+      total+=e.uncompressedSize;
+      if(e.uncompressedSize>limit.file||total>limit.total)throw new Error('ZIP vượt giới hạn 100 MiB/tệp hoặc 300 MiB tổng giải nén');
+      if(e.uncompressedSize>Math.max(1,e.compressedSize)*limit.ratio)throw new Error('ZIP có tỷ lệ nén vượt 200:1');
+      if(!e.directory&&![0,8].includes(e.compressionMethod))throw new Error('ZIP dùng phương thức nén không được hỗ trợ');
+    }
+    const batch=[];
+    let batchBytes=0;
+    let emitted=0; // Tính cả byte đã xuất của entry lỗi; không hoàn lại ngân sách.
+    for(const e of entries){
+      const path=e.filename.replace(/\\/g,'/'),parts=path.split('/'),name=parts[parts.length-1];
+      if(e.directory||parts.includes('__MACOSX')||parts.some(p=>p.startsWith('._'))){report.skipped++;report.details.push(file.name+' / '+path+': bỏ qua thư mục hoặc metadata macOS');continue}
+      const ext=name.includes('.')?name.split('.').pop().toLowerCase():'',type=Object.prototype.hasOwnProperty.call(LB_ZIP_MIME,ext)?LB_ZIP_MIME[ext]:null;
+      if(!type){report.skipped++;report.details.push(file.name+' / '+path+': bỏ qua, không phải ảnh/video được hỗ trợ');continue}
+      try{
+        if(emitted>=limit.total)throw new Error('Đã hết ngân sách giải nén 300 MiB');
+        let size=0;const chunks=[],controller=new AbortController();
+        const writable=new WritableStream({write(chunk){
+          size+=chunk.byteLength;emitted+=chunk.byteLength;
+          if(size>e.uncompressedSize||size>limit.file||emitted>limit.total){
+            controller.abort();throw new Error('Dung lượng giải nén vượt metadata hoặc giới hạn cho phép');
+          }
+          chunks.push(chunk.slice());
+        }});
+        await e.getData(writable,{checkSignature:true,useWebWorkers:false,signal:controller.signal});
+        const blob=new Blob(chunks,{type});
+        if(blob.size!==e.uncompressedSize||blob.size>limit.file)throw new Error('Dung lượng giải nén không khớp metadata');
+        batch.push(await lbZipAsset(new File([blob],name,{type})));batchBytes+=blob.size;
+      }catch(err){
+        report.failed++;report.details.push(file.name+' / '+path+': lỗi, '+err.message);
+      }
+      if(batch.length>=20||batchBytes>=32*1024*1024){await lbZipCommit(batch,report);batchBytes=0}
+    }
+    await lbZipCommit(batch,report);
+  }finally{await reader.close()}
+}
+async function lbUploadWithZip(files){
+  const report={added:0,zipAdded:0,skipped:0,failed:0,details:[]};
+  toast('Đang kiểm tra ZIP và nhập ảnh/video vào Kho…');
+  for(const f of files){
+    try{
+      if(lbIsZip(f))await lbImportZip(f,report);
+      else{S.assets.unshift(await makeAsset(f));report.added++;save()}
+    }catch(e){report.failed++;report.details.push(f.name+': lỗi, '+e.message)}
+  }
+  if(route==='library')V.library();
+  const summary='Đã thêm '+report.added+' tài nguyên vào Kho; '+report.zipAdded+' ảnh/video từ ZIP đã lưu file gốc trong trình duyệt; bỏ qua '+report.skipped+' mục; lỗi '+report.failed+' mục.';
+  toast(summary);
+  if(report.details.length&&route==='library'&&!$('#modal').classList.contains('on')){
+    modal('<h3>Kết quả nhập ZIP</h3><p id="lb_zip_summary"></p><div id="lb_zip_details" style="max-height:50vh;overflow:auto;white-space:pre-wrap"></div><button class="btn" onclick="closeModal()">Đóng</button>');
+    document.getElementById('lb_zip_summary').textContent=summary;
+    document.getElementById('lb_zip_details').textContent=report.details.join('\n');
+  }
+}
+async function lbUpload(files){const fl=[...files];if(!fl.length)return;if(fl.some(lbIsZip))return lbUploadWithZip(fl);toast(`Đang tải lên ${fl.length} file…`);const docs=fl.filter(f=>kindOf(f)==='doc').length;for(const f of fl)S.assets.unshift(await makeAsset(f));save();if(route==='library')V.library();toast(`Đã thêm ${fl.length} tài nguyên vào Kho`+(IDB.db?' · đã lưu file gốc trong trình duyệt':''))}
 function folderSelect(id,cur,auto){return `<select id="${id}">${auto?'<option value="auto" selected>Tự phân loại theo loại file</option>':''}${S.folders.map(f=>`<option value="${f.id}" ${!auto&&f.id===cur?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!auto&&!cur?'selected':''}>Chưa phân loại</option></select>`}
 function lbAddText(){modal(`<h3>📝 Thêm nội dung văn bản</h3><label>Tiêu đề</label><input id="lt_n" placeholder="VD: Mẫu bài tuyển đại lý"><label>Nội dung</label><textarea id="lt_t" style="min-height:180px"></textarea><label>Thư mục</label>${folderSelect('lt_f',targetFolder('text'))}<label>Nhãn (cách nhau dấu phẩy)</label><input id="lt_g"><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" onclick="closeModal()">Hủy</button><button class="btn pri" onclick="lbSaveText()">Lưu vào Kho</button></div>`)}
 function lbSaveText(){const t=$('#lt_t').value.trim();if(!t)return toast('Nhập nội dung');S.assets.unshift({id:uid(),kind:'text',name:$('#lt_n').value.trim()||t.split('\n')[0].slice(0,60),text:t,folder:$('#lt_f').value||null,tags:splitTags($('#lt_g').value),source:'upload',created:Date.now(),size:new Blob([t]).size});save();closeModal();V.library();toast('Đã lưu nội dung vào Kho')}

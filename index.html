@@ -1485,7 +1485,7 @@ function lbDownload(ids){let n=0;ids.forEach(id=>{const a=aById(id);if(!a)return
 if(!/^https?:\/\//i.test(href)&&!/^blob:/i.test(href)&&!/^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i.test(href))return;
 const d=n*350;n++;setTimeout(()=>{const l=document.createElement('a');l.href=href;l.download=name;l.target='_blank';l.rel='noopener';document.body.appendChild(l);l.click();l.remove()},d)});
 const miss=ids.length-n;toast(`Đang tải ${n} file`+(miss?` · ${miss} mục không còn file gốc trong trình duyệt này`:''))}
-function compressImage(file,max=800,q=.82){return new Promise(res=>{const url=URL.createObjectURL(file);const img=new Image();img.onload=()=>{try{const k=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=Math.max(1,Math.round(img.width*k));c.height=Math.max(1,Math.round(img.height*k));const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(img,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',q))}catch(e){res(null)}};img.onerror=()=>res(null);img.src=url})}
+function compressImage(file,max=800,q=.82){return new Promise(res=>{const url=URL.createObjectURL(file);const img=new Image();let settled=false;const done=value=>{if(settled)return;settled=true;clearTimeout(timer);URL.revokeObjectURL(url);img.onload=img.onerror=null;res(value)};const timer=setTimeout(()=>done(null),10000);img.onload=()=>{try{const k=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=Math.max(1,Math.round(img.width*k));c.height=Math.max(1,Math.round(img.height*k));const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(img,0,0,c.width,c.height);done(c.toDataURL('image/jpeg',q))}catch(e){done(null)}};img.onerror=()=>done(null);img.src=url})}
 function videoPoster(url){return new Promise(res=>{const v=document.createElement('video');v.muted=true;v.preload='auto';let t;const done=x=>{clearTimeout(t);res(x)};t=setTimeout(()=>done(null),6000);v.onloadeddata=()=>{try{v.currentTime=Math.min(1,(v.duration||2)/2)}catch(e){done(null)}};v.onseeked=()=>{try{const k=Math.min(1,480/Math.max(v.videoWidth,v.videoHeight));const c=document.createElement('canvas');c.width=Math.round(v.videoWidth*k);c.height=Math.round(v.videoHeight*k);c.getContext('2d').drawImage(v,0,0,c.width,c.height);done(c.toDataURL('image/jpeg',.7))}catch(e){done(null)}};v.onerror=()=>done(null);v.src=url})}
 function kindOf(f){const t=f.type||'',n=f.name.toLowerCase();if(t.startsWith('image/'))return 'image';if(t.startsWith('video/'))return 'video';if(t.startsWith('text/')||/\.(txt|md)$/.test(n))return 'text';return 'doc'}
 function targetFolder(k){if(LB.folder!=='all'&&LB.folder!=='none'&&S.folders.some(f=>f.id===LB.folder))return LB.folder;const f=KIND_FOLDER[k];return S.folders.some(x=>x.id===f)?f:null}
@@ -1508,28 +1508,44 @@ function lbLoadZip(){
   });
   return lbZipLibrary;
 }
-function lbZipStore(id,blob){
-  return new Promise((resolve,reject)=>{
-    if(!IDB.db)return reject(new Error('IndexedDB chưa sẵn sàng; chưa thêm tài nguyên. Hãy thử lại sau.'));
-    try{
-      const tx=IDB.db.transaction('files','readwrite');
-      tx.oncomplete=()=>resolve();
-      tx.onerror=()=>reject(new Error('Không lưu được file ZIP vào trình duyệt (có thể đã đầy bộ nhớ).'));
-      tx.onabort=()=>reject(new Error('Giao dịch lưu file ZIP bị hủy; chưa thêm tài nguyên.'));
-      tx.objectStore('files').put(blob,id);
-    }catch(e){reject(new Error('Không mở được giao dịch lưu file ZIP: '+e.message))}
-  });
+// Commit file bytes and metadata together: abort rolls both stores back.
+let lbZipCommitQueue=Promise.resolve();
+function lbZipCommit(batch,report){
+  const pending=lbZipCommitQueue.then(()=>lbZipCommitBatch(batch,report));
+  lbZipCommitQueue=pending.catch(()=>{});return pending;
+}
+async function lbZipCommitBatch(batch,report){
+  if(!batch.length)return;
+  const items=batch.splice(0),assets=items.map(item=>item.asset).reverse();
+  try{
+    if(!IDB.db)throw new Error('IndexedDB chưa sẵn sàng; hãy thử lại sau.');
+    clearTimeout(_svT);_svT=null;
+    const savedAt=Date.now();
+    const snapshot=JSON.stringify({...S,savedAt,assets:[...assets,...S.assets],channels:S.channels.filter(c=>!c.real)});
+    await new Promise((resolve,reject)=>{
+      const tx=IDB.db.transaction(['files','kv'],'readwrite');
+      tx.oncomplete=resolve;
+      tx.onerror=tx.onabort=()=>reject(new Error('Không lưu được ZIP vào trình duyệt (có thể đã đầy bộ nhớ).'));
+      try{
+        for(const item of items)tx.objectStore('files').put(item.file,item.asset.id);
+        tx.objectStore('kv').put(snapshot,'state');
+      }catch(error){tx.abort();reject(error)}
+    });
+    S.assets.unshift(...assets);S.savedAt=savedAt;
+    for(const item of items)BLOBS[item.asset.id]=item.url;
+    report.added+=items.length;report.zipAdded+=items.length;
+    // IndexedDB is authoritative. Cache only, without a second database write.
+    try{LS.setItem(KEY,snapshot);STORE.lsFull=false}catch(e){STORE.lsFull=true}
+  }catch(error){
+    for(const item of items){URL.revokeObjectURL(item.url);report.failed++;report.details.push(item.asset.name+': lỗi, '+error.message)}
+  }
 }
 async function lbZipAsset(file){
   const kind=kindOf(file),id=uid();
-  const a={id,kind,name:file.name,folder:targetFolder(kind),tags:[],source:'upload',created:Date.now(),size:file.size};
+  const asset={id,kind,name:file.name,folder:targetFolder(kind),tags:[],source:'upload',created:Date.now(),size:file.size};
   const url=URL.createObjectURL(file);
-  try{
-    a.thumb=kind==='image'?await compressImage(file):await videoPoster(url);
-    await lbZipStore(id,file);
-    BLOBS[id]=url;
-    return a;
-  }catch(e){URL.revokeObjectURL(url);throw e}
+  try{asset.thumb=kind==='image'?await compressImage(file):await videoPoster(url);return {asset,file,url}}
+  catch(error){URL.revokeObjectURL(url);throw error}
 }
 async function lbImportZip(file,report){
   const limit=LB_ZIP_LIMIT;
@@ -1553,13 +1569,14 @@ async function lbImportZip(file,report){
       if(e.uncompressedSize>Math.max(1,e.compressedSize)*limit.ratio)throw new Error('ZIP có tỷ lệ nén vượt 200:1');
       if(!e.directory&&![0,8].includes(e.compressionMethod))throw new Error('ZIP dùng phương thức nén không được hỗ trợ');
     }
+    const batch=[];
+    let batchBytes=0;
     let emitted=0; // Tính cả byte đã xuất của entry lỗi; không hoàn lại ngân sách.
     for(const e of entries){
       const path=e.filename.replace(/\\/g,'/'),parts=path.split('/'),name=parts[parts.length-1];
       if(e.directory||parts.includes('__MACOSX')||parts.some(p=>p.startsWith('._'))){report.skipped++;report.details.push(file.name+' / '+path+': bỏ qua thư mục hoặc metadata macOS');continue}
       const ext=name.includes('.')?name.split('.').pop().toLowerCase():'',type=Object.prototype.hasOwnProperty.call(LB_ZIP_MIME,ext)?LB_ZIP_MIME[ext]:null;
       if(!type){report.skipped++;report.details.push(file.name+' / '+path+': bỏ qua, không phải ảnh/video được hỗ trợ');continue}
-      let asset;
       try{
         if(emitted>=limit.total)throw new Error('Đã hết ngân sách giải nén 300 MiB');
         let size=0;const chunks=[],controller=new AbortController();
@@ -1573,28 +1590,13 @@ async function lbImportZip(file,report){
         await e.getData(writable,{checkSignature:true,useWebWorkers:false,signal:controller.signal});
         const blob=new Blob(chunks,{type});
         if(blob.size!==e.uncompressedSize||blob.size>limit.file)throw new Error('Dung lượng giải nén không khớp metadata');
-        asset=await lbZipAsset(new File([blob],name,{type}));
-        S.assets.unshift(asset);S.savedAt=Date.now();
-        const snapshot=JSON.stringify({...S,channels:S.channels.filter(c=>!c.real)});
-        await new Promise((resolve,reject)=>{
-          const tx=IDB.db.transaction('kv','readwrite');
-          tx.oncomplete=()=>resolve();
-          tx.onerror=tx.onabort=()=>reject(new Error('Không lưu được thông tin tài nguyên ZIP'));
-          tx.objectStore('kv').put(snapshot,'state');
-        });
-        const durable=JSON.parse(await IDB.get('kv','state')||'null');
-        if(!durable?.assets?.some(item=>item.id===asset.id))throw new Error('Chưa xác minh được thông tin tài nguyên ZIP đã lưu');
-        persist();report.added++;report.zipAdded++;
+        batch.push(await lbZipAsset(new File([blob],name,{type})));batchBytes+=blob.size;
       }catch(err){
-        if(asset){
-          S.assets=S.assets.filter(item=>item.id!==asset.id);persist();
-          try{await IDB.del('files',asset.id)}finally{
-            if(BLOBS[asset.id])URL.revokeObjectURL(BLOBS[asset.id]);delete BLOBS[asset.id];
-          }
-        }
         report.failed++;report.details.push(file.name+' / '+path+': lỗi, '+err.message);
       }
+      if(batch.length>=20||batchBytes>=32*1024*1024){await lbZipCommit(batch,report);batchBytes=0}
     }
+    await lbZipCommit(batch,report);
   }finally{await reader.close()}
 }
 async function lbUploadWithZip(files){
@@ -1609,7 +1611,11 @@ async function lbUploadWithZip(files){
   if(route==='library')V.library();
   const summary='Đã thêm '+report.added+' tài nguyên vào Kho; '+report.zipAdded+' ảnh/video từ ZIP đã lưu file gốc trong trình duyệt; bỏ qua '+report.skipped+' mục; lỗi '+report.failed+' mục.';
   toast(summary);
-  if(report.details.length)modal('<h3>Kết quả nhập ZIP</h3><p>'+esc(summary)+'</p><div style="max-height:50vh;overflow:auto;white-space:pre-wrap">'+esc(report.details.join('\n'))+'</div><button class="btn" onclick="closeModal()">Đóng</button>');
+  if(report.details.length){
+    modal('<h3>Kết quả nhập ZIP</h3><p id="lb_zip_summary"></p><div id="lb_zip_details" style="max-height:50vh;overflow:auto;white-space:pre-wrap"></div><button class="btn" onclick="closeModal()">Đóng</button>');
+    document.getElementById('lb_zip_summary').textContent=summary;
+    document.getElementById('lb_zip_details').textContent=report.details.join('\n');
+  }
 }
 async function lbUpload(files){const fl=[...files];if(!fl.length)return;if(fl.some(lbIsZip))return lbUploadWithZip(fl);toast(`Đang tải lên ${fl.length} file…`);const docs=fl.filter(f=>kindOf(f)==='doc').length;for(const f of fl)S.assets.unshift(await makeAsset(f));save();if(route==='library')V.library();toast(`Đã thêm ${fl.length} tài nguyên vào Kho`+(IDB.db?' · đã lưu file gốc trong trình duyệt':''))}
 function folderSelect(id,cur,auto){return `<select id="${id}">${auto?'<option value="auto" selected>Tự phân loại theo loại file</option>':''}${S.folders.map(f=>`<option value="${f.id}" ${!auto&&f.id===cur?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!auto&&!cur?'selected':''}>Chưa phân loại</option></select>`}

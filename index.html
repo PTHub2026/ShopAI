@@ -1453,7 +1453,98 @@ function kindOf(f){const t=f.type||'',n=f.name.toLowerCase();if(t.startsWith('im
 function targetFolder(k){if(LB.folder!=='all'&&LB.folder!=='none'&&S.folders.some(f=>f.id===LB.folder))return LB.folder;const f=KIND_FOLDER[k];return S.folders.some(x=>x.id===f)?f:null}
 async function makeAsset(f){const kind=kindOf(f);const a={id:uid(),kind,name:f.name,folder:targetFolder(kind),tags:[],source:'upload',created:Date.now(),size:f.size};
 if(kind!=='text')putFile(a.id,f);if(kind==='image'){BLOBS[a.id]=URL.createObjectURL(f);a.thumb=await compressImage(f)}else if(kind==='video'){BLOBS[a.id]=URL.createObjectURL(f);a.thumb=await videoPoster(BLOBS[a.id])}else if(kind==='text'){a.text=(await f.text()).slice(0,20000);a.name=a.name.replace(/\.(txt|md)$/i,'')}else BLOBS[a.id]=URL.createObjectURL(f);return a}
-async function lbUpload(files){const fl=[...files];if(!fl.length)return;toast(`Đang tải lên ${fl.length} file…`);const docs=fl.filter(f=>kindOf(f)==='doc').length;for(const f of fl)S.assets.unshift(await makeAsset(f));save();if(route==='library')V.library();toast(`Đã thêm ${fl.length} tài nguyên vào Kho`+(IDB.db?' · đã lưu file gốc trong trình duyệt':''))}
+// ZIP: giới hạn trước giải nén; không thay đổi luồng tải file thường/Drive.
+const LB_ZIP_LIMIT={entries:500,file:100*1024*1024,total:300*1024*1024,archive:256*1024*1024,ratio:200};
+const LB_ZIP_MIME={jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp',avif:'image/avif',bmp:'image/bmp',mp4:'video/mp4',m4v:'video/mp4',mov:'video/quicktime',webm:'video/webm',ogv:'video/ogg'};
+let lbZipLibrary;
+function lbIsZip(f){return /\.zip$/i.test(f.name)||['application/zip','application/x-zip-compressed'].includes(f.type)}
+function lbLoadZip(){
+  if(!lbZipLibrary)lbZipLibrary=new Promise((resolve,reject)=>{
+    const script=document.createElement('script');
+    const fail=()=>{clearTimeout(timer);script.remove();lbZipLibrary=null;reject(new Error('Không tải được thư viện ZIP. Hãy kiểm tra mạng/CDN rồi thử lại.'))};
+    const timer=setTimeout(fail,20000);
+    script.src='https://cdn.jsdelivr.net/npm/@zip.js/zip.js@2.7.57/dist/zip-full.min.js';
+    script.crossOrigin='anonymous';script.referrerPolicy='no-referrer';
+    script.onload=()=>{if(!window.zip?.ZipReader)return fail();clearTimeout(timer);resolve(window.zip)};
+    script.onerror=fail;document.head.appendChild(script);
+  });
+  return lbZipLibrary;
+}
+function lbZipStore(id,blob){
+  return new Promise((resolve,reject)=>{
+    if(!IDB.db)return reject(new Error('IndexedDB chưa sẵn sàng; chưa thêm tài nguyên. Hãy thử lại sau.'));
+    try{
+      const tx=IDB.db.transaction('files','readwrite');
+      tx.oncomplete=()=>resolve();
+      tx.onerror=()=>reject(new Error('Không lưu được file ZIP vào trình duyệt (có thể đã đầy bộ nhớ).'));
+      tx.onabort=()=>reject(new Error('Giao dịch lưu file ZIP bị hủy; chưa thêm tài nguyên.'));
+      tx.objectStore('files').put(blob,id);
+    }catch(e){reject(new Error('Không mở được giao dịch lưu file ZIP: '+e.message))}
+  });
+}
+async function lbZipAsset(file){
+  const kind=kindOf(file),id=uid();
+  const a={id,kind,name:file.name,folder:targetFolder(kind),tags:[],source:'upload',created:Date.now(),size:file.size};
+  const url=URL.createObjectURL(file);
+  try{
+    a.thumb=kind==='image'?await compressImage(file):await videoPoster(url);
+    await lbZipStore(id,file);
+    BLOBS[id]=url;
+    return a;
+  }catch(e){URL.revokeObjectURL(url);throw e}
+}
+async function lbImportZip(file,report){
+  const limit=LB_ZIP_LIMIT;
+  if(file.size>limit.archive)throw new Error('ZIP vượt giới hạn 256 MiB');
+  const zip=await lbLoadZip();
+  const reader=new zip.ZipReader(new zip.BlobReader(file),{useWebWorkers:false});
+  try{
+    const entries=[];
+    // Đếm cả thư mục/tệp bỏ qua, dừng đọc metadata khi vượt giới hạn.
+    for await(const entry of reader.getEntriesGenerator()){
+      entries.push(entry);
+      if(entries.length>limit.entries)throw new Error('ZIP vượt giới hạn 500 entry');
+    }
+    let total=0;
+    // Kiểm tra TOÀN BỘ metadata trước khi giải nén bất kỳ entry nào.
+    for(const e of entries){
+      if(e.encrypted)throw new Error('Không nhận ZIP có mã hóa/mật khẩu');
+      if(!Number.isSafeInteger(e.uncompressedSize)||e.uncompressedSize<0||!Number.isSafeInteger(e.compressedSize)||e.compressedSize<0)throw new Error('Metadata dung lượng ZIP không hợp lệ');
+      total+=e.uncompressedSize;
+      if(e.uncompressedSize>limit.file||total>limit.total)throw new Error('ZIP vượt giới hạn 100 MiB/tệp hoặc 300 MiB tổng giải nén');
+      if(e.uncompressedSize>Math.max(1,e.compressedSize)*limit.ratio)throw new Error('ZIP có tỷ lệ nén vượt 200:1');
+      if(!e.directory&&![0,8].includes(e.compressionMethod))throw new Error('ZIP dùng phương thức nén không được hỗ trợ');
+    }
+    for(const e of entries){
+      const path=e.filename.replace(/\\/g,'/'),parts=path.split('/'),name=parts[parts.length-1];
+      if(e.directory||parts.includes('__MACOSX')||parts.some(p=>p.startsWith('._'))){report.skipped++;report.details.push(file.name+' / '+path+': bỏ qua thư mục hoặc metadata macOS');continue}
+      const ext=name.includes('.')?name.split('.').pop().toLowerCase():'',type=LB_ZIP_MIME[ext];
+      if(!type){report.skipped++;report.details.push(file.name+' / '+path+': bỏ qua, không phải ảnh/video được hỗ trợ');continue}
+      try{
+        const blob=await e.getData(new zip.BlobWriter(type),{checkSignature:true,useWebWorkers:false});
+        if(blob.size!==e.uncompressedSize||blob.size>limit.file)throw new Error('Dung lượng giải nén không khớp metadata');
+        const asset=await lbZipAsset(new File([blob],name,{type}));
+        // Chỉ công bố metadata sau khi transaction lưu blob đã complete.
+        S.assets.unshift(asset);report.added++;report.zipAdded++;save();
+      }catch(err){report.failed++;report.details.push(file.name+' / '+path+': lỗi, '+err.message)}
+    }
+  }finally{await reader.close()}
+}
+async function lbUploadWithZip(files){
+  const report={added:0,zipAdded:0,skipped:0,failed:0,details:[]};
+  toast('Đang kiểm tra ZIP và nhập ảnh/video vào Kho…');
+  for(const f of files){
+    try{
+      if(lbIsZip(f))await lbImportZip(f,report);
+      else{S.assets.unshift(await makeAsset(f));report.added++;save()}
+    }catch(e){report.failed++;report.details.push(f.name+': lỗi, '+e.message)}
+  }
+  if(route==='library')V.library();
+  const summary='Đã thêm '+report.added+' tài nguyên vào Kho; '+report.zipAdded+' ảnh/video từ ZIP đã lưu file gốc trong trình duyệt; bỏ qua '+report.skipped+' mục; lỗi '+report.failed+' mục.';
+  toast(summary);
+  if(report.details.length)modal('<h3>Kết quả nhập ZIP</h3><p>'+esc(summary)+'</p><div style="max-height:50vh;overflow:auto;white-space:pre-wrap">'+esc(report.details.join('\n'))+'</div><button class="btn" onclick="closeModal()">Đóng</button>');
+}
+async function lbUpload(files){const fl=[...files];if(!fl.length)return;if(fl.some(lbIsZip))return lbUploadWithZip(fl);toast(`Đang tải lên ${fl.length} file…`);const docs=fl.filter(f=>kindOf(f)==='doc').length;for(const f of fl)S.assets.unshift(await makeAsset(f));save();if(route==='library')V.library();toast(`Đã thêm ${fl.length} tài nguyên vào Kho`+(IDB.db?' · đã lưu file gốc trong trình duyệt':''))}
 function folderSelect(id,cur,auto){return `<select id="${id}">${auto?'<option value="auto" selected>Tự phân loại theo loại file</option>':''}${S.folders.map(f=>`<option value="${f.id}" ${!auto&&f.id===cur?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!auto&&!cur?'selected':''}>Chưa phân loại</option></select>`}
 function lbAddText(){modal(`<h3>📝 Thêm nội dung văn bản</h3><label>Tiêu đề</label><input id="lt_n" placeholder="VD: Mẫu bài tuyển đại lý"><label>Nội dung</label><textarea id="lt_t" style="min-height:180px"></textarea><label>Thư mục</label>${folderSelect('lt_f',targetFolder('text'))}<label>Nhãn (cách nhau dấu phẩy)</label><input id="lt_g"><div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn" onclick="closeModal()">Hủy</button><button class="btn pri" onclick="lbSaveText()">Lưu vào Kho</button></div>`)}
 function lbSaveText(){const t=$('#lt_t').value.trim();if(!t)return toast('Nhập nội dung');S.assets.unshift({id:uid(),kind:'text',name:$('#lt_n').value.trim()||t.split('\n')[0].slice(0,60),text:t,folder:$('#lt_f').value||null,tags:splitTags($('#lt_g').value),source:'upload',created:Date.now(),size:new Blob([t]).size});save();closeModal();V.library();toast('Đã lưu nội dung vào Kho')}

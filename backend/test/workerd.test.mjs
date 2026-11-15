@@ -70,5 +70,28 @@ test('Authenticated Worker reads/writes real local D1 and rejects stale revision
     assert.equal((await upload(3)).status,200);
     assert.equal((await fetch('/storage/drafts/integration-media',{method:'DELETE'})).status,200);
     assert.equal((await db.prepare('SELECT count(*) AS n FROM draft_media_chunks').first()).n,0);
+
+    const shop = (await (await fetch('/api/shops')).json()).defaultShopId;
+    const root = '/api/library/storage';
+    const assetPath = root + '/assets/integration-photo';
+    const libraryBytes = new Uint8Array(2 * 1024 * 1024 + 4).fill(23);
+    const original = new Request('https://app.example' + assetPath, { method: 'PUT', body: (() => {
+      const form = new FormData();
+      form.set('payload', JSON.stringify({ revision: null, record: { id: 'integration-photo', kind: 'image', name: 'Ảnh từ thiết bị A', source: 'upload', created: 100, size: libraryBytes.length } }));
+      form.set('file', new Blob([libraryBytes], { type: 'image/png' }), 'photo.png');
+      return form;
+    })() });
+    const shopHeaders = { 'X-ShopPost-Shop': shop };
+    const asset = await fetch(assetPath, { method: 'PUT', body: await original.arrayBuffer(), headers: { ...shopHeaders, 'Content-Type': original.headers.get('Content-Type') } });
+    assert.equal(asset.status, 200, await asset.clone().text());
+    assert.equal((await (await fetch(root, { headers: shopHeaders })).json()).records[0].record.name, 'Ảnh từ thiết bị A');
+    assert.equal((await fetch(root, { headers: shopHeaders }, bob)).status, 404);
+    const originalRead = await fetch(assetPath + '/file', { headers: shopHeaders });
+    assert.equal(originalRead.headers.get('Cache-Control'), 'private, no-store');
+    assert.deepEqual(new Uint8Array(await originalRead.arrayBuffer()), libraryBytes);
+    const { revision } = await asset.json();
+    assert.equal((await fetch(assetPath, { method: 'DELETE', headers: shopHeaders, body: JSON.stringify({ revision }) })).status, 200);
+    assert.equal((await fetch(assetPath + '/file', { headers: shopHeaders })).status, 404);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM shop_library_chunks').first()).n, 0);
   } finally {await mf.dispose()}
 });

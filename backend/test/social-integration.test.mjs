@@ -231,3 +231,24 @@ test('Meta engagement reads sent jobs for the active shop and distinguishes deni
   assert.doesNotMatch(JSON.stringify(r.data),/REPORT_TOKEN/);
  }finally{globalThis.fetch=oldFetch;f.db.sqlite.close();}
 });
+
+test('Shop calendar preserves the original scheduled time after a retry and only returns that shop’s jobs',async()=>{
+ const f=fixture(),owner=f.login('email:schedule@example.com'),other=f.login('email:separate@example.com');
+ try{
+  await fakeTelegram(()=>{throw Error('Scheduled job should not publish yet');},async()=>{
+   assert.equal((await connect(f.request,owner)).status,201);
+   const {data:{accounts:[account]}}=await f.request(owner,'/api/social/accounts');
+   const runAt=now()+3600,body={accountId:account.id,kind:'text',text:'Lịch Telegram',runAt};
+   const path='/channels/telegram/schedule',idem='telegram-calendar-1234';
+   const scheduled=await f.request(owner,path,{method:'POST',body,idem});
+   assert.equal(scheduled.status,201);
+   f.db.sqlite.prepare("UPDATE publish_jobs SET status='retryable', next_attempt_at=? WHERE id=?").run(runAt+3600,scheduled.data.id);
+   const result=await f.request(owner,'/channels/scheduled');
+   assert.equal(result.status,200);
+   assert.equal(result.data.scheduled[0].run_at,runAt);
+   assert.equal(result.data.scheduled[0].content,body.text);
+   assert.equal((await f.request(owner,path,{method:'POST',body,idem})).status,201);
+   assert.deepEqual((await f.request(other,'/channels/scheduled')).data.scheduled,[]);
+  });
+ }finally{f.db.sqlite.close();}
+});

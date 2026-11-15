@@ -11,8 +11,13 @@ export async function ensureSocialSchema(db){
  if(initialized.has(db))return initialized.get(db);
  const pending=(async()=>{
   await db.batch(SOCIAL_SCHEMA.slice(2).map(s=>db.prepare(s)));await ensureChannelStore(db);
-  const hasURL=async()=> (await db.prepare('PRAGMA table_info(publish_jobs)').all()).results.some(c=>c.name==='result_url');
-  if(!await hasURL())try{await db.prepare('ALTER TABLE publish_jobs ADD COLUMN result_url TEXT').run();}catch(e){if(!await hasURL())throw e;}
+  const columns=async()=>new Set((await db.prepare('PRAGMA table_info(publish_jobs)').all()).results.map(c=>c.name));
+  const existing=await columns();
+  for(const [name,type] of [['result_url','TEXT'],['scheduled_for','INTEGER']]){
+   if(existing.has(name))continue;
+   try{await db.prepare('ALTER TABLE publish_jobs ADD COLUMN '+name+' '+type).run();}
+   catch(e){if(!(await columns()).has(name))throw e;}
+  }
   await db.prepare('CREATE INDEX IF NOT EXISTS publish_jobs_due ON publish_jobs(status,next_attempt_at)').run();
  })();initialized.set(db,pending);try{await pending;}catch(e){initialized.delete(db);throw e;}
 }
@@ -116,10 +121,10 @@ export async function handleSocial(req,env,who,json){
   const scheduled=req.headers.get('X-Channel-Schedule')==='1';
   if(scheduled&&(!Number.isFinite(data.runAt)||Math.floor(data.runAt)<=now()))return fail(json,400,'invalid_schedule');
   const payload=JSON.stringify({externalId:a.external_id,text:data.text,photoUrl:data.kind==='photo'?(data.photoUrl||null):null,...(a.provider==='facebook'&&data.kind==='photo'&&data.images!==undefined?{images:data.images}:{}),...(a.provider==='zalo'?{title:data.title||'',images:data.images||[],author:data.author||ctx.shop.name}:{} )}),t=now();
-  await db.prepare("INSERT OR IGNORE INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at,next_attempt_at) VALUES(?,?,?,?,?,?,'pending',?,?,?,?)").bind('pj_'+crypto.randomUUID(),shop,a.id,idem,data.kind,payload,who.owner,t,t,scheduled?Math.floor(data.runAt):0).run();
+  await db.prepare("INSERT OR IGNORE INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at,next_attempt_at,scheduled_for) VALUES(?,?,?,?,?,?,'pending',?,?,?,?,?)").bind('pj_'+crypto.randomUUID(),shop,a.id,idem,data.kind,payload,who.owner,t,t,scheduled?Math.floor(data.runAt):0,scheduled?Math.floor(data.runAt):null).run();
   const j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND idempotency_key=?').bind(shop,idem).first();
-  if(j.account_id!==a.id||j.kind!==data.kind||j.payload!==payload||(scheduled&&j.next_attempt_at!==Math.floor(data.runAt)))return fail(json,409,'idempotency_conflict');
-  if(scheduled)return json({ok:true,id:j.id,runAt:j.next_attempt_at,status:'scheduled',job:jobView({...j,provider:a.provider})},201);
+  if(j.account_id!==a.id||j.kind!==data.kind||j.payload!==payload||(scheduled&&(j.scheduled_for??j.next_attempt_at)!==Math.floor(data.runAt)))return fail(json,409,'idempotency_conflict');
+  if(scheduled)return json({ok:true,id:j.id,runAt:j.scheduled_for??j.next_attempt_at,status:'scheduled',job:jobView({...j,provider:a.provider})},201);
   return deliver({...j,provider:a.provider},db,env,shop,json);
  }
  if(section==='jobs'&&resource&&['retry','run'].includes(action)&&req.method==='POST'){

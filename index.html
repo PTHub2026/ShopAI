@@ -749,9 +749,9 @@ async function runRw(k){
 /* ================= POSTS & CALENDAR ================= */
 const F={posts:{type:'all',status:'all',pf:'all',grp:'all'},calendar:{type:'all',status:'all',pf:'all',grp:'all'}};
 const STL={published:'Đã đăng',scheduled:'Đã lên lịch',failed:'Thất bại',unknown:'Cần kiểm tra kết quả',processing:'Đang đăng'};
-function filterBar(k){const f=F[k];const pfs=[...new Set(S.channels.map(c=>c.pf))];const sel=(n,o)=>`<select style="width:auto" onchange="F.${k}.${n}=this.value;V.${k}()">${o.map(([v,l])=>`<option value="${v}" ${f[n]===v?'selected':''}>${l}</option>`).join('')}</select>`;
-return `<div class="row">${sel('type',[['all','Tất cả loại'],['post','Bài viết'],['video','Video ngắn']])}${sel('status',[['all','Tất cả trạng thái'],['published','Đã đăng'],['scheduled','Đã lên lịch'],['failed','Thất bại'],['unknown','Cần kiểm tra kết quả'],['processing','Đang đăng']])}${sel('pf',[['all','Tất cả nền tảng'],...pfs.map(p=>[p,PF[p].n])])}${S.groups.length?sel('grp',[['all','Tất cả nhóm kênh'],...S.groups.map(g=>[g.id,'👥 '+esc(g.name)])]):''}</div>`}
-function fpost(k){const f=F[k];return S.posts.filter(p=>(f.type==='all'||p.type===f.type)&&(f.status==='all'||p.status===f.status)&&(f.pf==='all'||p.channels.some(id=>(chById(id)||{}).pf===f.pf))&&(!f.grp||f.grp==='all'||!grpById(f.grp)||p.channels.some(id=>grpById(f.grp).channels.includes(id))))}
+function filterBar(k){const f=F[k];const pfs=[...new Set([...S.channels.map(c=>c.pf),...(k==='calendar'&&managedApp()?CAL.rows.map(p=>p.provider).filter(p=>Object.hasOwn(PF,p)):[])])];const sel=(n,o)=>`<select style="width:auto" onchange="F.${k}.${n}=this.value;V.${k}()">${o.map(([v,l])=>`<option value="${v}" ${f[n]===v?'selected':''}>${l}</option>`).join('')}</select>`;
+return `<div class="row">${sel('type',[['all','Tất cả loại'],['post','Bài viết'],['video','Video ngắn']])}${sel('status',[['all','Tất cả trạng thái'],['published','Đã đăng'],['scheduled','Đã lên lịch'],['failed','Thất bại'],['unknown','Cần kiểm tra kết quả'],['processing','Đang đăng']])}${sel('pf',[['all','Tất cả nền tảng'],...pfs.map(p=>[p,PF[p].n])])}${S.groups.length&&!(k==='calendar'&&managedApp())?sel('grp',[['all','Tất cả nhóm kênh'],...S.groups.map(g=>[g.id,'👥 '+esc(g.name)])]):''}</div>`}
+function fpost(k){const f=F[k];const rows=k==='calendar'&&managedApp()?(SHOP.ready&&CAL.shop===SHOP.id?CAL.rows:[]):S.posts;return rows.filter(p=>(f.type==='all'||p.type===f.type)&&(f.status==='all'||p.status===f.status)&&(f.pf==='all'||p.provider===f.pf||p.channels.some(id=>(chById(id)||{}).pf===f.pf))&&((k==='calendar'&&managedApp())||!f.grp||f.grp==='all'||!grpById(f.grp)||p.channels.some(id=>grpById(f.grp).channels.includes(id))))}
 function sumM(p){const s={views:0,likes:0,comments:0,shares:0};Object.values(p.metrics||{}).forEach(m=>{for(const k in s)s[k]+=m[k]||0});return s}
 function er(s){return s.views?((s.likes+s.comments+s.shares)/s.views*100).toFixed(2):'0.00'}
 V.posts=()=>{const list=fpost('posts').sort((a,b)=>b.time-a.time);$('#view').innerHTML=`<div class="row" style="justify-content:space-between">${filterBar('posts')}<button class="btn pri" onclick="freshDraft(()=>go('create'))">+ Tạo bài viết</button></div><div class="small muted" style="margin:10px 0">${list.length} bản ghi · ${managedApp()?'Lịch sử trên trình duyệt này; trạng thái hàng đợi được cập nhật từ máy chủ.':'Dữ liệu mô phỏng trên trình duyệt này.'}</div>${list.map(postCard).join('')||`<div class="card"><h3>${S.posts.length?'Không có bài khớp bộ lọc':'Chưa có lịch sử đăng bài'}</h3><p class="muted">${S.posts.length?'Đổi trạng thái, nền tảng hoặc nhóm kênh để xem các bài khác.':'Tạo bài viết, chọn kênh rồi đăng hoặc lên lịch. Bài đã có trên nền tảng không tự xuất hiện ở đây.'}</p></div>`}`}
@@ -764,11 +764,11 @@ ${p.status==='published'&&!managed?`<div class="row small muted">👁 ${fmtN(s.v
 function pubNow(id){const p0=S.posts.find(x=>x.id===id);if(managedApp()&&p0&&p0.channels.some(cid=>{const c=chById(cid);return c&&c.real}))return pubNowReal(p0);if(!demoAction())return;const p=S.posts.find(x=>x.id===id);if(p.channels.map(chById).some(c=>!c||!c.connected)){p.status='failed';p.error='Có kênh chưa kết nối';toast('Đăng thất bại: kênh chưa kết nối')}else{p.time=Date.now();publish(p);toast('Đã đăng (mô phỏng)')}save();render()}
 function dupPost(id){const p=S.posts.find(x=>x.id===id);freshDraft(()=>{D.content=p.content;D.channels=p.channels.filter(x=>(chById(x)||{}).connected);D.custom=JSON.parse(JSON.stringify(p.custom||{}));D.media=(p.media||[]).filter(m=>m.thumb||(m.assetId&&BLOBS[m.assetId])).map(m=>({...m,url:(m.assetId&&BLOBS[m.assetId])||m.thumb}));go('create')})}
 function delPost(id){const p=S.posts.find(x=>x.id===id);if(!p)return;const held=()=>managedApp()&&(p.status==='scheduled'||p.status==='processing'||p.status==='unknown'||(p.jobs||[]).some(j=>!['sent','failed'].includes(j.status)));if(held())return toast('Chưa thể xóa bản ghi đang chờ hoặc chưa rõ kết quả. Chưa hỗ trợ hủy lịch tại đây.');ask('Xóa bản ghi khỏi lịch sử trên trình duyệt này? Bài trên nền tảng vẫn còn. Thao tác này không hủy tác vụ máy chủ.',()=>{if(held())return toast('Trạng thái đã thay đổi. Giữ bản ghi để theo dõi kết quả.');S.posts=S.posts.filter(x=>x.id!==id);save();render()},{ok:'Xóa khỏi lịch sử',danger:true})}
-const CAL={mode:'month',ref:new Date()};
-V.calendar=()=>{const list=fpost('calendar');const r=new Date(CAL.ref);const days=[];if(CAL.mode==='month'){const f=new Date(r.getFullYear(),r.getMonth(),1);const off=(f.getDay()+6)%7;for(let i=0;i<42;i++)days.push(new Date(f.getFullYear(),f.getMonth(),1-off+i))}else{const off=(r.getDay()+6)%7;for(let i=0;i<7;i++)days.push(new Date(r.getFullYear(),r.getMonth(),r.getDate()-off+i))}
+const CAL={mode:'month',ref:new Date(),shop:null,rows:[],pending:false,error:''};
+V.calendar=()=>{if(managedApp()&&SHOP.ready&&CAL.shop!==SHOP.id)scheduledLoad();const list=fpost('calendar');const r=new Date(CAL.ref);const days=[];if(CAL.mode==='month'){const f=new Date(r.getFullYear(),r.getMonth(),1);const off=(f.getDay()+6)%7;for(let i=0;i<42;i++)days.push(new Date(f.getFullYear(),f.getMonth(),1-off+i))}else{const off=(r.getDay()+6)%7;for(let i=0;i<7;i++)days.push(new Date(r.getFullYear(),r.getMonth(),r.getDate()-off+i))}
 const same=(a,b)=>a.toDateString()===b.toDateString();const col={published:'#dcfce7',scheduled:'#dbeafe',failed:'#fee2e2',unknown:'#fef3c7',processing:'#ede9fe'};const title=CAL.mode==='month'?`Tháng ${r.getMonth()+1}/${r.getFullYear()}`:`${days[0].toLocaleDateString('vi-VN')} – ${days[6].toLocaleDateString('vi-VN')}`;
 $('#view').innerHTML=`<div class="row" style="justify-content:space-between;margin-bottom:12px">${filterBar('calendar')}<div class="row"><button class="btn sm" aria-label="Khoảng thời gian trước" onclick="calMove(-1)">‹</button><button class="btn sm" onclick="CAL.ref=new Date();V.calendar()">Hôm nay</button><button class="btn sm" aria-label="Khoảng thời gian sau" onclick="calMove(1)">›</button><b>${title}</b><div class="seg"><button class="${CAL.mode==='week'?'on':''}" onclick="CAL.mode='week';V.calendar()">Tuần</button><button class="${CAL.mode==='month'?'on':''}" onclick="CAL.mode='month';V.calendar()">Tháng</button></div></div></div>
-<p class="small muted">Lịch các bản ghi đã tạo tại đây. Nút + mở bản nháp; bài chỉ được lên lịch khi bạn xác nhận trong trình soạn.</p>${!list.some(p=>days.some(d=>same(new Date(p.time),d)))?'<div class="card muted">Chưa có bài trong khoảng thời gian và bộ lọc này. Chọn + ở một ngày để soạn bài hoặc đổi bộ lọc.</div>':''}<div class="cal">${['T2','T3','T4','T5','T6','T7','CN'].map(x=>`<div class="small muted" style="text-align:center">${x}</div>`).join('')}${days.map(d=>{const ev=list.filter(p=>same(new Date(p.time),d)).sort((a,b)=>a.time-b.time);const ds=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;return `<div class="d ${same(d,new Date())?'today':''}" style="${CAL.mode==='month'&&d.getMonth()!==r.getMonth()?'opacity:.45;':''}${CAL.mode==='week'?'min-height:320px':''}"><div class="row" style="justify-content:space-between"><b>${d.getDate()}</b><button class="btn sm" aria-label="Soạn bài cho ngày ${ds}" title="Soạn bài cho ngày này" onclick="newAt('${ds}')">+</button></div>${ev.map(p=>`<span class="ev" style="background:${col[p.status]||'#f1f5f9'}" title="${esc((STL[p.status]||'Chưa rõ trạng thái')+': '+p.content)}">${esc(STL[p.status]||'Chưa rõ trạng thái')} · ${new Date(p.time).toTimeString().slice(0,5)} ${esc(p.content.slice(0,40))}</span>`).join('')}${CAL.mode==='week'&&!ev.length?'<div class="small muted" style="margin-top:6px">Không có bài đăng</div>':''}</div>`}).join('')}</div>
+<p class="small muted">${managedApp()?'Hiển thị tối đa 200 bản ghi gần nhất từ hàng đợi của shop đang chọn.':'Lịch các bản ghi demo đã tạo tại đây.'} Nút + mở bản nháp; bài chỉ được lên lịch khi bạn xác nhận.</p>${managedApp()?(CAL.error?'<p role="alert">'+esc(CAL.error)+'</p>':!SHOP.ready||CAL.pending?'<p role="status">Đang tải lịch đăng của shop…</p>':'')+(`<button class="btn sm" onclick="scheduledLoad()" ${!SHOP.ready||CAL.pending?'disabled':''}>Làm mới lịch</button>`):''}${(!managedApp()||SHOP.ready&&!CAL.pending&&!CAL.error)&&!list.some(p=>days.some(d=>same(new Date(p.time),d)))?'<div class="card muted">Chưa có bài trong khoảng thời gian và bộ lọc này. Chọn + ở một ngày để soạn bài hoặc đổi bộ lọc.</div>':''}<div class="cal">${['T2','T3','T4','T5','T6','T7','CN'].map(x=>`<div class="small muted" style="text-align:center">${x}</div>`).join('')}${days.map(d=>{const ev=list.filter(p=>same(new Date(p.time),d)).sort((a,b)=>a.time-b.time);const ds=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;return `<div class="d ${same(d,new Date())?'today':''}" style="${CAL.mode==='month'&&d.getMonth()!==r.getMonth()?'opacity:.45;':''}${CAL.mode==='week'?'min-height:320px':''}"><div class="row" style="justify-content:space-between"><b>${d.getDate()}</b><button class="btn sm" aria-label="Soạn bài cho ngày ${ds}" title="Soạn bài cho ngày này" onclick="newAt('${ds}')">+</button></div>${ev.map(p=>`<span class="ev" style="background:${col[p.status]||'#f1f5f9'}" title="${esc((STL[p.status]||'Chưa rõ trạng thái')+': '+p.content)}">${esc(STL[p.status]||'Chưa rõ trạng thái')} · ${new Date(p.time).toTimeString().slice(0,5)} ${esc(p.content.slice(0,40))}</span>`).join('')}${CAL.mode==='week'&&!ev.length?'<div class="small muted" style="margin-top:6px">Không có bài đăng</div>':''}</div>`}).join('')}</div>
 <div class="row small" style="margin-top:10px"><span class="tag st-published">Đã đăng</span><span class="tag st-scheduled">Đã lên lịch</span><span class="tag st-failed">Thất bại</span><span class="tag">Cần kiểm tra kết quả</span><span class="tag">Đang đăng</span></div>`}
 function calMove(n){const r=new Date(CAL.ref);if(CAL.mode==='month'){r.setDate(1);r.setMonth(r.getMonth()+n)}else r.setDate(r.getDate()+7*n);CAL.ref=r;V.calendar()}
 function newAt(ds){freshDraft(()=>{D.when='later';D.date=ds;D.time='20:00';go('create')})}
@@ -1092,7 +1092,15 @@ function applyPublishJobs(jobs,shop){
   const status=({sent:'published',pending:'scheduled',retryable:'scheduled',sending:'processing',unknown:'unknown',failed:'failed'})[j.status];
   if(status&&post.status!==status){post.status=status;post.error=j.errorCode||null;if(j.url)post.url=j.url;changed=true;}
  }
- if(changed){save();if(route==='posts'||route==='calendar')render();}
+ if(changed){save();if(route==='posts')render();}
+ if(CAL.shop===shop){
+  let calendarChanged=false;
+  for(const row of CAL.rows){
+   const status=QUEUE_CAL_STATUS[byId.get(row.id)?.status];
+   if(status&&status!==row.status){row.status=status;calendarChanged=true;}
+  }
+  if(calendarChanged&&route==='calendar')render();
+ }
 }
 let JOB_WATCH=null;
 function stopJobWatch(){if(JOB_WATCH)JOB_WATCH.abort();JOB_WATCH=null;}
@@ -1318,13 +1326,40 @@ async function submitSocialDraft(chs){
   const post=prior||{id:uid(),type:'post',content:submitted.content,media,channels:[...chs],custom:submitted.custom,metrics:{},time:runAt?runAt*1000:Date.now(),createdBy:'Bạn',socialAttemptId:attemptKeys.join(':')};
   Object.assign(post,{jobs:items,schedId:ids[0],status:socialPostStatus(items),url:items.find(j=>j.url)?.url,error:items.filter(j=>j.errorCode).map(j=>j.errorCode).join('; ')||null});
   if(!prior)S.posts.unshift(post);save();
+  if(CAL.shop===shop)scheduledLoad();
   const accepted=items.length===channels.length&&items.every(j=>j.id&&['sent','pending','retryable','sending'].includes(j.status));
   if(accepted&&D===editor&&JSON.stringify(D)===snapshot){post.assets=syncDraftToKho();save();const more=D.more;D=newDraft();D.more=more;saveDraft();more?V.create():go('posts');}
   toast(post.status==='published'?'Nền tảng đã xác nhận bài đăng.':accepted?'Đã lưu vào hàng đợi đăng bài.':'Chưa hoàn tất đăng bài. Bản nháp được giữ; kiểm tra lịch sử trước khi gửi lại.');
  }finally{composerPublishing=false;const current=$('#sub');if(current){current.textContent=D.when==='later'?'Lên lịch':'Đăng bài';upd();}}
 }
 async function submitPostReal(chs){return submitSocialDraft(chs)}
-async function scheduledLoad(){if(!managedApp()||!APP_SCOPE||!SHOP.ready)return;let list=[];try{const r=await cloudRequest('/channels/scheduled');list=Array.isArray(r&&r.scheduled)?r.scheduled:[]}catch(e){return}const byId={};list.forEach(s=>{if(s&&s.id)byId[s.id]=s});let ch=false;S.posts.forEach(p=>{if(!p.schedId)return;const s=byId[p.schedId];if(!s)return;if(s.status==='posted'&&p.status!=='published'){p.status='published';p.error=null;if(s.url)p.url=s.url;(p.channels||[]).forEach(id=>{const c=chById(id);if(c&&c.real&&!p.metrics[id])p.metrics[id]={views:0,likes:0,comments:0,shares:0}});ch=true}else if(s.status==='failed'&&p.status!=='failed'){p.status='failed';p.error=s.error||'Đăng theo lịch thất bại.';ch=true}else if(s.status==='scheduled'&&p.status!=='scheduled'&&p.status!=='published'){p.status='scheduled';ch=true}});if(ch){save();if(route==='posts'||route==='calendar')render()}}
+const QUEUE_CAL_STATUS={sent:'published',posted:'published',pending:'scheduled',scheduled:'scheduled',retryable:'scheduled',sending:'processing',processing:'processing',unknown:'unknown',failed:'failed'};
+let calendarRequest=0;
+async function scheduledLoad(){
+ if(!managedApp()||!APP_SCOPE||!SHOP.ready)return;
+ const shop=SHOP.id;
+ if(CAL.shop===shop&&CAL.pending)return;
+ const request=++calendarRequest;
+ if(CAL.shop!==shop)CAL.rows=[];
+ Object.assign(CAL,{shop,pending:true,error:''});
+ if(route==='calendar')V.calendar();
+ try{
+  const result=await cloudRequest('/channels/scheduled');
+  if(SHOP.id!==shop||request!==calendarRequest)return;
+  CAL.rows=(Array.isArray(result.scheduled)?result.scheduled:[]).flatMap(job=>{
+   const status=QUEUE_CAL_STATUS[job.status];
+   if(!status||!Number.isFinite(job.run_at)||job.run_at<=0)return [];
+   return [{id:job.id,provider:job.provider,type:'post',content:job.content||job.title||'',time:job.run_at*1000,status,channels:[]}];
+  });
+ }catch(error){
+  if(SHOP.id===shop&&request===calendarRequest){
+   if(error.status===403)CAL.rows=[];
+   CAL.error=error.status===403?'Vai trò hiện tại không có quyền xem lịch đăng.':'Chưa tải được lịch đăng. Hãy thử lại.';
+  }
+ }finally{
+  if(SHOP.id===shop&&request===calendarRequest){CAL.pending=false;if(route==='calendar')render();}
+ }
+}
 V.hashtags=()=>{$('#view').innerHTML=`<div class="card"><h3>Tạo bộ hashtag</h3><p class="small muted">Bộ hashtag được lưu trên trình duyệt này để tái sử dụng khi soạn bài; chưa đồng bộ giữa thiết bị.</p><div class="grid g2"><div><label>Tên bộ</label><input id="hs_n" placeholder="VD: Đại lý cước"></div><div><label>Hashtag (cách nhau bởi dấu cách)</label><input id="hs_t" placeholder="#ootd #fashion"></div></div><div style="margin-top:10px"><button class="btn pri" onclick="addHs()">Thêm bộ hashtag</button></div></div>${S.hashtags.map(h=>`<div class="card row" style="justify-content:space-between"><div><b>${esc(h.name)}</b><div>${h.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div></div><button class="btn sm danger" onclick="S.hashtags=S.hashtags.filter(x=>x.id!=='${h.id}');save();V.hashtags()">Xóa</button></div>`).join('')||'<div class="card muted">Chưa có bộ hashtag. Nhập tên và hashtag ở trên để tạo bộ đầu tiên.</div>'}`}
 function addHs(){const n=$('#hs_n').value.trim(),t=$('#hs_t').value.split(/[\s,]+/).filter(Boolean).map(x=>x.startsWith('#')?x:'#'+x);if(!n||!t.length)return toast('Nhập tên và hashtag');S.hashtags.push({id:uid(),name:n,tags:t});save();V.hashtags()}
 V.settings=()=>{const s=S.settings;$('#view').innerHTML=`<div class="card"><h3>🏢 Hồ sơ doanh nghiệp & quy tắc nội dung</h3><p class="small muted">Quy tắc được lưu trên trình duyệt này, chưa đồng bộ giữa thiết bị. AI tạo nội dung và mô phỏng chatbot dùng các thông tin này; yêu cầu AI gửi kèm chúng tới endpoint được cấu hình.</p>

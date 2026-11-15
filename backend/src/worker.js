@@ -1,4 +1,5 @@
 import {handleLibrarySource} from './library-sources.js';
+import { handleLibraryStorage } from './library-storage.js';
 import {handleMessaging,handleReplyWebhook,runPendingReplies} from './reply-messaging.js';
 import {handleReplies} from './replies.js';
 import { handleDrive } from './drive.js';
@@ -119,6 +120,7 @@ export default {
       if (expectedScope && expectedScope !== await scopeFor(who.owner)) return json({ code: 'ACCOUNT_CHANGED', error: 'Tài khoản đã thay đổi. Tải lại trang trước khi tiếp tục.' }, 403);
       if (path==='/api/replies/config'||path==='/api/replies/preview') return handleReplies(request, env, who, json);
       if (path.startsWith('/api/replies/')) return handleMessaging(request,env,who,json);
+      if (path === '/api/library/storage' || path.startsWith('/api/library/storage/')) return handleLibraryStorage(request, env, who, json);
       if (path.startsWith('/api/library/drive/')) return handleDrive(request, env, who, json);
       if (path.startsWith('/api/library/')) return handleLibrarySource(request, env, who, json);
       if (path.startsWith('/api/social/')) return handleSocial(request, env, who, json);

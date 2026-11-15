@@ -43,12 +43,15 @@ test('YouTube UI distinguishes setup from connection and sends the chosen video 
 function edit(r,text='Bản nháp cần lưu') {r.w.document.querySelector('#ct').value=text;r.w.document.querySelector('#ct').dispatchEvent(new r.w.Event('input'));}
 
 test('Managed application starts empty and separates local state from demo',async()=>{
-  const r=runtime();try{
+  const original={content:'Nháp trước khi tách shop',media:[]};
+  const r=runtime({stored:{['pdk_draft_v1:'+scope]:original}});try{
     await settle();assert.deepEqual(r.errors,[]);
+    assert.equal(r.read('D.content'),'');
     assert.equal(r.read('S.posts.length'),0);assert.equal(r.read('S.channels.length'),0);assert.equal(r.read('S.convos.length'),0);
     assert.ok(r.w.document.querySelector('#cloud_save'));
     edit(r,'Nháp của Alice');
-    assert.equal(JSON.parse(r.w.localStorage.getItem('pdk_draft_v1:'+scope)).content,'Nháp của Alice');
+    assert.equal(JSON.parse(r.w.localStorage.getItem('pdk_draft_v1:'+scope+':unassigned')).content,'Nháp của Alice');
+    assert.deepEqual(JSON.parse(r.w.localStorage.getItem('pdk_draft_v1:'+scope)),original);
     assert.equal(r.w.localStorage.getItem('pdk_draft_v1'),null);
   } finally {r.close()}
 });
@@ -484,7 +487,7 @@ test('add-account respects viewer permissions and refuses a stale shop action',a
 });
 
 test('login recovery preserves draft and uses the normal authentication gate for an expired session',async()=>{
- const r=runtime();try{await settle();edit(r,'Preserve before login');r.w.cloudRequest=async()=>{throw Object.assign(Error('Session expired'),{status:401});};await r.w.openShopPostLogin();assert.equal(r.read('D.content'),'Preserve before login');assert.match(r.w.localStorage.getItem('pdk_draft_v1:'+scope),/Preserve before login/);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);}finally{r.close();}
+ const r=runtime();try{await settle();edit(r,'Preserve before login');r.w.cloudRequest=async()=>{throw Object.assign(Error('Session expired'),{status:401});};await r.w.openShopPostLogin();assert.equal(r.read('D.content'),'Preserve before login');assert.match(r.w.localStorage.getItem('pdk_draft_v1:'+scope+':unassigned'),/Preserve before login/);assert.equal(r.requests.filter(x=>x.path==='/auth/logout').length,0);}finally{r.close();}
 });
 
 test('channel tabs separate shop accounts from available platforms and management menus use exact actions',async()=>{
@@ -814,4 +817,59 @@ test('Library offers OAuth and import only for configured sources and permitted 
   assert.equal(doc.querySelector('#lb_email details'),null);
   for(const name of Object.keys(statuses))assert.ok(r.requests.some(req=>req.path==='/api/library/'+name+'/status'&&req.headers['X-ShopPost-Shop']==='s_aaaaaaaaaa'));
  }finally{r.close();}
+});
+
+test('Library writes to the selected shop, restores its composer, and discards a late list from another shop', async () => {
+ const a='s_aaaaaaaaaa',b='s_bbbbbbbbbb',firstB=deferred();
+ const records=new Map([[a,new Map()],[b,new Map()]]);
+ const lateAsset={id:'other',name:'Tệp shop B',kind:'text',text:'B riêng',source:'upload',created:1,tags:[],size:0};
+ let waitB=true;
+ const shops={defaultShopId:a,shops:[a,b].map((id,i)=>({id,name:'Shop '+(i?'B':'A'),role:'owner',permissions:['drafts.view','drafts.create']}))};
+ const root='/api/library/storage';
+ const api=async(path,options)=>{
+  if(path==='/api/shops')return Response.json(shops);
+  const shop=options.headers['X-ShopPost-Shop'];
+  if(path===root){
+   if(shop===b&&waitB){waitB=false;await firstB.promise;}
+   return Response.json({records:[...records.get(shop).values()],next:null});
+  }
+  if(path.startsWith(root+'/')){
+   const [bucket,id]=path.slice(root.length+1).split('/');
+   const {record,revision}=JSON.parse(options.body);
+   assert.equal(revision,null);
+   const stored={bucket,id,record,revision:'one',file:null};
+   records.get(shop).set(id,stored);
+   return Response.json(stored);
+  }
+  return Response.json({});
+ };
+ const r=runtime({api,route:'library'});
+ try {
+  await settleMore();
+  r.read("D.content='Nháp shop A';saveDraft();lbAddText()");
+  r.w.document.querySelector('#lt_t').value='Tài nguyên A';
+  r.w.lbSaveText();
+  await settleMore();
+  assert.equal(records.get(a).size,1);
+  assert.match(r.w.document.querySelector('#view').textContent,/Tài nguyên A/);
+  r.w.shopSwitch(b);
+  assert.equal(r.read('D.content'),'');
+  assert.doesNotMatch(r.w.document.querySelector('#view').textContent,/Tài nguyên A/);
+  r.w.shopSwitch(a);
+  assert.equal(r.read('D.content'),'Nháp shop A');
+  records.get(b).set('other',{bucket:'assets',id:'other',record:lateAsset,revision:'two',file:null});
+  firstB.resolve();
+  await settleMore();
+  assert.doesNotMatch(r.w.document.querySelector('#view').textContent,/Tệp shop B/);
+  const second=runtime({api,route:'library'});
+  try {
+   await settleMore();
+   assert.match(second.w.document.querySelector('#view').textContent,/Tài nguyên A/);
+   assert.equal(second.read('D.content'),'');
+   second.w.shopSwitch(b);
+   await settleMore();
+   assert.match(second.w.document.querySelector('#view').textContent,/Tệp shop B/);
+   assert.doesNotMatch(second.w.document.querySelector('#view').textContent,/Tài nguyên A/);
+  } finally {second.close()}
+ } finally {r.close()}
 });

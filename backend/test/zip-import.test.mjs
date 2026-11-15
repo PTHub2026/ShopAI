@@ -14,7 +14,7 @@ async function runtime(){
  const transaction=db.transaction.bind(db);db.transaction=(stores,mode)=>{if(mode==='readwrite'&&[stores].flat().includes('kv'))writes++;return transaction(stores,mode)};
  const get=(s,k)=>new Promise((resolve,reject)=>{const r=db.transaction(s).objectStore(s).get(k);r.onsuccess=()=>resolve(r.result);r.onerror=reject});
  const all=s=>new Promise(resolve=>{const r=db.transaction(s).objectStore(s).getAll();r.onsuccess=()=>resolve(r.result)});
- const c=vm.createContext({Blob,File,WritableStream,AbortController,console,setTimeout,clearTimeout,window:{zip},S:{assets:[],channels:[],folders:[]},LB:{folder:'all'},KIND_FOLDER:{},BLOBS:{},IDB:{db,get,del:(s,k)=>db.transaction(s,'readwrite').objectStore(s).delete(k)},uid:()=>String(++seq),URL:{createObjectURL:()=>{const u='blob:'+ ++seq;urls.add(u);return u},revokeObjectURL:u=>urls.delete(u)},Image:class{set src(v){queueMicrotask(()=>this.onerror())}},route:'other',toast:()=>{},modal:()=>{},esc:s=>s,save:()=>{},persist:()=>{},LS:{setItem:()=>{}},KEY:'state',STORE:{},_svT:null});
+ const c=vm.createContext({Blob,File,WritableStream,AbortController,console,setTimeout,clearTimeout,window:{zip},localShop:'',managedApp:()=>false,shopLocalKey:key=>key,fileKey:key=>key,libraryRememberFile:()=>{},libraryCapture:()=>{},S:{assets:[],channels:[],folders:[]},LB:{folder:'all'},KIND_FOLDER:{},BLOBS:{},IDB:{db,get,del:(s,k)=>db.transaction(s,'readwrite').objectStore(s).delete(k)},uid:()=>String(++seq),URL:{createObjectURL:()=>{const u='blob:'+ ++seq;urls.add(u);return u},revokeObjectURL:u=>urls.delete(u)},Image:class{set src(v){queueMicrotask(()=>this.onerror())}},route:'other',toast:()=>{},modal:()=>{},esc:s=>s,save:()=>{},persist:()=>{},LS:{setItem:()=>{}},KEY:'state',STORE:{},_svT:null});
  c.IDB=vm.runInContext('(function(){'+html.slice(html.indexOf('const IDB={'),html.indexOf('const STORE='))+';return IDB})()',c);c.IDB.db=db;vm.runInContext(html.slice(html.indexOf('function save(){'),html.indexOf("addEventListener('beforeunload'")),c);vm.runInContext(source,c);c.lbLoadZip=async()=>zip;c.videoPoster=async()=>null;
  return {c,db,get,all,urls,writes:()=>writes,close:()=>db.close(),report:()=>({added:0,zipAdded:0,skipped:0,failed:0,details:[]})};
 }
@@ -33,3 +33,30 @@ test('ZIP completion never replaces another dialog or opens over another screen'
 
 test('autosave and Drive metadata writes during ZIP commit preserve imported assets and edits',async()=>{const r=await runtime();try{const original=r.db.transaction.bind(r.db);let concurrent;r.db.transaction=(stores,mode)=>{const tx=original(stores,mode);if(mode==='readwrite'&&Array.isArray(stores)&&stores.includes('kv'))queueMicrotask(()=>{r.c.S.note='edited during ZIP';r.c.persist();r.c.S.assets.push({id:'drive',name:'Drive file'});concurrent=r.c.IDB.put('kv','state',JSON.stringify(r.c.S))});return tx};await r.c.lbImportZip(await archive([['a.png',png]]),r.report());await concurrent;await new Promise(resolve=>setTimeout(resolve,150));const state=JSON.parse(await r.get('kv','state'));assert.equal(state.assets.length,2);assert.equal(state.note,'edited during ZIP');}finally{r.close()}});
 test('failed ZIP transaction still saves unrelated pending edits',async()=>{const r=await runtime();try{r.c.S.note='pending edit';r.c.save();const original=r.db.transaction.bind(r.db);r.db.transaction=(stores,mode)=>{const tx=original(stores,mode);if(mode==='readwrite'&&Array.isArray(stores)&&stores.includes('kv'))queueMicrotask(()=>tx.abort());return tx};await r.c.lbImportZip(await archive([['a.png',png]]),r.report());await new Promise(resolve=>setTimeout(resolve,150));assert.equal(JSON.parse(await r.get('kv','state')).note,'pending edit')}finally{r.close()}});
+
+test('ZIP bytes and metadata stay in the original shop when the selected shop changes',async()=>{
+ const r=await runtime();
+ try{
+  r.c.localShop='shop-a';
+  r.c.shopLocalKey=(key,shop=r.c.localShop)=>key+':'+shop;
+  r.c.fileKey=(key,shop=r.c.localShop)=>shop+':'+key;
+  const report=r.report();
+  await r.c.lbImportZip(await archive([['a.png',png]]),report);
+  assert.equal(report.added,1);
+  const [asset]=JSON.parse(await r.get('kv','state:shop-a')).assets;
+  assert.deepEqual(Buffer.from(await (await r.get('files','shop-a:'+asset.id)).arrayBuffer()),png);
+  assert.equal(await r.get('kv','state:shop-b'),undefined);
+
+  let proceed;
+  const pendingFile=await archive([['pending.png',png]]);
+  const loadZip=r.c.lbLoadZip;
+  r.c.lbLoadZip=()=>new Promise(resolve=>{proceed=resolve});
+  const pending=r.c.lbImportZip(pendingFile,r.report());
+  r.c.localShop='shop-b';
+  r.c.S={assets:[],channels:[],folders:[]};
+  proceed(await loadZip());
+  await pending;
+  assert.equal(r.c.S.assets.length,0);
+  assert.equal((await r.all('files')).length,1);
+ }finally{r.close()}
+});

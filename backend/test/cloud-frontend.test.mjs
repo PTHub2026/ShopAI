@@ -729,3 +729,40 @@ test('Opening analytics directly loads reports once the shop is ready',async()=>
  }finally{r.close();}
 });
 
+
+test('Managed pages cannot start the offline QA suite',async()=>{
+ const r=runtime();try{
+  await settle();
+  r.w.go('settings');
+  assert.doesNotMatch(r.w.document.querySelector('#view').textContent,/Mở trang kiểm thử/);
+  r.w.go('qa');
+  assert.equal(r.w.document.querySelector('#qa_run'),null);
+  const state=r.read('S');
+  await r.w.runQA();
+  assert.equal(r.read('S'),state);
+  assert.notEqual(r.w.QA_RUNNING,true);
+ }finally{r.close();}
+});
+
+test('Messaging activation explains when the page is active in another shop',async()=>{
+ const r=runtime();try{
+  await settle();
+  r.read("route='bot'; SHOP.id='s_testshop'; RPL.shop=SHOP.id; RPL.channels=[{id:'test-page', name:'Test Page',ready:true,provider:'facebook'}]");
+  const attempts=[];
+  r.w.cloudRequest=async(path,options)=>{
+   attempts.push(options?.method||'GET');
+   if(!options)return {ready:true};
+   throw Object.assign(Error('target_already_active'),{code:'target_already_active'});
+  };
+  r.w.rplLoad=async()=>{};
+  const messages=[];
+  r.w.toast=message=>messages.push(message);
+  await r.w.rplActivate('test-page',true);
+  r.w.document.querySelector('#ask_yes').click();
+  await settle();
+  assert.deepEqual(attempts,['GET','PATCH']);
+  assert.equal(messages.length,1);
+  assert.match(messages[0],/đang bật trả lời tự động ở một shop khác/i);
+  assert.doesNotMatch(messages[0],/target_already_active/);
+ }finally{r.close();}
+});

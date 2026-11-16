@@ -105,3 +105,37 @@ test('manual retry resets unknown+sending_interrupted job to pending, leaves oth
   assert.equal(DB.sqlite.prepare('SELECT status FROM publish_jobs WHERE id=?').get('j_sent').status,'sent');
  }finally{DB.sqlite.close();}
 });
+
+test('manual retry resets unknown+delivery_uncertain job to pending (Zalo verify failure recovery)',async()=>{
+ const DB=sqliteDB();
+ try{
+  DB.sqlite.exec(readFileSync(new URL('../migrations/0006_scheduled.sql',import.meta.url),'utf8'));
+  await ensureSocialSchema(DB);
+  const t=Math.floor(Date.now()/1000);
+  const shopId='s_testshop2';
+  DB.sqlite.prepare("INSERT INTO shops (id,name,owner,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)").run(shopId,'Test shop 2','user2',t,t);
+  DB.sqlite.prepare("INSERT INTO shop_members (shop_id,user_id,role,can_publish,created_at) VALUES (?,?,'owner',1,?)").run(shopId,'user2',t);
+  DB.sqlite.prepare("INSERT INTO channels (id,shop_id,provider,external_id,name,token,token_iv,status,connected_by,created_at,updated_at) VALUES ('ch2',?,'telegram','tg2','TG2','tok','iv','connected','user2',?,?)").run(shopId,t,t);
+  const insert=DB.sqlite.prepare(`INSERT INTO publish_jobs (id,shop_id,account_id,idempotency_key,kind,payload,status,error_code,created_by,created_at,updated_at) VALUES (?,?,'ch2',?,'text','{}',?,?,'user2',?,?)`);
+  // Simulate a Zalo publish job stuck in unknown+delivery_uncertain (verify call failed after article create)
+  insert.run('j_du',shopId,'du1','unknown','delivery_uncertain',t,t);
+  // A job with unknown status but a different error_code must NOT be reset
+  insert.run('j_other',shopId,'du2','unknown','other_unknown_code',t,t);
+
+  const json=(v,s=200)=>({status:s,data:v});
+  const env={DB,SOCIAL_TOKEN_KEY:Buffer.from(webcrypto.getRandomValues(new Uint8Array(32))).toString('base64')};
+  const who={owner:'user2'};
+
+  // Manual retry of unknown+delivery_uncertain → resets to pending, then deliver() runs (account_revoked since no real Telegram)
+  const req1=new Request('https://x.com/api/social/jobs/j_du/retry',{method:'POST'});
+  await handleSocial(req1,env,who,json);
+  const after1=DB.sqlite.prepare('SELECT status FROM publish_jobs WHERE id=?').get('j_du');
+  assert.notEqual(after1.status,'unknown','unknown+delivery_uncertain job must escape stuck state after manual retry');
+
+  // Manual retry of unknown+other_unknown_code → deliver() returns 409 (not reset, status stays unknown)
+  const req2=new Request('https://x.com/api/social/jobs/j_other/retry',{method:'POST'});
+  const r2=await handleSocial(req2,env,who,json);
+  assert.equal(r2.status,409);
+  assert.equal(DB.sqlite.prepare('SELECT status FROM publish_jobs WHERE id=?').get('j_other').status,'unknown');
+ }finally{DB.sqlite.close();}
+});

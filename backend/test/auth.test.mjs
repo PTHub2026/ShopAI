@@ -369,8 +369,12 @@ test('Email OTP qua binding Cloudflare: lỗi gửi không lộ chi tiết nội
       assert.equal((await post(e, '/auth/email/start', { email: 'loi-binding@shoppost.net' })).status, 502);
       assert.equal(row(e.DB, 'SELECT sent_count, sent_at FROM auth_otp_codes WHERE email = ?', 'loi-binding@shoppost.net').sent_count, 0);
     });
-    assert.equal(logged.length, 1);
-    assert.match(logged[0], /E_SENDER_NOT_VERIFIED/); assert.equal(logged[0].includes('3f8-noi-bo'), false); assert.equal(logged[0].includes('loi-binding@'), false);
+    assert.equal(logged.length, 2);
+    for (const entry of logged) {
+      assert.match(entry, /E_SENDER_NOT_VERIFIED/);
+      assert.equal(entry.includes('3f8-noi-bo'), false);
+      assert.equal(entry.includes('loi-binding@'), false);
+    }
   });
   // Lỗi không có mã: ghi "unknown"; sendEmail không bao giờ ném lỗi ra ngoài.
   await captureErrors(async logged => {

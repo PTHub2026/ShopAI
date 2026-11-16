@@ -371,13 +371,15 @@ async function otpSend(env, key, recipient, buildEmail) {
     const wait = windowStart + 3600 - t;
     return { status: 429, data: { error: 'Đã gửi quá nhiều mã cho email này. Vui lòng thử lại sau ' + Math.ceil(wait / 60) + ' phút.', retryAfter: wait }, extra: { 'Retry-After': String(wait) } };
   }
-  const code = otpCode(), salt = randomToken(16);
+  const code = otpCode(), salt = randomToken(16), codeHash = await hashHex(salt + ':' + key + ':' + code);
   await env.DB.prepare('INSERT INTO auth_otp_codes (email, code_hash, salt, expires_at, attempts, sent_at, window_start, sent_count) VALUES (?, ?, ?, ?, 0, ?, ?, ?) ON CONFLICT(email) DO UPDATE SET code_hash = excluded.code_hash, salt = excluded.salt, expires_at = excluded.expires_at, attempts = 0, sent_at = excluded.sent_at, window_start = excluded.window_start, sent_count = excluded.sent_count')
-    .bind(key, await hashHex(salt + ':' + key + ':' + code), salt, t + OTP_TTL, t, windowStart, count + 1).run();
+    .bind(key, codeHash, salt, t + OTP_TTL, t, windowStart, count + 1).run();
   let sent = false;
   try { sent = await sendEmail(env, { to: recipient, ...buildEmail(code) }); } catch { sent = false; }
   if (!sent) {
-    await env.DB.prepare("UPDATE auth_otp_codes SET code_hash = '' WHERE email = ?").bind(key).run();
+    // A delivery failure must not consume either the hourly quota or resend window.
+    // Guard on this attempt's hash so a newer concurrent request is never rolled back.
+    await env.DB.prepare("UPDATE auth_otp_codes SET code_hash = '', sent_count = ?, sent_at = 0 WHERE email = ? AND code_hash = ?").bind(count, key, codeHash).run();
     return { status: 502, data: { error: 'Không gửi được email lúc này. Vui lòng thử lại sau ít phút.' } };
   }
   return { status: 200, data: { ok: true, retryAfter: OTP_RESEND_AFTER, expiresIn: OTP_TTL } };
@@ -600,12 +602,14 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
           return json({ error: `Đã gửi quá nhiều mã cho ${viaPhone ? 'số điện thoại' : 'email'} này. Vui lòng thử lại sau ` + Math.ceil(wait / 60) + ' phút.', retryAfter: wait }, 429, { 'Retry-After': String(wait) });
         }
         const code = sms === 'twilio' ? null : otpCode(), salt = randomToken(16);
+        const codeHash = code ? await hashHex(salt + ':' + email + ':' + code) : TWILIO_MARK;
         await env.DB.prepare('INSERT INTO auth_otp_codes (email, code_hash, salt, expires_at, attempts, sent_at, window_start, sent_count) VALUES (?, ?, ?, ?, 0, ?, ?, ?) ON CONFLICT(email) DO UPDATE SET code_hash = excluded.code_hash, salt = excluded.salt, expires_at = excluded.expires_at, attempts = 0, sent_at = excluded.sent_at, window_start = excluded.window_start, sent_count = excluded.sent_count')
-          .bind(email, code ? await hashHex(salt + ':' + email + ':' + code) : TWILIO_MARK, salt, t + OTP_TTL, t, windowStart, count + 1).run();
+          .bind(email, codeHash, salt, t + OTP_TTL, t, windowStart, count + 1).run();
         let sent = false;
         try { sent = viaPhone ? await sendSmsCode(env, sms, email, code) : await sendEmail(env, { to: email, ...otpEmail(code) }); } catch { sent = false; }
         if (!sent) {
-          await env.DB.prepare("UPDATE auth_otp_codes SET code_hash = '' WHERE email = ?").bind(email).run();
+          // Do not consume quota or resend time after a provider failure; avoid rolling back a newer attempt.
+          await env.DB.prepare("UPDATE auth_otp_codes SET code_hash = '', sent_count = ?, sent_at = 0 WHERE email = ? AND code_hash = ?").bind(count, email, codeHash).run();
           return json({ error: viaPhone ? 'Không gửi được tin nhắn SMS lúc này. Vui lòng thử lại sau ít phút.' : 'Không gửi được email lúc này. Vui lòng thử lại sau ít phút.' }, 502);
         }
         return json({ ok: true, retryAfter: OTP_RESEND_AFTER, expiresIn: OTP_TTL });

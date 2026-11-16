@@ -365,8 +365,9 @@ test('Email OTP qua binding Cloudflare: lỗi gửi không lộ chi tiết nội
       assert.deepEqual(JSON.parse(text), { error: 'Không gửi được email lúc này. Vui lòng thử lại sau ít phút.' });
       for (const secret of ['E_SENDER_NOT_VERIFIED', 'not verified', '3f8-noi-bo']) assert.equal(text.includes(secret), false);
       assert.equal(row(e.DB, 'SELECT code_hash FROM auth_otp_codes WHERE email = ?', 'loi-binding@shoppost.net').code_hash, '');
-      // Giới hạn gửi lại 60 giây vẫn giữ nguyên sau lỗi gửi.
-      assert.equal((await post(e, '/auth/email/start', { email: 'loi-binding@shoppost.net' })).status, 429);
+      // Lỗi gửi không tiêu hao hạn mức hoặc cửa sổ gửi lại: lần kế tiếp thử gửi lại ngay.
+      assert.equal((await post(e, '/auth/email/start', { email: 'loi-binding@shoppost.net' })).status, 502);
+      assert.equal(row(e.DB, 'SELECT sent_count, sent_at FROM auth_otp_codes WHERE email = ?', 'loi-binding@shoppost.net').sent_count, 0);
     });
     assert.equal(logged.length, 1);
     assert.match(logged[0], /E_SENDER_NOT_VERIFIED/); assert.equal(logged[0].includes('3f8-noi-bo'), false); assert.equal(logged[0].includes('loi-binding@'), false);

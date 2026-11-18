@@ -272,3 +272,23 @@ test('shop history filters by display period and paginates ties without omission
   assert.equal((await f.request(owner,'/channels/scheduled?cursor=bad',{shop})).status,400);
  }finally{f.db.sqlite.close();}
 });
+test('issue #93: sent jobs are returned as published and status=published filter matches them',async()=>{
+ const f=fixture(),owner=f.login('email:issue93@example.com');
+ try{
+  const shop=(await f.request(owner,'/session')).data.shop.id;
+  await f.request(owner,'/channels/scheduled',{shop});
+  const ins=f.db.sqlite.prepare("INSERT INTO publish_jobs(id,shop_id,account_id,idempotency_key,kind,payload,status,created_by,created_at,updated_at,scheduled_for) VALUES(?,?,'missing',?,'text',?,?,'owner',1,1,1000)");
+  ins.run('sent93',shop,'i93-sent',JSON.stringify({text:'sent post'}),'sent');
+  ins.run('pend93',shop,'i93-pend',JSON.stringify({text:'pending post'}),'pending');
+  const all=await f.request(owner,'/channels/scheduled',{shop});
+  assert.equal(all.status,200);
+  const sent=all.data.scheduled.find(x=>x.id==='sent93');
+  assert.equal(sent.status,'published');
+  assert.notEqual(sent.status,'posted');
+  const pub=await f.request(owner,'/channels/scheduled?status=published',{shop});
+  assert.equal(pub.status,200);
+  assert.deepEqual(pub.data.scheduled.map(x=>x.id),['sent93']);
+  assert.ok(pub.data.scheduled.every(x=>x.status==='published'));
+  assert.equal((await f.request(owner,'/channels/scheduled?status=posted',{shop})).status,400);
+ }finally{f.db.sqlite.close();}
+});

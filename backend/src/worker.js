@@ -148,8 +148,11 @@ export default {
     // Callback Zalo: phân biệt kết nối kênh OA (có cookie __Host-shopai_zconnect) và đăng nhập (có cookie __Host-shopai_oauth).
     // Nếu có connect cookie → kết nối kênh OA (channels.js). Nếu không → đăng nhập OAuth (auth.js, qua handleAuth bên dưới).
     if (path === '/auth/zalo/callback') {
+      // Ưu tiên đăng nhập khi cookie state đăng nhập khớp tham số state (tránh cookie kết nối OA cũ còn sót làm hỏng đăng nhập).
       const connectCookie = /(?:^|;\s*)__Host-shopai_zconnect=/.test(request.headers.get('Cookie') || '');
-      if (connectCookie) {
+      const loginState = readCookie(request, '__Host-shopai_oauth') || '';
+      const isLogin = Boolean(loginState) && loginState === (new URL(request.url).searchParams.get('state') || '');
+      if (connectCookie && !isLogin) {
         if (request.method !== 'GET') return json({ error: 'Chỉ hỗ trợ GET.' }, 405, { Allow: 'GET' });
         if (!configured(env)) return json({ error: 'Backend chưa cấu hình đầy đủ.' }, 503);
         if (!env.DB) return json({ error: 'Chưa gắn cơ sở dữ liệu.' }, 503);

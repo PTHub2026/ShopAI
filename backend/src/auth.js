@@ -18,10 +18,16 @@ const TIKTOK_USER = 'https://open.tiktokapis.com/v2/user/info/?fields=open_id,un
 const ZALO_AUTHORIZE = 'https://oauth.zaloapp.com/v4/permission';
 const ZALO_LOGIN_TOKEN = 'https://oauth.zaloapp.com/v4/access_token';
 const ZALO_LOGIN_USER = 'https://graph.zalo.me/v2.0/me?fields=id,name,picture';
-// Facebook Login (OAuth 2.0).
-const FB_AUTHORIZE = 'https://www.facebook.com/v21.0/dialog/oauth';
-const FB_TOKEN = 'https://graph.facebook.com/v21.0/oauth/access_token';
-const FB_USER = 'https://graph.facebook.com/v21.0/me?fields=id,name,picture';
+// Facebook Login (OAuth 2.0). Cùng phiên bản Graph với meta.js (META_GRAPH_VERSION, mặc định v26.0).
+const fbVersion = env => /^v\d{1,2}\.0$/.test(clean(env.META_GRAPH_VERSION)) ? clean(env.META_GRAPH_VERSION) : 'v26.0';
+const FB_AUTHORIZE = env => `https://www.facebook.com/${fbVersion(env)}/dialog/oauth`;
+const FB_TOKEN = env => `https://graph.facebook.com/${fbVersion(env)}/oauth/access_token`;
+const FB_USER = env => `https://graph.facebook.com/${fbVersion(env)}/me?fields=id,name`;
+// appsecret_proof = HMAC-SHA256(access_token, app_secret) dạng hex — bắt buộc khi app bật "Require App Secret" (Meta) / appsecret_proof (Zalo).
+async function appSecretProof(secret, accessToken) {
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(accessToken))), b => b.toString(16).padStart(2, '0')).join('');
+}
 const ESMS_API = 'https://rest.esms.vn/MainService.svc/json/SendMultipleMessage_V4_post_json/';
 const TWILIO_VERIFY = 'https://verify.twilio.com/v2/Services/';
 // Với Twilio Verify, Twilio tự sinh/kiểm mã nên hàng OTP chỉ giữ dấu này (không phải hash) để áp giới hạn phía Worker.
@@ -660,7 +666,7 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
         target = ZALO_AUTHORIZE + '?' + new URLSearchParams({ app_id: clean(env.ZALO_APP_ID), redirect_uri: callbackUrl, state, code_challenge: await pkceChallenge(verifier), code_challenge_method: 'S256' });
       } else if (provider === 'facebook') {
         // Facebook Login: không dùng PKCE, dùng client_secret ở bước callback.
-        target = FB_AUTHORIZE + '?' + new URLSearchParams({ client_id: clean(env.META_APP_ID), redirect_uri: callbackUrl, state, scope: 'public_profile', response_type: 'code' });
+        target = FB_AUTHORIZE(env) + '?' + new URLSearchParams({ client_id: clean(env.META_APP_ID), redirect_uri: callbackUrl, state, scope: 'public_profile', response_type: 'code' });
       } else {
         return redirect(`/?loi=${provider}_chua_cau_hinh`);
       }
@@ -700,19 +706,19 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
       const accessToken = token.data && token.data.access_token;
       if (!token.ok || !accessToken) return fail('token');
       // Lấy hồ sơ người dùng Zalo.
-      const profile = await fetchJson(ZALO_LOGIN_USER, { headers: { access_token: accessToken } });
+      const profile = await fetchJson(ZALO_LOGIN_USER, { headers: { access_token: accessToken, appsecret_proof: await appSecretProof(clean(env.ZALO_APP_SECRET), accessToken) } });
       const zaloId = profile.data && String(profile.data.id || '');
       if (!profile.ok || !zaloId || !/^\d{5,20}$/.test(zaloId)) return fail('ho_so');
       userId = zaloId;
       userName = displayName(profile.data.name);
     } else if (provider === 'facebook') {
       // Facebook: đổi code lấy access_token (dùng client_secret, không PKCE).
-      const tokenUrl = FB_TOKEN + '?' + new URLSearchParams({ client_id: clean(env.META_APP_ID), client_secret: clean(env.META_APP_SECRET), redirect_uri: callbackUrl, code });
+      const tokenUrl = FB_TOKEN(env) + '?' + new URLSearchParams({ client_id: clean(env.META_APP_ID), client_secret: clean(env.META_APP_SECRET), redirect_uri: callbackUrl, code });
       const token = await fetchJson(tokenUrl, { method: 'GET' });
       const accessToken = token.data && token.data.access_token;
       if (!token.ok || !accessToken) return fail('token');
       // Lấy hồ sơ người dùng Facebook.
-      const profile = await fetchJson(FB_USER + '&access_token=' + encodeURIComponent(accessToken));
+      const profile = await fetchJson(FB_USER(env) + '&' + new URLSearchParams({ access_token: accessToken, appsecret_proof: await appSecretProof(clean(env.META_APP_SECRET), accessToken) }));
       const fbId = profile.data && String(profile.data.id || '');
       if (!profile.ok || !fbId || !/^\d{5,30}$/.test(fbId)) return fail('ho_so');
       userId = fbId;

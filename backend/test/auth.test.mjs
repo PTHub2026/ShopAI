@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import { createHash, webcrypto } from 'node:crypto';
+import { createHash, createHmac, webcrypto } from 'node:crypto';
 const worker = (await import(new URL('../src/worker.js', import.meta.url))).default;
 const { AUTH_SCHEMA, PASSWORD_SCHEMA, SESSION_COOKIE, hashPassword, verifyPassword, passwordError, normalizeEmail, normalizePhone, parseEmailFrom, pkceChallenge, pkceVerifier, sameText, sendEmail, tiktokChallenge } = await import(new URL('../src/auth.js', import.meta.url));
 
@@ -854,5 +854,75 @@ test('Đặt/đổi mật khẩu khi đã đăng nhập: cần phiên, đổi c�
     const token = sessionToken(social);
     const dup = await post(e, '/auth/password/set', { password: 'mat-khau-dai-bb', email: 'co-san@vidu.vn' }, withSession(token));
     assert.equal(dup.status, 409);
+  });
+});
+
+test('Đăng nhập Zalo OAuth v4 PKCE: start → callback tạo phiên zalo:<id>, gửi secret_key + appsecret_proof qua header', async () => {
+  const ZALO = { ZALO_APP_ID: '3847703053447967855', ZALO_APP_SECRET: 'zalo-secret-test' };
+  const e = env(ZALO);
+  const start = await get(e, '/auth/zalo/start');
+  assert.equal(start.status, 302);
+  const target = new URL(start.headers.get('Location'));
+  assert.equal(target.origin + target.pathname, 'https://oauth.zaloapp.com/v4/permission');
+  assert.equal(target.searchParams.get('app_id'), ZALO.ZALO_APP_ID);
+  assert.equal(target.searchParams.get('redirect_uri'), BASE + '/auth/zalo/callback');
+  assert.equal(target.searchParams.get('code_challenge_method'), 'S256');
+  const state = target.searchParams.get('state');
+  const { verifier } = row(e.DB, 'SELECT verifier FROM auth_oauth_states WHERE state = ?', state);
+  assert.equal(target.searchParams.get('code_challenge'), createHash('sha256').update(verifier).digest('base64url'));
+  await withFetch(async (url, init) => {
+    if (url === 'https://oauth.zaloapp.com/v4/access_token') {
+      assert.equal(init.headers.secret_key, ZALO.ZALO_APP_SECRET);
+      const body = Object.fromEntries(new URLSearchParams(init.body));
+      assert.deepEqual(body, { app_id: ZALO.ZALO_APP_ID, grant_type: 'authorization_code', code: 'ma-zalo', redirect_uri: BASE + '/auth/zalo/callback', code_verifier: verifier });
+      return Response.json({ access_token: 'zalo-at', expires_in: '3600' });
+    }
+    if (url.startsWith('https://graph.zalo.me/v2.0/me')) {
+      assert.equal(init.headers.access_token, 'zalo-at');
+      assert.equal(init.headers.appsecret_proof, createHmac('sha256', ZALO.ZALO_APP_SECRET).update('zalo-at').digest('hex'));
+      return Response.json({ id: '1234567890123', name: 'Người Zalo' });
+    }
+    throw new Error('Gọi ngoài dự kiến ' + url);
+  }, async () => {
+    // Cookie kết nối OA cũ còn sót không được chặn luồng đăng nhập khi state đăng nhập khớp.
+    const cb = await get(e, `/auth/zalo/callback?code=ma-zalo&state=${state}`, { Cookie: `__Host-shopai_oauth=${state}; __Host-shopai_zconnect=cu` });
+    assert.equal(cb.status, 302); assert.equal(cb.headers.get('Location'), '/');
+    assert.ok(cookieNamed(cb, SESSION_COOKIE));
+  });
+  assert.equal(row(e.DB, 'SELECT provider, display_name FROM auth_identities WHERE owner = ?', 'zalo:1234567890123').display_name, 'Người Zalo');
+});
+
+test('Đăng nhập Facebook: start → callback tạo phiên facebook:<id>, có appsecret_proof, lỗi token báo facebook_token', async () => {
+  const META = { META_APP_ID: '1690219679401963', META_APP_SECRET: 'meta-secret-test' };
+  const e = env(META);
+  const start = await get(e, '/auth/facebook/start');
+  const target = new URL(start.headers.get('Location'));
+  assert.equal(target.origin + target.pathname, 'https://www.facebook.com/v26.0/dialog/oauth');
+  assert.equal(target.searchParams.get('client_id'), META.META_APP_ID);
+  assert.equal(target.searchParams.get('redirect_uri'), BASE + '/auth/facebook/callback');
+  assert.equal(target.searchParams.get('scope'), 'public_profile');
+  const state = target.searchParams.get('state');
+  await withFetch(async url => {
+    const u = new URL(url);
+    if (u.pathname === '/v26.0/oauth/access_token') {
+      assert.equal(u.searchParams.get('client_secret'), META.META_APP_SECRET);
+      assert.equal(u.searchParams.get('redirect_uri'), BASE + '/auth/facebook/callback');
+      return Response.json({ access_token: 'fb-at', token_type: 'bearer' });
+    }
+    if (u.pathname === '/v26.0/me') {
+      assert.equal(u.searchParams.get('access_token'), 'fb-at');
+      assert.equal(u.searchParams.get('appsecret_proof'), createHmac('sha256', META.META_APP_SECRET).update('fb-at').digest('hex'));
+      return Response.json({ id: '10229876543210', name: 'Người Facebook' });
+    }
+    throw new Error('Gọi ngoài dự kiến ' + url);
+  }, async () => {
+    const cb = await get(e, `/auth/facebook/callback?code=ma-fb&state=${state}`, { Cookie: `__Host-shopai_oauth=${state}` });
+    assert.equal(cb.headers.get('Location'), '/'); assert.ok(cookieNamed(cb, SESSION_COOKIE));
+  });
+  assert.equal(row(e.DB, 'SELECT display_name FROM auth_identities WHERE owner = ?', 'facebook:10229876543210').display_name, 'Người Facebook');
+  const s2 = new URL((await get(e, '/auth/facebook/start')).headers.get('Location')).searchParams.get('state');
+  await withFetch(async () => Response.json({ error: { message: 'redirect_uri' } }, { status: 400 }), async () => {
+    const bad = await get(e, `/auth/facebook/callback?code=ma-fb&state=${s2}`, { Cookie: `__Host-shopai_oauth=${s2}` });
+    assert.equal(bad.headers.get('Location'), '/?loi=facebook_token');
   });
 });

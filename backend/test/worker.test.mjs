@@ -164,11 +164,13 @@ test('Kênh chỉ phục vụ cùng origin và cần đăng nhập + cơ sở d�
 }));
 test('Callback OA Zalo: chỉ GET và cần cơ sở dữ liệu, không áp dụng chặn cùng origin',async()=>run(async()=>{
   // POST không được hỗ trợ.
-  const post=await worker.fetch(request({path:'/auth/zalo/callback',method:'POST',headers:{Origin:'https://backend.example'}}),env({DB:{}}));
+  const post=await worker.fetch(request({path:'/auth/zalo/callback',method:'POST',headers:{Origin:'https://backend.example',Cookie:'__Host-shopai_zconnect=state'}}),env({DB:{}}));
   assert.equal(post.status,405);
   // GET không có DB → 503 (không bị 403 dù không gửi Origin — đây là điều hướng cấp trang).
-  const noDb=await worker.fetch(new Request('https://backend.example/auth/zalo/callback?code=x&state=y',{method:'GET',headers:{'Cf-Access-Jwt-Assertion':valid}}),env());
+  const noDb=await worker.fetch(new Request('https://backend.example/auth/zalo/callback?code=x&state=y',{method:'GET',headers:{'Cf-Access-Jwt-Assertion':valid,Cookie:'__Host-shopai_zconnect=state'}}),env());
   assert.equal(noDb.status,503);
+  const login=await worker.fetch(new Request('https://backend.example/auth/zalo/callback?code=x&state=y',{method:'GET'}),env());
+  assert.equal(login.status,302); assert.equal(login.headers.get('Location'),'/?loi=zalo_chua_cau_hinh');
 }));
 test('Các header bảo mật xuất hiện trên phản hồi JSON và trang HTML',async()=>run(async()=>{
   const e=env({FRONTEND_HTML:'<html><head></head><body>ShopAI</body></html>'});

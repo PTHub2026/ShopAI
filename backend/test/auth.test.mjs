@@ -118,12 +118,23 @@ test('Migration 0002_auth.sql khớp đúng schema runtime', () => {
 
 test('/auth/providers phản ánh đúng cấu hình và không lộ secret', async () => {
   const off = await (await get(env({ RESEND_API_KEY: undefined, EMAIL_FROM: undefined }), '/auth/providers')).json();
-  assert.deepEqual(off, { tiktok: { enabled: false }, phone: { enabled: false }, email: { enabled: false }, password: { enabled: false }, access: { url: issuer }, ready: false });
+  assert.deepEqual(off, { tiktok: { enabled: false }, zalo: { enabled: false }, facebook: { enabled: false }, phone: { enabled: false }, email: { enabled: false }, password: { enabled: false }, access: { url: issuer }, ready: false });
   const response = await get(env(), '/auth/providers');
   assert.equal(response.status, 200); assert.equal(response.headers.get('Cache-Control'), 'no-store');
   const text = await response.text();
-  assert.deepEqual(JSON.parse(text), { tiktok: { enabled: false }, phone: { enabled: false }, email: { enabled: true }, password: { enabled: true }, access: { url: issuer }, ready: true });
+  assert.deepEqual(JSON.parse(text), { tiktok: { enabled: false }, zalo: { enabled: false }, facebook: { enabled: false }, phone: { enabled: false }, email: { enabled: true }, password: { enabled: true }, access: { url: issuer }, ready: true });
   assert.equal(text.includes(RESEND_KEY), false);
+  for (const [provider, config, secret] of [
+    ['zalo', { ZALO_APP_ID: 'zalo-id', ZALO_APP_SECRET: 'zalo-secret' }, 'zalo-secret'],
+    ['facebook', { META_APP_ID: 'meta-id', META_APP_SECRET: 'meta-secret' }, 'meta-secret']
+  ]) {
+    const socialEnv = { RESEND_API_KEY: undefined, EMAIL_FROM: undefined, ...config };
+    const socialText = await (await get(env(socialEnv), '/auth/providers')).text();
+    const social = JSON.parse(socialText);
+    assert.equal(social[provider].enabled, true); assert.equal(social.ready, true); assert.equal(socialText.includes(secret), false);
+    assert.equal((await (await get(env({ ...socialEnv, DB: undefined }), '/auth/providers')).json())[provider].enabled, false);
+    assert.equal((await (await get(env({ ...socialEnv, [Object.keys(config)[1]]: undefined }), '/auth/providers')).json())[provider].enabled, false);
+  }
   assert.equal((await (await get(env({ EMAIL_FROM: 'sai\r\nBcc: x@y.vn' }), '/auth/providers')).json()).email.enabled, false);
   const noDb = await (await get(env({ DB: undefined }), '/auth/providers')).json();
   assert.equal(noDb.ready, false); assert.equal(noDb.tiktok.enabled || noDb.phone.enabled || noDb.email.enabled, false);
@@ -685,11 +696,10 @@ test('Thương hiệu Shoppost: giao diện hiển thị Shoppost, giữ định
   }
   assert.match(index, /<title>Shoppost × ShopTrack/); assert.match(index, /name="shopai-ai-endpoint"/); assert.match(index, /name="shopai-user-scope"/);
   assert.match(LOGIN_FILE, /<title>Đăng nhập Shoppost<\/title>/); assert.ok(LOGIN_FILE.includes('© Shoppost × ShopTrack'));
-  const order = ['id="tiktok"', 'id="phoneBtn"', 'id="emailForm"'].map(id => LOGIN_FILE.indexOf(id));
+  const order = ['id="zaloBtn"', 'id="facebookBtn"', 'id="tiktok"', 'id="phoneBtn"', 'id="emailForm"'].map(id => LOGIN_FILE.indexOf(id));
   assert.ok(order.every(i => i > 0), JSON.stringify(order)); assert.deepEqual([...order].sort((a, b) => a - b), order);
-  // Đã gỡ đăng nhập nền tảng Zalo/Facebook khỏi trang đăng nhập.
-  assert.ok(!LOGIN_FILE.includes('id="fb"') && !LOGIN_FILE.includes('id="zalo"'), 'nút Zalo/Facebook vẫn còn');
-  assert.ok(!LOGIN_FILE.includes('/auth/zalo/start') && !LOGIN_FILE.includes('setupFacebook'), 'vẫn còn tham chiếu đăng nhập Zalo/Facebook');
+  assert.match(LOGIN_FILE, /<a id="zaloBtn" class="btn zalo" href="\/auth\/zalo\/start" hidden>/);
+  assert.match(LOGIN_FILE, /<a id="facebookBtn" class="btn facebook" href="\/auth\/facebook\/start" hidden>/);
   assert.match(LOGIN_FILE, /<a id="tiktok" class="btn tiktok" href="\/auth\/tiktok\/start" hidden>/);
   assert.match(LOGIN_FILE, /<input id="phone"[^>]*type="tel"[^>]*inputmode="tel"/);
   // CSP trang đăng nhập không thêm nguồn ngoài cho TikTok/SMS (TikTok điều hướng toàn trang, SMS gửi từ máy chủ).

@@ -13,6 +13,7 @@ import { INVITE_PATH, handleApi, resolveShop } from './shops.js';
 import { channels, zaloCallback, runDueScheduledPosts, publicZaloMedia } from './channels.js';
 import { isPlatformAdmin } from './permissions.js';
 import { legalResponse } from './legal.js';
+import { brandAssetResponse } from './brand-assets.js';
 import { syncInstagramFromPages } from './meta.js';
 const INVITE_COOKIE = '__Host-shopai_invite';
 const LOGIN_REQUIRED = 'Phiên đăng nhập đã hết hạn hoặc chưa đăng nhập.';
@@ -92,6 +93,8 @@ export default {
     if(path.startsWith('/media/zalo/'))return publicZaloMedia(request,env);
     const legal = legalResponse(path, request.method);
     if (legal) return legal;
+    const brand = brandAssetResponse(path, request.method);
+    if (brand) return brand;
     if (path.startsWith('/storage/')) {
       // Bản nháp chỉ phục vụ cùng origin: chặn mọi origin khác (kể cả origin trong danh sách CORS) cho cả đọc lẫn ghi.
       if (origin && origin !== new URL(request.url).origin) return json({ error: 'Chỉ cho phép truy cập bản nháp từ cùng origin.' }, 403);

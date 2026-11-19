@@ -37,7 +37,6 @@ function env(overrides = {}) {
     ACCESS_TEAM_DOMAIN: 'test-team.cloudflareaccess.com', ACCESS_AUD: 'test-audience', ALLOWED_ORIGINS: 'https://pthub2026.github.io',
     AI: { run: async () => ({ response: 'Nội dung AI' }) }, AI_RATE_LIMITER: { limit: async () => ({ success: true }) }, DB: database(),
     RESEND_API_KEY: RESEND_KEY, EMAIL_FROM: 'Shoppost <no-reply@shoppost.net>',
-    EMAIL_LOGIN_DOMAINS: 'pthub.vn,shoptrack.vn,shoppost.net,example.com,b.vn,vidu.vn,y.vn',
     FRONTEND_HTML: '<html><head></head><body>Ứng dụng Shoppost</body></html>', LOGIN_HTML, ...overrides
   };
 }
@@ -268,42 +267,23 @@ test('Email OTP: mã hết hạn, sai quá 5 lần, gửi quá 5 mã/giờ và l
   });
 });
 
-test('Luồng mã một lần qua email chỉ dành cho @pthub.vn và @shoptrack.vn (mặc định khi không cấu hình EMAIL_LOGIN_DOMAINS)', async () => withFetch(async () => Response.json({ id: 'ok' }), async () => {
-  const e = env({ EMAIL_LOGIN_DOMAINS: undefined });
-  // Tên miền ngoài danh sách bị từ chối ở cả bước gửi mã lẫn bước xác minh (chặn tự tạo tài khoản).
-  for (const path of ['/auth/email/start', '/auth/email/verify']) {
-    const body = path.endsWith('verify') ? { email: 'nguoila@gmail.com', code: '123456' } : { email: 'nguoila@gmail.com' };
-    const r = await post(e, path, body);
-    assert.equal(r.status, 403);
-    assert.match((await r.json()).error, /@pthub\.vn và @shoptrack\.vn/);
+test('Đăng nhập mã một lần qua email mở cho mọi tên miền email', async () => withFetch(async () => Response.json({ id: 'ok' }), async () => {
+  const e = env();
+  for (const email of ['nguoidung@gmail.com', 'nhanvien@pthub.vn', 'DaoTao@ShopTrack.vn', 'ai.do@congty.com.vn']) {
+    assert.equal((await post(e, '/auth/email/start', { email })).status, 200, email);
   }
-  // Tên miền được phép gửi mã thành công (chữ hoa/thường không ảnh hưởng vì email đã chuẩn hoá).
-  for (const email of ['nhanvien@pthub.vn', 'DaoTao@ShopTrack.vn']) {
-    assert.equal((await post(e, '/auth/email/start', { email })).status, 200);
-  }
-  // Email bị từ chối không hề được tạo mã trong kho (bảng chỉ tồn tại sau khi có email hợp lệ).
-  assert.equal(row(e.DB, 'SELECT code_hash FROM auth_otp_codes WHERE email = ?', 'nguoila@gmail.com'), null);
-  // Cấu hình tuỳ biến EMAIL_LOGIN_DOMAINS được tôn trọng (bỏ khoảng trắng và tiền tố @).
-  const custom = env({ EMAIL_LOGIN_DOMAINS: ' @vidu.vn , pthub.vn ' });
-  assert.equal((await post(custom, '/auth/email/start', { email: 'a@vidu.vn' })).status, 200);
-  assert.equal((await post(custom, '/auth/email/start', { email: 'a@shoptrack.vn' })).status, 403);
+  assert.notEqual(row(e.DB, 'SELECT code_hash FROM auth_otp_codes WHERE email = ?', 'nguoidung@gmail.com'), null);
+  // Bước xác minh không còn chặn theo tên miền: mã sai trả lỗi mã, không phải 403.
+  const wrong = await post(e, '/auth/email/verify', { email: 'nguoidung@gmail.com', code: '000000' });
+  assert.notEqual(wrong.status, 403);
 }));
 
-test('Đăng ký bằng mật khẩu cũng chỉ dành cho @pthub.vn và @shoptrack.vn (chặn tự tạo tài khoản ngoài miền)', async () => withFetch(async () => Response.json({ id: 'ok' }), async () => {
-  const e = env({ EMAIL_LOGIN_DOMAINS: undefined });
-  // Tên miền ngoài danh sách bị từ chối ở cả bước gửi mã lẫn bước xác minh của luồng đăng ký.
-  for (const path of ['/auth/register/start', '/auth/register/verify']) {
-    const body = path.endsWith('verify')
-      ? { email: 'nguoila@gmail.com', code: '123456', password: '********' }
-      : { email: 'nguoila@gmail.com', password: '********' };
-    const r = await post(e, path, body);
-    assert.equal(r.status, 403);
-    assert.match((await r.json()).error, /^Đăng ký bằng email chỉ dành cho địa chỉ @pthub\.vn và @shoptrack\.vn/);
-  }
-  // Email bị từ chối không hề được tạo mã đăng ký trong kho.
-  assert.equal(row(e.DB, 'SELECT code_hash FROM auth_otp_codes WHERE email = ?', 'nguoila@gmail.com'), null);
-  // Tên miền được phép đi qua được guard miền (không trả 403; dừng ở bước gửi mã tiếp theo).
-  assert.notEqual((await post(e, '/auth/register/start', { email: 'nhanvien@pthub.vn', password: '********' })).status, 403);
+test('Đăng ký bằng mật khẩu mở cho mọi tên miền email', async () => withFetch(async () => Response.json({ id: 'ok' }), async () => {
+  const e = env();
+  const start = await post(e, '/auth/register/start', { email: 'nguoidung@gmail.com', password: 'MatKhau#2026' });
+  assert.notEqual(start.status, 403);
+  const verify = await post(e, '/auth/register/verify', { email: 'nguoidung@gmail.com', code: '000000', password: 'MatKhau#2026' });
+  assert.notEqual(verify.status, 403);
 }));
 
 // ---- Cloudflare Email Service (binding env.EMAIL) ----

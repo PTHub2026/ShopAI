@@ -14,6 +14,14 @@ const RESEND_API = 'https://api.resend.com/emails';
 const TIKTOK_AUTHORIZE = 'https://www.tiktok.com/v2/auth/authorize/';
 const TIKTOK_TOKEN = 'https://open.tiktokapis.com/v2/oauth/token/';
 const TIKTOK_USER = 'https://open.tiktokapis.com/v2/user/info/?fields=open_id,union_id,display_name,avatar_url';
+// Zalo OAuth v4 PKCE (đăng nhập bằng tài khoản Zalo cá nhân — khác với kết nối OA ở channels.js).
+const ZALO_AUTHORIZE = 'https://oauth.zaloapp.com/v4/permission';
+const ZALO_LOGIN_TOKEN = 'https://oauth.zaloapp.com/v4/access_token';
+const ZALO_LOGIN_USER = 'https://graph.zalo.me/v2.0/me?fields=id,name,picture';
+// Facebook Login (OAuth 2.0).
+const FB_AUTHORIZE = 'https://www.facebook.com/v21.0/dialog/oauth';
+const FB_TOKEN = 'https://graph.facebook.com/v21.0/oauth/access_token';
+const FB_USER = 'https://graph.facebook.com/v21.0/me?fields=id,name,picture';
 const ESMS_API = 'https://rest.esms.vn/MainService.svc/json/SendMultipleMessage_V4_post_json/';
 const TWILIO_VERIFY = 'https://verify.twilio.com/v2/Services/';
 // Với Twilio Verify, Twilio tự sinh/kiểm mã nên hàng OTP chỉ giữ dấu này (không phải hash) để áp giới hạn phía Worker.
@@ -232,14 +240,18 @@ export function providers(env) {
   const email = db && emailConfigured(env);
   const tiktok = db && /^[A-Za-z0-9_-]{4,64}$/.test(clean(env.TIKTOK_CLIENT_KEY)) && Boolean(clean(env.TIKTOK_CLIENT_SECRET));
   const phone = db && Boolean(smsProvider(env));
+  const zalo = db && Boolean(clean(env.ZALO_APP_ID)) && Boolean(clean(env.ZALO_APP_SECRET));
+  const facebook = db && Boolean(clean(env.META_APP_ID)) && Boolean(clean(env.META_APP_SECRET));
   return {
     tiktok: { enabled: tiktok },
+    zalo: { enabled: zalo },
+    facebook: { enabled: facebook },
     phone: { enabled: phone },
     email: { enabled: email },
     // Đăng nhập/đăng ký bằng mật khẩu cần DB và email (để xác minh đăng ký và gửi mã đặt lại).
     password: { enabled: email },
     access: /^[a-z0-9-]+\.cloudflareaccess\.com$/i.test(team) ? { url: 'https://' + team } : null,
-    ready: tiktok || phone || email
+    ready: tiktok || zalo || facebook || phone || email
   };
 }
 
@@ -406,7 +418,7 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
     return new Response(null, { status: 302, headers: h });
   };
   const routes = {
-    '/auth/providers': 'GET', '/auth/tiktok/start': 'GET', '/auth/tiktok/callback': 'GET',
+    '/auth/providers': 'GET', '/auth/tiktok/start': 'GET', '/auth/tiktok/callback': 'GET', '/auth/zalo/start': 'GET', '/auth/zalo/callback': 'GET', '/auth/facebook/start': 'GET', '/auth/facebook/callback': 'GET',
     '/auth/phone/start': 'POST', '/auth/phone/verify': 'POST', '/auth/email/start': 'POST', '/auth/email/verify': 'POST', '/auth/logout': 'POST',
     '/auth/register/start': 'POST', '/auth/register/verify': 'POST', '/auth/password/login': 'POST', '/auth/password/forgot': 'POST', '/auth/password/reset': 'POST', '/auth/password/set': 'POST'
   };
@@ -628,11 +640,11 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
     } catch { return json({ error: 'Không thể xác minh mã lúc này.' }, 503); }
   }
 
-  // OAuth điều hướng toàn trang, không cần Origin: TikTok Login Kit + PKCE.
-  const provider = path.split('/')[2]; // 'tiktok'
+  // OAuth điều hướng toàn trang, không cần Origin: TikTok Login Kit + PKCE, Zalo OAuth v4 PKCE, Facebook Login.
+  const provider = path.split('/')[2]; // 'tiktok' | 'zalo' | 'facebook'
   const callbackUrl = url.origin + '/auth/' + provider + '/callback';
   if (path.endsWith('/start')) {
-    if (!available[provider].enabled) return redirect(`/?loi=${provider}_chua_cau_hinh`);
+    if (!available[provider] || !available[provider].enabled) return redirect(`/?loi=${provider}_chua_cau_hinh`);
     try {
       await ensureSchema(env.DB);
       const state = randomToken(24), verifier = pkceVerifier(), t = now();
@@ -640,14 +652,25 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
         env.DB.prepare('DELETE FROM auth_oauth_states WHERE expires_at <= ?').bind(t),
         env.DB.prepare('INSERT INTO auth_oauth_states (state, provider, verifier, expires_at) VALUES (?, ?, ?, ?)').bind(state, provider, verifier, t + STATE_TTL)
       ]);
-      const target = TIKTOK_AUTHORIZE + '?' + new URLSearchParams({ client_key: clean(env.TIKTOK_CLIENT_KEY), scope: 'user.info.basic', response_type: 'code', redirect_uri: callbackUrl, state, code_challenge: await tiktokChallenge(verifier), code_challenge_method: 'S256' });
+      let target;
+      if (provider === 'tiktok') {
+        target = TIKTOK_AUTHORIZE + '?' + new URLSearchParams({ client_key: clean(env.TIKTOK_CLIENT_KEY), scope: 'user.info.basic', response_type: 'code', redirect_uri: callbackUrl, state, code_challenge: await tiktokChallenge(verifier), code_challenge_method: 'S256' });
+      } else if (provider === 'zalo') {
+        // Zalo OAuth v4 PKCE: dùng code_challenge chuẩn RFC 7636 (Base64Url SHA-256).
+        target = ZALO_AUTHORIZE + '?' + new URLSearchParams({ app_id: clean(env.ZALO_APP_ID), redirect_uri: callbackUrl, state, code_challenge: await pkceChallenge(verifier), code_challenge_method: 'S256' });
+      } else if (provider === 'facebook') {
+        // Facebook Login: không dùng PKCE, dùng client_secret ở bước callback.
+        target = FB_AUTHORIZE + '?' + new URLSearchParams({ client_id: clean(env.META_APP_ID), redirect_uri: callbackUrl, state, scope: 'public_profile', response_type: 'code' });
+      } else {
+        return redirect(`/?loi=${provider}_chua_cau_hinh`);
+      }
       return redirect(target, [setCookie(STATE_COOKIE, state, STATE_TTL)]);
     } catch { return redirect(`/?loi=${provider}_tam_loi`); }
   }
-  // /auth/tiktok/callback
+  // /auth/{provider}/callback
   const clearState = setCookie(STATE_COOKIE, '', 0);
   const fail = code => redirect(`/?loi=${provider}_${code}`, [clearState]);
-  if (!available[provider].enabled) return fail('chua_cau_hinh');
+  if (!available[provider] || !available[provider].enabled) return fail('chua_cau_hinh');
   const state = url.searchParams.get('state') || '';
   const code = url.searchParams.get('code') || '';
   if (!/^[A-Za-z0-9_-]{16,64}$/.test(state) || !sameText(readCookie(request, STATE_COOKIE) || '', state)) return fail('state');
@@ -657,16 +680,48 @@ export async function handleAuth(request, env, { json, headers, accessUser }) {
     const consumed = row ? await env.DB.prepare('DELETE FROM auth_oauth_states WHERE state = ?').bind(state).run() : null;
     if (!row || !consumed?.meta?.changes || Number(row.expires_at) <= now()) return fail('het_han');
     if (!code || code.length > 2048 || url.searchParams.has('error')) return fail('tu_choi');
-    // TikTok: đổi code lấy access token (kèm code_verifier), rồi đọc open_id/display_name.
-    const token = await fetchJson(TIKTOK_TOKEN, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_key: clean(env.TIKTOK_CLIENT_KEY), client_secret: clean(env.TIKTOK_CLIENT_SECRET), code, grant_type: 'authorization_code', redirect_uri: callbackUrl, code_verifier: row.verifier }).toString() });
-    const accessToken = token.data && token.data.access_token;
-    if (!token.ok || (token.data && token.data.error) || typeof accessToken !== 'string' || !accessToken) return fail('token');
-    const profile = await fetchJson(TIKTOK_USER, { headers: { Authorization: 'Bearer ' + accessToken } });
-    const user = profile.data && profile.data.data && profile.data.data.user;
-    const errorCode = profile.data && profile.data.error && profile.data.error.code;
-    const id = user && typeof user.open_id === 'string' ? user.open_id : '';
-    if (!profile.ok || (errorCode && errorCode !== 'ok') || !/^[A-Za-z0-9_.:-]{1,128}$/.test(id)) return fail('ho_so');
-    const cookie = await createSession(env, 'tiktok:' + id, 'tiktok', displayName(user.display_name));
+
+    let userId, userName;
+
+    if (provider === 'tiktok') {
+      const token = await fetchJson(TIKTOK_TOKEN, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_key: clean(env.TIKTOK_CLIENT_KEY), client_secret: clean(env.TIKTOK_CLIENT_SECRET), code, grant_type: 'authorization_code', redirect_uri: callbackUrl, code_verifier: row.verifier }).toString() });
+      const accessToken = token.data && token.data.access_token;
+      if (!token.ok || (token.data && token.data.error) || typeof accessToken !== 'string' || !accessToken) return fail('token');
+      const profile = await fetchJson(TIKTOK_USER, { headers: { Authorization: 'Bearer ' + accessToken } });
+      const user = profile.data && profile.data.data && profile.data.data.user;
+      const errorCode = profile.data && profile.data.error && profile.data.error.code;
+      userId = user && typeof user.open_id === 'string' ? user.open_id : '';
+      if (!profile.ok || (errorCode && errorCode !== 'ok') || !/^[A-Za-z0-9_.:-]{1,128}$/.test(userId)) return fail('ho_so');
+      userName = displayName(user.display_name);
+    } else if (provider === 'zalo') {
+      // Zalo OAuth v4: đổi code lấy access_token (PKCE, gửi secret_key qua header).
+      const tokenBody = new URLSearchParams({ app_id: clean(env.ZALO_APP_ID), grant_type: 'authorization_code', code, redirect_uri: callbackUrl, code_verifier: row.verifier });
+      const token = await fetchJson(ZALO_LOGIN_TOKEN, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', secret_key: clean(env.ZALO_APP_SECRET) }, body: tokenBody.toString() });
+      const accessToken = token.data && token.data.access_token;
+      if (!token.ok || !accessToken) return fail('token');
+      // Lấy hồ sơ người dùng Zalo.
+      const profile = await fetchJson(ZALO_LOGIN_USER, { headers: { access_token: accessToken } });
+      const zaloId = profile.data && String(profile.data.id || '');
+      if (!profile.ok || !zaloId || !/^\d{5,20}$/.test(zaloId)) return fail('ho_so');
+      userId = zaloId;
+      userName = displayName(profile.data.name);
+    } else if (provider === 'facebook') {
+      // Facebook: đổi code lấy access_token (dùng client_secret, không PKCE).
+      const tokenUrl = FB_TOKEN + '?' + new URLSearchParams({ client_id: clean(env.META_APP_ID), client_secret: clean(env.META_APP_SECRET), redirect_uri: callbackUrl, code });
+      const token = await fetchJson(tokenUrl, { method: 'GET' });
+      const accessToken = token.data && token.data.access_token;
+      if (!token.ok || !accessToken) return fail('token');
+      // Lấy hồ sơ người dùng Facebook.
+      const profile = await fetchJson(FB_USER + '&access_token=' + encodeURIComponent(accessToken));
+      const fbId = profile.data && String(profile.data.id || '');
+      if (!profile.ok || !fbId || !/^\d{5,30}$/.test(fbId)) return fail('ho_so');
+      userId = fbId;
+      userName = displayName(profile.data.name);
+    } else {
+      return fail('chua_cau_hinh');
+    }
+
+    const cookie = await createSession(env, provider + ':' + userId, provider, userName);
     return redirect('/', [cookie, clearState]);
   } catch { return fail('tam_loi'); }
 }

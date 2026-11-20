@@ -15,3 +15,11 @@ User authorized completion in order: align deployment, fix/verify AI, verify D1,
 - [ ] Create separate production D1; apply existing schema and verify cloud save/open.
 - [ ] Connect official channel APIs only with verified app credentials/scopes. No simulated success or unsolicited messages/posts.
 - [ ] Record exact final deployment, tests and blockers.
+
+## Update — 2026-11-08 05:50 UTC
+- [x] Preview AI: generate/improve/adapt/reply returned actual content.
+- [x] PR6 merged; production follows main. Production release aac8980750d2962a6b39bd947e857356d5f383ce confirmed via session.
+- [x] Separate production D1, applied schema, actual save/read/open from two tabs. Production AI generated all three variants.
+- [ ] Stage 4 incomplete: OAuth connection prerequisite implemented and tested with fixtures; awaiting final review and app configuration/grant. Publishing/webhook/scheduling/inbox and other adapters remain unavailable.
+- Ruling: Facebook first because the existing Meta ShopAI app has Pages and Messenger; cost is later delivery for other channels.
+- Ruling: do not enable external operations until official permissions and real Page grant are verified. OAuth fixture tests do not imply cloud completion.

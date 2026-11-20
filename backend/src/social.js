@@ -143,9 +143,10 @@ export async function handleSocial(req,env,who,json){
     j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND id=?').bind(shop,j.id).first();
    }
   }
-  // Allow explicit user-initiated retry of jobs interrupted mid-delivery (potential double-send, user is aware).
-  if(j.status==='unknown'&&j.error_code==='sending_interrupted'){
-   await db.prepare("UPDATE publish_jobs SET status='pending',next_attempt_at=0,updated_at=? WHERE shop_id=? AND id=? AND status='unknown' AND error_code='sending_interrupted'").bind(now(),shop,j.id).run();
+  // Allow explicit user-initiated retry of jobs whose outcome is uncertain (potential double-send, user is aware).
+  // Covers both sending_interrupted (worker crashed mid-send) and delivery_uncertain (e.g. Zalo verify failed after create).
+  if(j.status==='unknown'&&['sending_interrupted','delivery_uncertain'].includes(j.error_code)){
+   await db.prepare("UPDATE publish_jobs SET status='pending',next_attempt_at=0,updated_at=? WHERE shop_id=? AND id=? AND status='unknown' AND error_code IN ('sending_interrupted','delivery_uncertain')").bind(now(),shop,j.id).run();
    j=await db.prepare('SELECT * FROM publish_jobs WHERE shop_id=? AND id=?').bind(shop,j.id).first();
   }
   if(action==='run'&&j.status==='pending'){await db.prepare("UPDATE publish_jobs SET next_attempt_at=0,updated_at=? WHERE shop_id=? AND id=? AND status='pending'").bind(now(),shop,j.id).run();j.next_attempt_at=0;}

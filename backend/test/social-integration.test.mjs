@@ -4,7 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import {webcrypto,createHash} from 'node:crypto';
 import worker from '../src/worker.js';
-import {encryptToken} from '../src/social.js';
+import {encryptToken,runDuePublishJobs} from '../src/social.js';
 import {SESSION_COOKIE} from '../src/auth.js';
 if(!globalThis.crypto)globalThis.crypto=webcrypto;
 const base='https://shoppost.example',hash=x=>createHash('sha256').update(x).digest('hex'),now=()=>Math.floor(Date.now()/1000);
@@ -72,8 +72,9 @@ test('Telegram live: per-shop permissions, idempotency, revoked credentials and 
 });
 test('Telegram 429 is retryable; unknown outcomes never retry automatically',async()=>{
  const f=fixture(),owner=f.login('email:retry@example.com');
+ f.db.sqlite.exec(readFileSync(new URL('../migrations/0006_scheduled.sql',import.meta.url),'utf8'));
  let called=0;
- await fakeTelegram((method,body)=>{called++;if(called===1)return Response.json({ok:false,description:'Too Many Requests',parameters:{retry_after:2}},{status:429});if(called===2)return Response.json({ok:true,result:{message_id:99}});throw Error('network timeout');},async()=>{
+ await fakeTelegram((method,body)=>{called++;if(called===1)return Response.json({ok:false,description:'Too Many Requests',parameters:{retry_after:2}},{status:429});if(called===2||called===4)return Response.json({ok:true,result:{message_id:99}});throw Error('network timeout');},async()=>{
   assert.equal((await connect(f.request,owner)).status,201);
   const account=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
   const data={accountId:account.id,kind:'text',text:'Retry once'};
@@ -89,22 +90,37 @@ test('Telegram 429 is retryable; unknown outcomes never retry automatically',asy
   assert.equal(redundant.status,200);assert.equal(called,2);
   const unknown=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'unknown-test-key-123',body:{...data,text:'Unknown'}});
   assert.equal(unknown.status,502);assert.equal(unknown.data.job.status,'unknown');
-  assert.equal((await f.request(owner,'/api/social/jobs/'+unknown.data.job.id+'/retry',{method:'POST'})).status,409);
+  assert.equal(unknown.data.job.errorCode,'delivery_uncertain');
+  assert.equal((await runDuePublishJobs(f.env)).processed,0);
+  const replay=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'unknown-test-key-123',body:{...data,text:'Unknown'}});
+  assert.equal(replay.status,409);assert.equal(replay.data.job.id,unknown.data.job.id);assert.equal(replay.data.job.status,'unknown');
   assert.equal(called,3);
+  const recovered=await f.request(owner,'/api/social/jobs/'+unknown.data.job.id+'/retry',{method:'POST'});
+  assert.equal(recovered.status,200);assert.equal(recovered.data.job.status,'sent');
+  assert.equal(recovered.data.job.id,unknown.data.job.id);assert.equal(recovered.data.job.attempts,2);assert.equal(called,4);
+  assert.equal((await f.request(owner,'/api/social/jobs/'+unknown.data.job.id+'/retry',{method:'POST'})).status,200);
+  assert.equal(called,4);
  });
  f.db.sqlite.close();
 });
 
-test('Telegram malformed success remains unknown and cannot be retried',async()=>{
+test('Telegram malformed success stays unknown until an explicit manual retry',async()=>{
  const f=fixture(),owner=f.login('email:malformed@example.com');let calls=0;
+ f.db.sqlite.exec(readFileSync(new URL('../migrations/0006_scheduled.sql',import.meta.url),'utf8'));
  try{await fakeTelegram(()=>{calls++;return Response.json({ok:true,result:{}});},async()=>{
   await connect(f.request,owner);
   const account=(await f.request(owner,'/api/social/accounts')).data.accounts[0];
   const result=await f.request(owner,'/api/social/jobs',{method:'POST',idem:'malformed-result-123',body:{accountId:account.id,kind:'text',text:'Test'}});
   assert.equal(result.status,502);assert.equal(result.data.job.status,'unknown');
   assert.equal(result.data.job.remoteMessageId,null);
-  assert.equal((await f.request(owner,'/api/social/jobs/'+result.data.job.id+'/retry',{method:'POST'})).status,409);
+  assert.equal(result.data.job.errorCode,'delivery_uncertain');
+  assert.equal((await runDuePublishJobs(f.env)).processed,0);
   assert.equal(calls,1);
+  const retried=await f.request(owner,'/api/social/jobs/'+result.data.job.id+'/retry',{method:'POST'});
+  assert.equal(retried.status,502);assert.equal(retried.data.job.status,'unknown');
+  assert.equal(retried.data.job.id,result.data.job.id);assert.equal(retried.data.job.attempts,2);
+  assert.equal(retried.data.job.remoteMessageId,null);assert.equal(retried.data.job.errorCode,'delivery_uncertain');assert.equal(calls,2);
+  assert.equal((await runDuePublishJobs(f.env)).processed,0);assert.equal(calls,2);
  });}finally{f.db.sqlite.close();}
 });
 
